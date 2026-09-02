@@ -1,0 +1,4 @@
+opencv-python>=4.8
+numpy>=1.26
+ndi-python>=6.0
+stupidArtnet>=1.6
