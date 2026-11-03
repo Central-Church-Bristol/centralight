@@ -1,0 +1,396 @@
+"""The Editor page (Fusion-style): build and change an input.
+
+    ┌ Editing: <name>      [Show on lights] [Send to Base] [Done] ┐
+    │ LIVE: changes go to the lights            (when it's on air) │
+    ├──────────┬──────────────────────────────────┬────────────────┤
+    │ Elements │  Selected        │  Result        │ Details        │
+    │ Paint    │  (the element)   │  (the input)   │ (the selected  │
+    │ Image    │                  │  light strip   │  element, or   │
+    │ NDI      ├──────────────────────────────────┤  the input's   │
+    │ Trans-   │  Timeline: Track 4 … Track 1      │  own settings) │
+    │ itions   │                                   │                │
+    └──────────┴──────────────────────────────────┴────────────────┘
+
+Editing an input that's on Base or in an overlay changes the lights straight away (the red
+LIVE banner says so); otherwise editing is "blind" until you send it or use Show on lights.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QStackedWidget, QVBoxLayout, QWidget
+
+from ..commands import SendToBase, SetSolo
+from ..editor_render import EditorRenderer
+from ..engine import EngineFrame
+from ..input_edit import add_shape, find_element, set_excluded, set_shape_values
+from ..model import Input, Show
+from ..settings import Settings
+from ..step_names import element_name, lights_change_name
+from .details_panel import MIN_WIDTH as DETAILS_MIN_WIDTH
+from .details_panel import DetailsPanel
+from .document import SCOPE_SHOW, ShowDocument, input_scope
+from .element_palette import ElementPalette
+from .timeline_view import TimelineView
+from .undo_bar import UndoBar
+from .viewports import ResultPanel, SelectedPanel, SelectedViewport, ViewportCanvas, mask_tint, rgb_image, rgba_image
+from .widgets import ElidedLabel, ResettableSplitter
+
+POLL_MS = 66  # pick up new pictures from the editor renderer ~15 times a second
+
+
+class EditorPage(QWidget):
+    done = Signal()
+    new_input_requested = Signal()
+
+    def __init__(self, document: ShowDocument, engine: Any, settings: Settings, sources: Any | None = None,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("EditorPage")
+        self.document = document
+        self.engine = engine
+        self.settings = settings
+        self.input_id = ""
+        self.element_id = ""
+        self.shape_id = ""
+        self._started = time.monotonic()
+        self._renderer = EditorRenderer(sources)
+        self._renderer_running = False
+        self._picture_version = -1
+        self._live = False
+        self._entered = False  # the Editor is the page on screen
+        self._variables = None  # global variables' values, from the engine
+        show = document.show
+
+        # --- the strip along the top
+        self.editing = ElidedLabel("Editing: nothing")
+        self.editing.setObjectName("EditorTitle")
+        self.solo_button = QPushButton("Show on lights")
+        self.solo_button.setCheckable(True)
+        self.solo_button.setToolTip("Show only this input on the lights while you edit (switches off when you leave the Editor)")
+        self.solo_button.toggled.connect(self._solo_toggled)
+        self.send_button = QPushButton("Send to Base")
+        self.send_button.setProperty("accent", True)
+        self.send_button.setToolTip("Put this input on Base, with its transition")
+        self.send_button.clicked.connect(self._send)
+        self.done_button = QPushButton("Done")
+        self.done_button.setToolTip("Back to the Dashboard")
+        self.done_button.clicked.connect(self.done.emit)
+        self.undo_bar = UndoBar(document.undo_group)
+        strip = QHBoxLayout()
+        strip.setSpacing(8)
+        strip.addWidget(self.editing, 1)
+        strip.addWidget(self.undo_bar)
+        strip.addSpacing(6)
+        strip.addWidget(self.solo_button)
+        strip.addWidget(self.send_button)
+        strip.addWidget(self.done_button)
+
+        self.live_banner = QFrame()
+        self.live_banner.setObjectName("LiveBanner")
+        live_text = QLabel("LIVE: this input is on the lights, so changes show straight away")
+        live_text.setObjectName("LiveBannerText")
+        banner_layout = QHBoxLayout(self.live_banner)
+        banner_layout.setContentsMargins(12, 4, 12, 4)
+        banner_layout.addWidget(live_text)
+        self.live_banner.setVisible(False)
+
+        # --- the body
+        self.palette = ElementPalette()
+        self.selected_canvas = SelectedViewport(show)
+        self.selected_panel = SelectedPanel(self.selected_canvas)
+        self.result_canvas = ViewportCanvas(show)
+        self.result_panel = ResultPanel(self.result_canvas, show)
+        for panel, key in ((self.selected_panel, "editor_selected_lights"), (self.result_panel, "editor_result_lights")):
+            panel.lights.setChecked(bool(settings.ui.get(key, True)))
+            panel.lights_toggled.connect(lambda on, k=key: self.settings.ui.__setitem__(k, on))
+        self.viewports = ResettableSplitter(Qt.Orientation.Horizontal, self._default_viewport_split)
+        self.viewports.addWidget(self.selected_panel)
+        self.viewports.addWidget(self.result_panel)
+        self.timeline = TimelineView(document, settings.ndi_default)
+        self.centre = ResettableSplitter(Qt.Orientation.Vertical, self._default_centre_split)
+        self.centre.addWidget(self.viewports)
+        self.centre.addWidget(self.timeline)
+        self.centre.setStretchFactor(0, 3)
+        self.centre.setStretchFactor(1, 2)
+        provider = (lambda: sources.available()) if sources is not None and hasattr(sources, "available") else (lambda: [])
+        self.details = DetailsPanel(
+            document, provider,
+            context=lambda: (self.variables(), max(0.0, time.monotonic() - self._started)),
+            url_base=lambda: f"http://127.0.0.1:{settings.remote_port}",
+        )
+        self.details.tab_changed.connect(lambda _index: self._entered and self.document.set_scope(self.undo_scope()))
+        self.body = ResettableSplitter(Qt.Orientation.Horizontal, self._default_body_split)
+        self.body.addWidget(self.palette)
+        self.body.addWidget(self.centre)
+        self.body.addWidget(self.details)
+        self.body.setStretchFactor(0, 0)
+        self.body.setStretchFactor(1, 1)
+        self.body.setStretchFactor(2, 0)
+
+        empty = QWidget()
+        empty_layout = QVBoxLayout(empty)
+        empty_layout.addStretch(1)
+        heading = QLabel("Nothing to edit yet")
+        heading.setObjectName("BigTitle")
+        heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        text = QLabel("Click the pencil on an input's tile on the Dashboard, or start a new input.")
+        text.setObjectName("Hint")
+        text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        text.setWordWrap(True)
+        new = QPushButton("New input")
+        new.setProperty("accent", True)
+        new.clicked.connect(self.new_input_requested.emit)
+        empty_layout.addWidget(heading)
+        empty_layout.addWidget(text)
+        empty_layout.addWidget(new, 0, Qt.AlignmentFlag.AlignHCenter)
+        empty_layout.addStretch(2)
+        self.stack = QStackedWidget()
+        self.stack.addWidget(empty)
+        self.stack.addWidget(self.body)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 14)
+        layout.setSpacing(8)
+        layout.addLayout(strip)
+        layout.addWidget(self.live_banner)
+        layout.addWidget(self.stack, 1)
+
+        # --- wiring
+        self.timeline.element_selected.connect(self.select_element)
+        self.details.shape_selected.connect(self._shape_from_details)
+        self.details.element_removed.connect(lambda: self.select_element(""))
+        self.selected_canvas.shape_selected.connect(self._shape_from_viewport)
+        self.selected_canvas.drag_started.connect(self.document.begin_drag)
+        self.selected_canvas.shapes_changing.connect(self._shape_dragged)
+        self.selected_canvas.shapes_changed.connect(self.document.end_drag)
+        self.selected_canvas.shape_drawn.connect(self._shape_drawn)
+        self.selected_canvas.light_clicked.connect(self._toggle_light)
+        self.selected_panel.mode_changed.connect(lambda _on: self._request())
+        self.palette.element_clicked.connect(self.timeline.add_to_first_empty)
+        self.palette.transition_clicked.connect(self.timeline.set_transition_kind)
+        document.changed.connect(self._show_changed)
+
+        self._poll = QTimer(self)
+        self._poll.setInterval(POLL_MS)
+        self._poll.timeout.connect(self._poll_picture)
+        self._sync_buttons()
+
+    # ------------------------------------------------------------ splits
+
+    def _default_body_split(self) -> list[int]:
+        total = max(1, self.body.width())
+        left, right = 180, min(400, max(DETAILS_MIN_WIDTH, total // 4))
+        return [left, total - left - right, right]
+
+    def _default_viewport_split(self) -> list[int]:
+        half = max(1, self.viewports.width()) // 2
+        return [half, half]
+
+    def _default_centre_split(self) -> list[int]:
+        total = max(1, self.centre.height())
+        timeline = min(max(self.timeline.minimumSizeHint().height(), round(total * 0.38)), total - 200)
+        return [total - timeline, timeline]
+
+    def apply_split(self, sizes: dict | None) -> None:
+        sizes = sizes if isinstance(sizes, dict) else {}
+        for name, splitter, default in (
+            ("body", self.body, self._default_body_split),
+            ("viewports", self.viewports, self._default_viewport_split),
+            ("centre", self.centre, self._default_centre_split),
+        ):
+            splitter.apply_sizes(sizes.get(name))
+
+    def splits(self) -> dict:
+        return {"body": self.body.sizes(), "viewports": self.viewports.sizes(), "centre": self.centre.sizes()}
+
+    # ------------------------------------------------------------ what's being edited
+
+    @property
+    def show_data(self) -> Show:
+        return self.document.show
+
+    def current_input(self) -> Input | None:
+        return self.show_data.inputs.get(self.input_id) if self.input_id else None
+
+    def open_input(self, input_id: str) -> None:
+        if input_id not in self.show_data.inputs:
+            return
+        if self.solo_button.isChecked() and input_id != self.input_id:
+            self.solo_button.setChecked(False)
+        self.input_id = input_id
+        self.element_id = ""
+        self.shape_id = ""
+        self._started = time.monotonic()
+        if self._entered:
+            self.document.set_scope(self.undo_scope())
+        self.timeline.set_input(input_id)
+        self.details.set_target(input_id, None, None)
+        self.selected_canvas.set_element(None, None)
+        self.selected_panel.set_paint_tools(False)
+        self._sync_buttons()
+        self._request()
+
+    def select_element(self, element_id: str) -> None:
+        self.element_id = element_id or ""
+        self.shape_id = ""
+        self.timeline.set_selected(self.element_id)
+        self.details.set_target(self.input_id, self.element_id or None, None)
+        self._sync_selected_view()
+        self._request()
+
+    def _shape_from_details(self, shape_id: str) -> None:
+        self.shape_id = shape_id or ""
+        self._sync_selected_view()
+
+    def _shape_from_viewport(self, shape_id: str) -> None:
+        self.shape_id = shape_id or ""
+        self.details.select_shape(self.shape_id or None)
+        self._sync_selected_view()
+
+    def _element(self):
+        inp = self.current_input()
+        if inp is None or not self.element_id:
+            return None
+        found = find_element(inp, self.element_id)
+        return found[2] if found else None
+
+    def _sync_selected_view(self) -> None:
+        element = self._element()
+        self.selected_canvas.set_element(element, self.shape_id)
+        self.selected_panel.set_paint_tools(element is not None and element.get("kind") == "paint")
+
+    def _sync_buttons(self) -> None:
+        inp = self.current_input()
+        self.stack.setCurrentIndex(1 if inp is not None else 0)
+        self.editing.setText(f"Editing: {inp.name}" if inp is not None else "Editing: nothing")
+        for button in (self.solo_button, self.send_button):
+            button.setEnabled(inp is not None)
+
+    def variables(self):
+        """Global variables' current values (from the engine), for drawing and live values."""
+        return self._variables if self._variables is not None else {}
+
+    def undo_scope(self) -> str:
+        """The undo history the Editor uses: the input it's editing (or the show's, on the Globals tab)."""
+        if not self.input_id or self.details.globals_open():
+            return SCOPE_SHOW
+        return input_scope(self.input_id)
+
+    def _show_changed(self, show: Show) -> None:
+        if self.input_id and self.input_id not in show.inputs:  # the input was deleted
+            self.input_id = ""
+            self.solo_button.setChecked(False)
+            if self._entered:
+                self.document.set_scope(self.undo_scope())
+        if self._element() is None:
+            self.element_id = ""
+            self.shape_id = ""
+        self.selected_canvas.set_show(show)
+        self.result_canvas.set_show(show)
+        self.result_panel.strip.set_show(show)
+        self._sync_selected_view()
+        self._sync_buttons()
+        self._request()
+
+    # ------------------------------------------------------------ shapes in the Selected view
+
+    def _shape_dragged(self, element_id: str, shape_id: str, values: dict) -> None:
+        if self.input_id:
+            self.document.preview(set_shape_values(self.show_data, self.input_id, element_id, shape_id, values))
+
+    def _shape_drawn(self, shape_type: str, values: dict) -> None:
+        if not self.input_id or not self.element_id:
+            return
+        show, shape_id = add_shape(self.show_data, self.input_id, self.element_id, shape_type,
+                                   values["x"], values["y"], values["w"], values["h"])
+        if shape_id and self.document.apply(show, f"Draw {'rectangle' if shape_type == 'rect' else 'ellipse'} {shape_id}"):
+            self.selected_panel.select_tool.setChecked(True)
+            self._shape_from_viewport(shape_id)
+
+    def _toggle_light(self, light_id: str) -> None:
+        element = self._element()
+        if element is None:
+            return
+        mask = element.get("mask")
+        old = set(mask.get("exclude", ()) or ()) if hasattr(mask, "get") else set()
+        excluded = old ^ {light_id}
+        names = {fx.id: fx.name for fx in self.show_data.colour_fixtures()}
+        self.document.apply(set_excluded(self.show_data, self.input_id, self.element_id, sorted(excluded)),
+                            lights_change_name(element_name(element), old, excluded, names))
+
+    # ------------------------------------------------------------ solo, send, live
+
+    def _solo_toggled(self, on: bool) -> None:
+        self.engine.submit(SetSolo(self.input_id if on and self.input_id else None))
+
+    def _send(self) -> None:
+        if self.input_id:
+            self.engine.submit(SendToBase(self.input_id))
+
+    def set_frame(self, frame: EngineFrame) -> None:
+        if frame.variables is not self._variables:  # a global changed: the viewports follow
+            self._variables = frame.variables
+            self._request()
+        live = bool(self.input_id) and (self.input_id in frame.live_inputs or frame.solo == self.input_id)
+        if live != self._live:
+            self._live = live
+            self.live_banner.setVisible(live)
+        if self.solo_button.isChecked() != (frame.solo == self.input_id and bool(self.input_id)):
+            blocked = self.solo_button.blockSignals(True)
+            self.solo_button.setChecked(frame.solo == self.input_id and bool(self.input_id))
+            self.solo_button.blockSignals(blocked)
+
+    # ------------------------------------------------------------ rendering the viewports
+
+    def _request(self) -> None:
+        if self.input_id and self._renderer_running:
+            self._renderer.request(self.show_data, self.input_id, self.element_id or None, self._started, self.variables())
+
+    def _poll_picture(self) -> None:
+        version, picture = self._renderer.pictures.get_versioned()
+        if picture is None or version == self._picture_version or picture.input_id != self.input_id:
+            return
+        self._picture_version = version
+        self.result_canvas.set_image(rgb_image(picture.result))
+        self.result_panel.strip.set_colours(picture.colours)
+        if picture.selected is not None and picture.element_id == (self.element_id or None):
+            tint = mask_tint(picture.keep) if (self.selected_canvas.mask_mode and picture.keep is not None) else None
+            self.selected_canvas.set_image(rgba_image(picture.selected), tint)
+        elif not self.element_id:
+            self.selected_canvas.set_image(None)
+
+    def render_sync(self) -> None:
+        """Draw the viewports straight away, without waiting for the render thread (tests, screenshots)."""
+        if not self.input_id:
+            return
+        from ..editor_render import EditorRequest
+
+        picture = self._renderer.render_now(EditorRequest(self.show_data, self.input_id, self.element_id or None, self._started, self.variables()))
+        if picture is not None:
+            self._renderer.pictures.put(picture)
+            self._poll_picture()
+
+    def on_enter(self) -> None:
+        self._entered = True
+        if not self._renderer_running:
+            self._renderer.start()
+            self._renderer_running = True
+        self._poll.start()
+        self._request()
+
+    def on_leave(self) -> None:
+        """Leaving the Editor: Show on lights switches off, and the viewports stop drawing."""
+        self._entered = False
+        if self.solo_button.isChecked():
+            self.solo_button.setChecked(False)
+        self._poll.stop()
+
+    def shutdown(self) -> None:
+        self.on_leave()
+        if self._renderer_running:
+            self._renderer.stop()
+            self._renderer_running = False

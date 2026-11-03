@@ -12,3 +12,7 @@ logs/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# CentraLight app
+fonts/
+tests/screens/

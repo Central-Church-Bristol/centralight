@@ -1,25 +1,90 @@
 # CentraLight
 
-Takes the vMix NDI video feed, samples regions of the frame, and sends the average colour of each region over Art-Net to MagicQ so house lights can follow the screen.
+Takes the Media Background Pane NDI feed, samples regions of the frame, and sends the average colour of each region to the house lights over DMX, so the lights follow the screen.
 
 Built for [Central Church Bristol](https://github.com/Central-Church-Bristol). Windows only (the scripts use the Windows console Esc key).
 
+## The CentraLight app (new, being tested)
+
+Double-click `run.bat` to start the CentraLight app: a window with the **Festoon**, **Key lights** and **Master** faders, **Blackout**, a map of the lights, and *inputs* (looks) such as **Follow screen**, where the lights follow Media Background Pane like `ndi_pixel_mapper.py` does.
+
+- The first time, `run.bat` installs what the app needs into `.venv` and copies the church fonts from `G:\My Drive\Video Projection\Brand\Fonts` into `fonts\`.
+- The app starts with **Simulated** output: it shows what it would send, but doesn't touch the lights. To drive the lights, click the gear (top right) → **Output** → **Eurolite USB-DMX512 PRO**. Close the console scripts and MagicQ first: only one program can use the dongle at a time.
+- **Layout** tab: drag each dot to where its light is, click a dot to flash that light, and turn on **Identify** to give every light its own colour. Notes about where each light is go into `fixture_map.csv` (the same file `usb_dmx_patch_test.py` uses).
+- **Editor** tab: build inputs from Paint (colours, gradients, shapes), Image and NDI elements on four tracks; untick lights an element should leave alone; pick a transition. **=** next to a setting gives it an *expression*, a small formula such as `wave(time, 0.25)` or `mix(#FF0000, accent, 0.5)`. *Global variables* (Editor → Globals tab) can be shown on the Dashboard and set from the Stream Deck.
+- The show (lights, layout, inputs) is in `Documents\CentraLight Shows\Central Church`. Settings and the session log (`session.log`, for when something goes wrong) are in `%LOCALAPPDATA%\CentraLight`.
+- `docs\BUILD_LOG.md` lists what's done; `docs\WEDNESDAY_TESTS.md` is the checklist for trying it on the lights.
+
+### Stream Deck (and phones)
+
+While the app runs, every action has a web address on this PC, so a Stream Deck key can fire it:
+
+1. In the **Elgato Stream Deck** app, drag a **Website** action (System) onto a key.
+2. Paste a URL, e.g. `http://127.0.0.1:8746/api/input/warm-white`, and tick **GET request in background**
+   (otherwise a browser window opens each time).
+3. Bitfocus **Companion** works too: **Generic HTTP → GET** with the same URL.
+
+Open <http://127.0.0.1:8746/> in a browser for the full list (with buttons for every input), or click the
+**Remote** chip at the top of the app. The Editor's **Copy Stream Deck URLs** button copies one input's URLs.
+Some useful ones:
+
+| What | URL |
+|---|---|
+| Send an input to Base | `/api/input/warm-white` (add `?transition=fade&duration=2` for another transition) |
+| Cut to it | `/api/input/warm-white/cut` |
+| Overlay 1 on / off | `/api/input/pillars-purple/overlay/1` |
+| Set a global variable | `/api/var/speed?value=0.7` (colours: `?value=FF6F59`; switches: `on`, `off`, `toggle`) |
+| Key lights | `/api/house/key-lights?level=0.6&fade=3`, `/api/house/key-lights/toggle` |
+| Master, Blackout | `/api/master?level=0.8`, `/api/blackout/toggle` |
+
+A Stream Deck **Multi Action** can pair a vMix key with a lights URL. The remote only answers this PC unless
+Settings → Remote → **Allow other computers and phones** is ticked; they then need the key shown there
+(`?key=…`). Requests that a web page in a browser makes for another website are always refused.
+
+The console scripts below still work, and stay the fallback until the app has been tested on the lights.
+
+Run the app's tests (about a minute; they never touch the lights):
+
+```bat
+.venv\Scripts\python.exe -m unittest discover -s tests -t .
+```
+
 ## What it does
 
-- Finds an NDI source whose name contains `vmix`
-- Averages colour in configured screen regions (default: left half and right half)
-- Sends RGB to MagicQ on Art-Net universe 0 (channels 1–3 and 4–6 by default)
-- Esc in the terminal window stops the script and closes the connections
+- Finds the NDI source from **Media Background Pane** (any source whose name contains `NDI_SOURCE` in `ndi_pixel_mapper.py`)
+- Averages the colour of each light's screen region (default: all 8 SlimPARs follow the whole screen; the festoon and key lights don't follow it)
+- Sends DMX straight out of a Eurolite USB-DMX512 PRO Cable Interface — no MagicQ or lighting desk needed. Art-Net is still available as an option.
+- Esc in the terminal window stops the script and turns the lights off
 
-`artnet_test.py` is a no-NDI diagnostic: it chases R/G/B/W on those same channels so you can prove MagicQ is receiving Art-Net before you debug video.
+## Hardware
+
+PC USB → Eurolite USB-DMX512 PRO Cable Interface → 3-pin XLR → lights.
+
+The Eurolite shows up as a COM port (FTDI chip, VID 0403 / PID 6001). The scripts find it automatically, and Windows installs the FTDI driver itself. Close MagicQ, QLC+ or any other lighting software first: only one program can use the dongle at a time.
+
+## The lights
+
+`fixtures.py` holds the patch, from the MagicQ show `Central Church.shw` (DMX universe 1) and checked in the room on 2 Nov 2026:
+
+| Start channel | Light | Type | Group |
+|---|---|---|---|
+| 1 | Dimmer 1 | 1-channel dimmer | Festoon |
+| 4 | Dimmer 4 | 1-channel dimmer | Key Lights (both) |
+| 5, 14, 23, 32 | SlimPAR 101–104 | Chauvet SlimPAR Q12 USB, 9-channel mode | Top Wash |
+| 41, 68 | SlimPAR 105, 108 | Chauvet SlimPAR Q12 USB, 9-channel mode | Side Fill |
+| 50, 59 | SlimPAR 106, 107 | Chauvet SlimPAR Q12 USB, 9-channel mode | Pillars |
+
+Nothing answers on channels 2 and 3, so they're left out.
+
+In 9-channel mode a SlimPAR's channels are red, green, blue, amber, colour macro, strobe, program, **dimmer**, dimmer speed. The scripts set the dimmer (8th channel) to full and leave the effect channels at 0, so only red, green and blue change. If a light is re-addressed, change `fixtures.py`: the test scripts and the mapper all read it.
 
 ## Requirements
 
 - Windows
 - [Python 3](https://www.python.org/)
 - [NDI Runtime](https://ndi.video/tools/)
-- vMix with NDI output enabled (the source name must contain `vmix`)
-- MagicQ on the same LAN, Art-Net input enabled
+- Media Background Pane running (it sends the NDI feed the lights follow)
+- Eurolite USB-DMX512 PRO Cable Interface
 
 ## Install
 
@@ -30,23 +95,46 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
+## Test the lights (no video)
+
+```bat
+.venv\Scripts\python.exe usb_dmx_patch_test.py
+```
+
+It turns every light on white so you can count them, then **Left / Right** goes through them one at a time. **C** changes colour, **N** saves a note of where the lit light is to `fixture_map.csv`, and **Esc** stops (lights off).
+
+`usb_dmx_test.py` is a lower-level check of the dongle and cable: it chases red / green / blue / white on raw channels 1–6.
+
 ## Run pixel mapping
 
-1. Confirm vMix is outputting NDI.
-2. Confirm MagicQ is listening for Art-Net on universe 0 (see below).
+1. Start Media Background Pane.
+2. Plug in the Eurolite and close any other lighting software (including the test scripts).
 3. Run:
 
 ```bat
 .venv\Scripts\python.exe ndi_pixel_mapper.py
 ```
 
-Press **Esc** in that window to stop.
+Press **Esc** in that window to stop; the lights go off.
 
-If it cannot find vMix, it prints the NDI sources it did see. Enable NDI on vMix, or rename the source so it contains `vmix`.
+If it cannot find the feed, it prints the NDI sources it did see. Start Media Background Pane, or if its NDI name was changed in its settings, set `NDI_SOURCE` in `ndi_pixel_mapper.py` to match.
 
-## Art-Net test (no video)
+## Light mapping
 
-Use this when lights are not following, to check the network and MagicQ first:
+Edit `LIGHTS` near the top of `ndi_pixel_mapper.py`. Each entry is a light name from `fixtures.py` and the screen region it follows, as fractions of the frame (`X`, `Y`, `Width`, `Height` from 0.0 to 1.0):
+
+```python
+{"name": "SlimPAR 101", "region": (0.0, 0.0, 0.5, 1.0)},  # left half of the screen
+{"name": "SlimPAR 108", "region": (0.5, 0.0, 0.5, 1.0)},  # right half
+```
+
+The festoon and key lights aren't RGB, so they don't follow the screen. The script still sends every DMX channel, so while it runs they sit at the level in `STATIC_LEVELS`: 0 (off, the default) to 255 (full).
+
+## Art-Net / MagicQ (optional)
+
+Set `OUTPUT = "artnet"` in `ndi_pixel_mapper.py` to send Art-Net instead of using the USB dongle, for example to MagicQ or an Art-Net node. The target is `ARTNET_IP` (default `192.168.1.16`), universe `UNIVERSE` (default 0).
+
+`artnet_test.py` is a no-NDI check of that route: it chases R/G/B/W on channels 1–6 over Art-Net.
 
 ```bat
 .venv\Scripts\python.exe artnet_test.py
@@ -54,30 +142,13 @@ Use this when lights are not following, to check the network and MagicQ first:
 .venv\Scripts\python.exe artnet_test.py --ip 192.168.1.16 --broadcast
 ```
 
-Press **Esc** to stop.
-
-While it runs, MagicQ should show a repeating red / green / blue / white / black chase on channels 1–6.
-
-## MagicQ (service desk)
+MagicQ setup for Art-Net in:
 
 1. **SETUP → VIEW DMX I/O** — Universe 1: Status **Enabled**, In Type **Art-Net**, In Uni **0**
 2. Set **Test** on that universe to **Input** (forces input onto output while testing)
 3. **SETUP → VIEW SETTINGS** — Network IP Address = this PC’s LAN IP
 4. **OUT → VIEW CHANS → VIEW DMX → VIEW ART-NET** — packets should leave 0
-5. Same window → **VIEW INPUTS** — channels 1–6 should move
-
-Default target IP in both scripts is `192.168.1.16`. Change `ARTNET_IP` in `ndi_pixel_mapper.py`, or pass `--ip` to `artnet_test.py`, if MagicQ is on a different address.
-
-## Light mapping
-
-Edit `LIGHTS` at the top of `ndi_pixel_mapper.py`. Each entry is a DMX start channel and a screen region as fractions of the frame (`X`, `Y`, `Width`, `Height` from 0.0 to 1.0):
-
-```python
-{"start_ch": 1, "region": (0.0, 0.0, 0.5, 1.0)},  # left half, RGB on ch 1–3
-{"start_ch": 4, "region": (0.5, 0.0, 0.5, 1.0)},  # right half, RGB on ch 4–6
-```
-
-Each light uses three consecutive channels: red, green, blue.
+5. Same window → **VIEW INPUTS** — channels should move
 
 ## Assets
 
