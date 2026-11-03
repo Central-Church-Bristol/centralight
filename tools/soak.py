@@ -232,7 +232,7 @@ def main() -> int:
             rows.append((round(now - started), round(share, 2), round(share / cores, 3), private // 1024, working // 1024))
             last_cpu, last_t = cpu, now
             print(f"  {rows[-1][0]:>6} s  CPU {share:5.1f} % of one core ({share / cores:.2f} % of the PC)  "
-                  f"private {private / 1e6:6.1f} MB  working set {working / 1e6:6.1f} MB", flush=True)
+                  f"private {private / 1048576:6.1f} MB  working set {working / 1048576:6.1f} MB", flush=True)  # (as Task Manager counts MB)
         log = (home / "appdata" / "session.log")
         if args.csv:
             with args.csv.open("w", newline="", encoding="utf-8") as handle:

@@ -30,6 +30,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | A look at M12 (fourteen findings) | **done** (3 Nov, 13:25; 635 tests pass) |
 | A third 3-hour soak (after M10) | **done** (3 Nov, 13:31; flat memory, no errors) |
 | A second look at M12 (ten findings) | **done** (3 Nov, 16:40; 648 tests pass) |
+| A fourth 3-hour soak (after M12, loading a show every 2 minutes) | **done** (3 Nov, 17:08; 90 loads, no errors; memory up 3 MB) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -920,6 +921,16 @@ Measured (Simulated output, so no lights):
   - A correction: from the soak's figure I first thought M10 had tripled the CPU, and I added a faster way to
     shrink pictures for the lights (in the commit with the M12 review's fixes). It never did anything, because
     NDI and video pictures are already 320×180 by then, so it's taken out again.
+- **A fourth 3-hour soak** (finished 3 Nov 17:08): the app as committed after the first look at M12 followed a
+  960×540, 24 fps test feed for 180 minutes and loaded the other show every 2 minutes through the remote, as a
+  Stream Deck key does, then sent its Follow screen (90 loads, every one answered). The session log has no errors.
+  The CPU averaged 11.4 % of one core (0.71 % of the PC; worst minute 12.3 %), steady throughout: the "pictures
+  flowing" figure from the version comparison. Memory rose from 108 MB to 111 MB (peak 113 MB; the second half
+  averaged 1.1 MB more than the first), about 1 MB an hour, as in the third soak, which loaded no shows: loading
+  shows doesn't add to it. CentraLight is meant to run all week, so a 10-hour soak of the final code is running
+  overnight to see whether that levels off.
+  - The soak tool printed its per-minute memory in a slightly different MB from its summary (decimal against
+    Task Manager's); both use Task Manager's MB now, which is what the soaks above report.
 
 ### Media Background Pane is only sending one picture per connection
 
