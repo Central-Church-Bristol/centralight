@@ -171,6 +171,9 @@ Worship blue.
 - [ ] Wait: at the start time Worship blue goes to Base and the key lights go to 40 %. The **History** (bottom right)
       says it ran; **Coming up** lists it for next week.
 - [ ] Click the green **Automations on** chip at the top: it turns amber, **Automations paused**. Click it again to resume.
+- [ ] While that automation's time range is still going, send a different input to Base by hand, then quit (tray →
+      **Quit CentraLight…** → **Leave lights as they are**) and start CentraLight again: your input stays on Base. The
+      automation doesn't run a second time (it only runs again at its next occurrence, e.g. next week).
 - [ ] (Optional) **+ Add a condition → Sunrise / sunset**: the row shows today's sunrise and sunset in Bristol. Check
       they look right (e.g. against the weather app), then delete the condition.
 
@@ -267,6 +270,9 @@ Worship blue.
 - [ ] `.\run.bat` again: the lights don't flicker or change when the app opens, overlays included.
 - [ ] Tray icon → **Quit CentraLight…** → Yes → **Turn lights off**: everything fades to black.
 - [ ] `.\run.bat` again: it opens blacked out (**Lights off — click to restore**); one click brings it all back.
+      (If an automation sends an input while it's blacked out like this, the lights come back by themselves. That's on
+      purpose, so an unattended Sunday morning after a "Turn lights off" quit isn't left dark. A Blackout someone
+      clicks is never lifted by an automation.)
 
 ## 19. If the lights behave oddly
 

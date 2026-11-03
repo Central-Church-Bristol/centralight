@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import queue
 import time
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -277,7 +278,12 @@ class MainWindow(QWidget):
         inp = self.document.show.inputs.get(input_id)
         if inp is None:
             return
-        answer = QMessageBox.question(self, "Delete input", f"Delete “{inp.name}”?\n\nIf it's on the lights it keeps playing until something replaces it. Ctrl+Z brings it back.")
+        users = [a.name for a in self.document.show.ordered_automations()
+                 if any(isinstance(item, Mapping) and item.get("input") == input_id
+                        for item in (*a.conditions, *a.actions, *a.on_end))]
+        used = f"\n\nThese automations use it, and would skip it: {', '.join(users)}." if users else ""
+        answer = QMessageBox.question(self, "Delete input", f"Delete “{inp.name}”?{used}\n\nIf it's on the lights it keeps "
+                                      "playing until something replaces it. Ctrl+Z brings it back.")
         if answer == QMessageBox.StandardButton.Yes:
             self.document.apply(delete_input(self.document.show, input_id), f"Delete {inp.name}")
 

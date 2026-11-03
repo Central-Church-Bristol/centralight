@@ -79,7 +79,10 @@ class LiveState:
             data = read_json(target)
         except (OSError, ValueError, json.JSONDecodeError):
             return None
-        return cls.from_dict(data) if isinstance(data, dict) else None
+        try:
+            return cls.from_dict(data) if isinstance(data, dict) else None
+        except Exception:  # an odd value: start afresh rather than not at all
+            return None
 
     def save(self, path: Path | None = None) -> None:
         self.saved_at = time.time()

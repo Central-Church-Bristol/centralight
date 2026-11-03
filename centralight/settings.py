@@ -6,7 +6,6 @@ lights and looks lives in the show folder instead.
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -104,8 +103,8 @@ class Settings:
                 data = read_json(target)
                 if isinstance(data, dict):
                     settings.update(data)
-            except (OSError, ValueError, json.JSONDecodeError):
-                pass
+            except Exception:  # whatever is wrong with it: start with the defaults (Simulated output), never not at all
+                settings = cls()
         return settings
 
     def save(self, path: Path | None = None) -> None:

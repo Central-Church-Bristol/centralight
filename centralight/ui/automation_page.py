@@ -455,6 +455,7 @@ class AutomationPage(QWidget):
         self.engine = engine
         self._sources = sources_provider or (lambda: [])
         self.selected = ""
+        self._shown_key: tuple | None = None  # what set_show last showed
         self._structure: tuple = ()
         self._view = AutomationsView()
         self._list_key: tuple = ()
@@ -593,6 +594,12 @@ class AutomationPage(QWidget):
         if self.selected not in show.automations:
             first = next(iter(show.ordered_automations()), None)
             self.selected = first.id if first else ""
+        key = (show.automations, show.automation_order, tuple((i.id, i.name) for i in show.ordered_inputs()),
+               tuple(g.name for g in show.globals), tuple((lay.id, lay.name) for lay in show.layouts), show.house,
+               show.read_only, self.selected)
+        if key == self._shown_key:
+            return  # nothing this tab shows has changed (e.g. an edit in the Editor)
+        self._shown_key = key
         self._fill_list(show)
         self._build_editor(show)
         self._fill_upcoming(show, force=True)

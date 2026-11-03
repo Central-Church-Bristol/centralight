@@ -216,6 +216,7 @@ class DashboardPage(QWidget):
         self.output_hint.setWordWrap(True)
         self.output_panel.body.addWidget(self.output_hint)
         self.output_rows: dict[str, OutputRow] = {}
+        self._rows_key: tuple | None = (show.fixtures, show.house)  # the lights the output rows were built for
         self._build_output_rows()
 
         column = QWidget()
@@ -279,12 +280,14 @@ class DashboardPage(QWidget):
         self.light_view.set_show(show)
         self.grid.set_show(show)
         self.variables.set_globals(show.globals)
-        for row in self.output_rows.values():
-            self.output_panel.body.removeWidget(row)
-            discard(row)
-        self.output_rows.clear()
-        self._build_output_rows()
-        self.refresh_previews(force=True)
+        if (show.fixtures, show.house) != self._rows_key:  # (only when the lights change, not on every edit)
+            self._rows_key = (show.fixtures, show.house)
+            for row in self.output_rows.values():
+                self.output_panel.body.removeWidget(row)
+                discard(row)
+            self.output_rows.clear()
+            self._build_output_rows()
+        self.refresh_previews()  # (only while the Dashboard is on screen: showing it redraws them)
 
     def refresh_previews(self, force: bool = False) -> None:
         """Preview every input that isn't on Base (same rendering as the engine)."""

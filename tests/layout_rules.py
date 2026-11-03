@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from centralight.output import CONNECTED, OutputStatus
-from centralight.ui.widgets import STATE_INFO, STATE_OFF, STATE_WARN, ElidedLabel
+from centralight.ui.widgets import STATE_ERROR, STATE_INFO, STATE_OFF, STATE_WARN, ElidedLabel
 
 SKIP = "layoutCheckSkip"
 SHRINK_FLAG = 4  # QSizePolicy.PolicyFlag.ShrinkFlag
@@ -230,6 +230,8 @@ def show_all_chips(window, usb: bool = True) -> None:
     window.header.set_chip("ndi", STATE_WARN, "NDI · no signal", "Media Background Pane isn't sending")
     window.header.set_chip("audio", STATE_OFF, "Audio off", "No audio source")
     window.header.set_chip("remote", STATE_INFO, "Remote :8746", "Stream Deck API")
+    window.header.set_chip("engine", STATE_ERROR, "Not responding", "The lights engine has stopped updating")
+    window.header.set_chip("files", STATE_ERROR, "Not saved", "Couldn't save warm-white.json")
     window.bridge.poll()
 
 

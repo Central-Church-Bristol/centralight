@@ -430,6 +430,7 @@ class LayoutPage(QWidget):
         self._other_notes = {name: where for name, where in by_name.items() if name not in names}  # (kept in the file)
         self._noted_names = {fx.id: fx.name for fx in document.show.fixtures}
         self._items: dict[str, LightItem] = {}
+        self._shown_key: tuple | None = None  # what set_show last showed
         self._drag_spots: dict[str, MapSpot] = {}
         self._dragging = False
         self._syncing_selection = False
@@ -667,6 +668,10 @@ class LayoutPage(QWidget):
         return self.document.show
 
     def set_show(self, show: Show) -> None:
+        key = (show.fixtures, show.house, show.identify_seed, show.layouts, show.active_layout, show.read_only)
+        if key == self._shown_key:
+            return  # nothing this tab shows has changed (e.g. an edit in the Editor)
+        self._shown_key = key
         read_only = show.read_only
         self.read_only_hint.setVisible(read_only)
         for widget in (self.add_button, self.remove_button, self.shuffle_button, self.align_button, self.photo_button, self.clear_photo_button):

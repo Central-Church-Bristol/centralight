@@ -1026,5 +1026,77 @@ class NdiReviewTests(unittest.TestCase):
                 discovery.stop()
 
 
+# ---------------------------------------------------------------- settings and live.json (hardening)
+
+class StartupFilesTests(unittest.TestCase):
+    def test_odd_settings_or_live_state_never_stop_the_start(self) -> None:
+        from unittest import mock
+
+        from centralight.live_state import LiveState
+        from centralight.settings import OUTPUT_SIMULATED, Settings
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.json"
+            path.write_text(json.dumps({"output": "usb", "remote_port": 9000}), encoding="utf-8")
+            with mock.patch.object(Settings, "_validate", side_effect=TypeError("something odd")):
+                settings = Settings.load(path)
+            self.assertEqual(settings.output, OUTPUT_SIMULATED)  # the defaults (Simulated), not a crash
+            live = Path(folder) / "live.json"
+            live.write_text(json.dumps({"master": 0.5}), encoding="utf-8")
+            with mock.patch.object(LiveState, "from_dict", side_effect=TypeError("something odd")):
+                self.assertIsNone(LiveState.load(live))
+
+
+class DeleteWarningTests(unittest.TestCase):
+    setUpClass = WindowReviewTests.__dict__["setUpClass"]
+    setUp = WindowReviewTests.setUp
+    tearDown = WindowReviewTests.tearDown
+
+    def test_deleting_an_input_an_automation_uses_says_so(self) -> None:
+        from unittest import mock
+
+        from PySide6.QtWidgets import QMessageBox
+
+        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No) as asked:
+            self.window.delete_input("warm-white")  # the sample "Sunday welcome" sends it to Base
+        text = asked.call_args[0][2]
+        self.assertIn("Sunday welcome", text)
+        self.assertIn("warm-white", self.window.document.show.inputs)  # (answered No)
+        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No) as asked:
+            self.window.delete_input("stage-shapes")  # nothing uses this one
+        self.assertNotIn("automations use it", asked.call_args[0][2])
+
+
+class LighterChangesTests(unittest.TestCase):
+    setUpClass = WindowReviewTests.__dict__["setUpClass"]
+    setUp = WindowReviewTests.setUp
+    tearDown = WindowReviewTests.tearDown
+
+    def test_an_edit_in_the_editor_doesnt_rebuild_the_other_tabs(self) -> None:
+        from unittest import mock
+
+        from centralight.input_edit import set_element_value
+
+        window = self.window
+        window.open_editor("warm-white")
+        process(self.app)
+        rows = dict(window.dashboard.output_rows)
+        with mock.patch.object(window.layout_page, "_fill_legend") as legend, \
+                mock.patch.object(window.automation_page, "_build_editor") as listing:
+            show = set_element_value(window.document.show, "warm-white", "E1", "opacity", 0.5)
+            window.document.apply(show, "opacity")
+            process(self.app)
+        legend.assert_not_called()  # (the Layout tab shows nothing that changed)
+        listing.assert_not_called()  # (nor the Automation tab)
+        self.assertEqual(window.dashboard.output_rows, rows)  # the same output rows, not rebuilt
+        from centralight.show_edit import rename_light
+
+        window.document.apply(rename_light(window.document.show, "slimpar-101", "Drum wash"), "Rename")
+        process(self.app)
+        self.assertIn("Drum wash", [r.label.text() if hasattr(r, "label") else "" for r in window.dashboard.output_rows.values()]
+                      + [window.layout_page.table.item(r, window.layout_page.table.column("name")).text()
+                         for r in range(window.layout_page.table.rowCount())])  # a change they do show still shows
+
+
 if __name__ == "__main__":
     unittest.main()

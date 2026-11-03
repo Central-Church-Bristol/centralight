@@ -164,10 +164,17 @@ first, at 05:21; part 2 afterwards):
   to be clicked into, and a test checks that lists still scroll.
 
 Left as they are, on purpose or because they're too small to matter now: choosing the same big video again
-compares the two files on the window's thread (a short pause); old backups can only be restored by hand; deleting
-an input that an automation uses doesn't warn (the Automation tab shows "(not found)"); a house-light action can't
-"leave the switch as it is"; a second launch in the first 1.5 s of startup exits quietly; after waking, NDI
-reconnects by itself (nothing forces it); and other tabs' redraws make slider drags in the Editor a little heavy.
+compares the two files on the window's thread (a short pause); old backups can only be restored by hand; a
+house-light action can't "leave the switch as it is"; a second launch in the first 1.5 s of startup exits quietly;
+and after waking, NDI reconnects by itself (nothing forces it).
+
+**Afterwards** (small extras)
+- Deleting an input that automations use now says which ones (they'd skip that step).
+- A settings file or live.json with something odd in it can't stop CentraLight starting either: it starts with the
+  defaults (Simulated output) instead.
+- Editing is lighter: one small change in the Editor (a step of a slider drag) took about 19 ms of the window's time,
+  most of it redrawing tabs that weren't on screen. Those tabs now skip a redraw when nothing they show has changed,
+  and the Dashboard's previews only redraw while it's on screen: now about 1.6 ms.
 
 ## M9 Polish — done
 
