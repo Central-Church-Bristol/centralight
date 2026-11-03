@@ -1,9 +1,11 @@
-import cv2                 # OpenCV: Handles the video processing and cropping
+import cv2                 # OpenCV: Shrinks each video frame so averaging is fast
 import msvcrt              # Windows console: detect Esc to stop
 import numpy as np          # NumPy: Fast math to average the screen colors
-import NDIlib as ndi       # NDIlib: Connects to the vMix video feed
-from stupidArtnet import StupidArtnet  # StupidArtnet: Sends data to MagicQ
+import NDIlib as ndi       # NDIlib: Connects to the Media Background Pane NDI feed
 import time                # Time: Handles pauses and connection delays
+
+from dmx_output import ArtNetOutput, UsbDmxOutput  # Sends the DMX: USB dongle or Art-Net
+from fixtures import fixture, set_fixture           # The church lights and their DMX channels
 
 
 def esc_pressed() -> bool:
@@ -17,106 +19,160 @@ def esc_pressed() -> bool:
     return False
 
 # --- CONFIGURATION ---
-ARTNET_IP = "192.168.1.16"  # "Loopback" IP tells it to send directly to MagicQ on this PC
-UNIVERSE = 0             # Art-Net Universe 0 (which maps to MagicQ Input Universe 0)
-PACKET_SIZE = 512        # A standard DMX universe has 512 channels
+NDI_SOURCE = "Media Background Pane"  # Follow the NDI feed whose name contains this (not case-sensitive)
+OUTPUT = "usb"         # "usb" = Eurolite USB-DMX512 PRO dongle, "artnet" = Art-Net (e.g. to MagicQ)
+USB_PORT = None          # None = find the Eurolite automatically, or set it, e.g. "COM3"
+ARTNET_IP = "192.168.1.16"  # Art-Net target (only used when OUTPUT = "artnet")
+UNIVERSE = 0             # Art-Net universe (only used when OUTPUT = "artnet")
+SEND_FPS = 30            # DMX updates per second (the USB dongle can only manage about 40)
 
-# Mapping layout: (X_start, Y_start, Width, Height) from 0.0 (left/top) to 1.0 (right/bottom)
+# Mapping layout: which light follows which part of the screen.
+# Light names come from fixtures.py. Region = (X_start, Y_start, Width, Height)
+# from 0.0 (left/top) to 1.0 (right/bottom).
+# For now every light follows the whole screen; give each one its own region
+# once fixture_map.csv says where the lights are.
+WHOLE = (0.0, 0.0, 1.0, 1.0)
 LIGHTS = [
-    # Light 1 starts at DMX Channel 1, samples the Left half of the video
-    {"start_ch": 1, "region": (0.0, 0.0, 0.5, 1.0)},  
-    
-    # Light 2 starts at DMX Channel 4, samples the Right half of the video
-    {"start_ch": 4, "region": (0.5, 0.0, 0.5, 1.0)}   
+    {"name": "SlimPAR 101", "region": WHOLE},  # Top Wash
+    {"name": "SlimPAR 102", "region": WHOLE},  # Top Wash
+    {"name": "SlimPAR 103", "region": WHOLE},  # Top Wash
+    {"name": "SlimPAR 104", "region": WHOLE},  # Top Wash
+    {"name": "SlimPAR 105", "region": WHOLE},  # Side Fill
+    {"name": "SlimPAR 106", "region": WHOLE},  # Pillars
+    {"name": "SlimPAR 107", "region": WHOLE},  # Pillars
+    {"name": "SlimPAR 108", "region": WHOLE},  # Side Fill
 ]
-# --- INITIALIZE ART-NET ---
-print("Starting Art-Net transmission...")
-artnet = StupidArtnet(ARTNET_IP, UNIVERSE, PACKET_SIZE, fps=30)
-artnet.start()
 
-# --- INITIALIZE NDI ---
-# Create an NDI finder to scan the network
-ndi_find = ndi.find_create_v2()
-print("Searching for NDI streams (waiting 2 seconds)...")
-time.sleep(2) 
-sources = ndi.find_get_current_sources(ndi_find)
+# Lights that aren't RGB, so they don't follow the screen. This script sends every
+# DMX channel, so while it runs they sit at the level set here (0 = off, 255 = full).
+STATIC_LEVELS = {
+    "Dimmer 1": 0,  # Festoon
+    "Dimmer 4": 0,  # Both key lights
+}
 
-# If no streams at all are found, stop
-if not sources:
-    print("Error: No NDI streams found on the network!")
-    artnet.stop()
-    exit()
+SAMPLE_SIZE = (160, 90)  # Each frame is shrunk to this many pixels before averaging
 
-# Loop through all found sources to locate the vMix stream
-vmix_source = None
-for source in sources:
-    if "vmix" in source.ndi_name.lower():
-        vmix_source = source
-        break
 
-# If we found other streams (like ProPresenter) but not vMix:
-if vmix_source is None:
-    print("Error: Found NDI streams, but none of them contain 'vmix' in the name!")
-    print("Here are the streams I did find. Make sure vMix NDI is enabled:")
-    for s in sources:
-        print(f" - {s.ndi_name}")
-    artnet.stop()
-    exit()
+def screen_to_dmx(frame: np.ndarray, dmx: bytearray) -> None:
+    """Average each light's screen region and write that colour into dmx."""
+    # INTER_AREA averages pixels as it shrinks, so the small frame keeps the true colours
+    small = cv2.resize(frame, SAMPLE_SIZE, interpolation=cv2.INTER_AREA)
+    height, width = small.shape[:2]
 
-# Connect to the vMix NDI source
-print(f"Connected successfully to: {vmix_source.ndi_name}")
-ndi_recv_create = ndi.RecvCreateV3()
-ndi_recv_create.color_format = ndi.RECV_COLOR_FORMAT_BGRX_BGRA
-ndi_recv = ndi.recv_create_v3(ndi_recv_create)
-ndi.recv_connect(ndi_recv, vmix_source)
+    for light in LIGHTS:
+        rx, ry, rw, rh = light["region"]
 
-# --- MAIN RUNNING LOOP ---
-print("Pixel mapping is active! Press Esc in this window to stop.")
+        # Convert our percentage coordinates to pixel locations (at least 1 pixel)
+        x1 = min(int(rx * width), width - 1)
+        y1 = min(int(ry * height), height - 1)
+        x2 = max(x1 + 1, int((rx + rw) * width))
+        y2 = max(y1 + 1, int((ry + rh) * height))
 
-try:
-    while not esc_pressed():
-        # Short timeout so Esc is checked often
-        frame_type, video_frame, _, _ = ndi.recv_capture_v2(ndi_recv, 100)
+        # Average colour of every pixel in this light's zone
+        zone = small[y1:y2, x1:x2, :3]
+        blue, green, red = zone.reshape(-1, 3).mean(axis=0)  # NDI gives Blue-Green-Red (BGR)
 
-        if frame_type == ndi.FRAME_TYPE_VIDEO:
-            # 1. Convert raw NDI data into a frame OpenCV can read
-            frame = np.copy(video_frame.data)
-            height, width, _ = frame.shape
+        # Red/green/blue into the light's own channels (fixtures.py knows the layout)
+        set_fixture(dmx, fixture(light["name"]), (int(red + 0.5), int(green + 0.5), int(blue + 0.5)))
 
-            # 2. Loop through each light we configured
-            for light in LIGHTS:
-                rx, ry, rw, rh = light["region"]
 
-                # Convert our percentage coordinates to actual pixel locations
-                x1, y1 = int(rx * width), int(ry * height)
-                x2, y2 = int((rx + rw) * width), int((ry + rh) * height)
+def main() -> None:
+    # Catch typos in LIGHTS / STATIC_LEVELS before anything starts
+    try:
+        for name in [light["name"] for light in LIGHTS] + list(STATIC_LEVELS):
+            fixture(name)
+    except KeyError as exc:
+        print(f"Error: {exc.args[0]} (check LIGHTS and STATIC_LEVELS)")
+        return
 
-                # Crop the video frame to just this light's target zone
-                zone = frame[y1:y2, x1:x2]
+    # --- OPEN THE DMX OUTPUT ---
+    if OUTPUT == "usb":
+        print("Opening the Eurolite USB DMX dongle...")
+        try:
+            output = UsbDmxOutput(USB_PORT)
+        except ConnectionError as exc:
+            print(f"Error: {exc}")
+            return
+        print(f"Sending DMX on {output.port}")
+    else:
+        print(f"Sending Art-Net to {ARTNET_IP}, universe {UNIVERSE}")
+        output = ArtNetOutput(ARTNET_IP, UNIVERSE)
 
-                # Calculate the average color of all pixels in this cropped zone
-                avg_color_per_row = np.average(zone, axis=0)
-                avg_color = np.average(avg_color_per_row, axis=0)
+    # Fixed-level lights come on straight away; screen lights start dark
+    dmx = bytearray(512)
+    for name, level in STATIC_LEVELS.items():
+        set_fixture(dmx, fixture(name), (level, level, level))
+    output.send(dmx)
 
-                # NDI outputs colors as Blue-Green-Red (BGR)
-                blue = int(avg_color[0])
-                green = int(avg_color[1])
-                red = int(avg_color[2])
+    # --- INITIALIZE NDI ---
+    # Create an NDI finder to scan the network
+    ndi_find = ndi.find_create_v2()
+    print("Searching for NDI streams (waiting 2 seconds)...")
+    time.sleep(2)
+    sources = ndi.find_get_current_sources(ndi_find)
 
-                # 3. Assign these RGB values to the correct DMX channels
-                ch = light["start_ch"]
-                artnet.set_single_value(ch, red)       # Red channel
-                artnet.set_single_value(ch + 1, green) # Green channel
-                artnet.set_single_value(ch + 2, blue)  # Blue channel
+    # If no streams at all are found, stop
+    if not sources:
+        print("Error: No NDI streams found on the network!")
+        output.close()
+        ndi.find_destroy(ndi_find)
+        return
 
-            # 4. Ship the complete Art-Net packet off to MagicQ
-            artnet.show()
+    # Loop through all found sources to locate our feed
+    feed = None
+    for source in sources:
+        if NDI_SOURCE.lower() in source.ndi_name.lower():
+            feed = source
+            break
+
+    # If we found other streams (like cameras) but not ours:
+    if feed is None:
+        print(f"Error: Found NDI streams, but none of them contain '{NDI_SOURCE}' in the name!")
+        print("Here are the streams I did find. Make sure Media Background Pane is running,")
+        print("or change NDI_SOURCE if its NDI name was changed in its settings:")
+        for s in sources:
+            print(f" - {s.ndi_name}")
+        output.close()
+        ndi.find_destroy(ndi_find)
+        return
+
+    # Connect to the NDI feed
+    print(f"Connected successfully to: {feed.ndi_name}")
+    ndi_recv_create = ndi.RecvCreateV3()
+    ndi_recv_create.color_format = ndi.RECV_COLOR_FORMAT_BGRX_BGRA
+    ndi_recv = ndi.recv_create_v3(ndi_recv_create)
+    ndi.recv_connect(ndi_recv, feed)
+
+    # --- MAIN RUNNING LOOP ---
+    print("Pixel mapping is active! Press Esc in this window to stop.")
+    last_send = 0.0
+
+    try:
+        while not esc_pressed():
+            # Video only (audio frames would need freeing); short timeout so Esc is checked often
+            frame_type, video_frame, _, _ = ndi.recv_capture_v2(
+                ndi_recv, 100, want_audio=False, want_metadata=False
+            )
+            if frame_type != ndi.FRAME_TYPE_VIDEO:
+                continue
+
+            # Only work out new colours as often as we send DMX
+            now = time.monotonic()
+            if now - last_send >= 1.0 / SEND_FPS:
+                frame = np.copy(video_frame.data)
+                screen_to_dmx(frame, dmx)
+                output.send(dmx)
+                last_send = now
 
             # Free up the frame from computer memory
             ndi.recv_free_video_v2(ndi_recv, video_frame)
-finally:
-    print("\nStopping script and closing connections...")
-    # Always clean up connections when shutting down so ports don't get locked
-    artnet.stop()
-    ndi.recv_destroy(ndi_recv)
-    ndi.find_destroy(ndi_find)
+    finally:
+        print("\nStopping script and closing connections...")
+        # Always clean up so the lights go off and ports don't get locked
+        output.close()
+        ndi.recv_destroy(ndi_recv)
+        ndi.find_destroy(ndi_find)
+
+
+if __name__ == "__main__":
+    main()
