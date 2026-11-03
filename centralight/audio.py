@@ -166,6 +166,9 @@ class AudioCapture:
         self.state = "off"  # off, listening, error
         self.detail = ""
         self._channels = 1
+        self._blocks = 0  # blocks of sound analysed so far
+        self._rate_mark = (time.monotonic(), 0)
+        self._rate = 0.0
 
     def set_smoothing(self, attack: float, release: float) -> None:
         self.analyzer.attack, self.analyzer.release = attack, release
@@ -227,9 +230,21 @@ class AudioCapture:
             values = self.analyzer.feed(samples)
             with self._lock:
                 self._values = values
+                self._blocks += 1
         except Exception as exc:  # never let the audio thread die
             log_exception("analysing audio", exc)
         return (None, pyaudio.paContinue)
+
+    def rate(self) -> float:
+        """Blocks of sound analysed a second, over the last second or so (about 47 at 48 kHz; 0 = nothing arriving)."""
+        now = time.monotonic()
+        then, count = self._rate_mark
+        if now - then >= 1.0:
+            with self._lock:
+                blocks = self._blocks
+            self._rate = (blocks - count) / (now - then)
+            self._rate_mark = (now, blocks)
+        return self._rate
 
     def latest(self) -> dict[str, float]:
         """The newest values (0 when off, or when nothing has arrived for a moment)."""

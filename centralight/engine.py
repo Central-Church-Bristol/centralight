@@ -186,6 +186,7 @@ class EngineFrame:
     audio: Mapping[str, float] = EMPTY  # audio.level and friends, now
     audio_state: str = "off"  # off, listening, error
     audio_detail: str = ""  # what it's listening to, or what's wrong
+    audio_rate: float = 0.0  # blocks of sound analysed a second (0 = none arriving)
     overlays: tuple[OverlayView, ...] = ()
     solo: str = ""  # input shown alone on the lights ("" = none)
     live_inputs: frozenset[str] = frozenset()  # inputs on Base or in an overlay right now
@@ -766,6 +767,13 @@ class Engine:
 
     # ------------------------------------------------------------ publishing
 
+    def _audio_rate(self) -> float:
+        rate = getattr(self.audio, "rate", None)
+        try:
+            return float(rate()) if callable(rate) else 0.0
+        except Exception:
+            return 0.0
+
     def _publish(self, now: float, colours: dict[str, RGB], house_out: dict[str, float]) -> None:
         self._last_publish = now
         self._seq += 1
@@ -818,6 +826,7 @@ class Engine:
             audio=self._ctx.audio,
             audio_state=getattr(self.audio, "state", "off") if self.audio is not None else "off",
             audio_detail=getattr(self.audio, "detail", "") if self.audio is not None else "",
+            audio_rate=self._audio_rate(),
             overlays=tuple(overlays),
             solo=self._solo.input.id if self._solo is not None else "",
             live_inputs=frozenset(live_inputs),

@@ -18,6 +18,7 @@ class Tray(QSystemTrayIcon):
     show_requested = Signal()
     quit_requested = Signal()
     pause_toggled = Signal(bool)  # True = pause the automations
+    diagnostics_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(icons.app_icon(), parent)
@@ -29,6 +30,8 @@ class Tray(QSystemTrayIcon):
         self.pause_action.setCheckable(True)
         self.pause_action.toggled.connect(self.pause_toggled.emit)
         menu.addAction(self.pause_action)
+        self.diagnostics_action = menu.addAction("Diagnostics")
+        self.diagnostics_action.triggered.connect(self.diagnostics_requested.emit)
         menu.addSeparator()
         self.quit_action = menu.addAction("Quit CentraLight…")
         self.quit_action.triggered.connect(self.quit_requested.emit)

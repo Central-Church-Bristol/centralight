@@ -57,6 +57,7 @@ def main() -> int:
 
     from centralight.new_show import show_from_patch
     from centralight.settings import Settings
+    from centralight.ui.diagnostics import DiagnosticsDialog
     from centralight.ui.main_window import MainWindow
     from centralight.ui.preview_page import LookPreview
     from centralight.ui.quit_dialog import QuitDialog
@@ -187,11 +188,15 @@ def main() -> int:
         process(app, 2)
 
     settings = Settings(show_folder=str(ROOT))
+    busy = busy_show_engine(long_names_show())
+    frame = replace(busy.frames.get(), audio_state="listening", audio_rate=47.0,
+                    audio_detail="Line Out 1-2 (BEHRINGER X-USB AUDIO) [Loopback], a long device name")
     for name, dialog in (
         ("settings", SettingsDialog(settings, LONG_SHOW_NAME, None, ports=[("COM3", "USB Serial Port (looks like the Eurolite)"), ("COM1", "Communications Port (COM1)")],
                                     show=with_inputs(show_from_patch()))),
         ("quit", QuitDialog(None)),
         ("preview", LookPreview(None)),
+        ("diagnostics", DiagnosticsDialog(lambda: frame, None)),
     ):
         dialog.show()
         process(app, 4)

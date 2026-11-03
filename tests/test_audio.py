@@ -4,6 +4,7 @@ giving audio.* to expressions, and the "Sound is loud enough" automation conditi
 from __future__ import annotations
 
 import math
+import time
 import unittest
 from datetime import datetime
 
@@ -90,6 +91,17 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(set(capture.latest().values()), {0.0})
         capture.stop()
 
+    def test_rate(self) -> None:
+        capture = AudioCapture("")
+        tone = (0.1 * np.sin(np.arange(BLOCK) * 2 * math.pi * 440 / RATE)).astype(np.float32).tobytes()
+        for _ in range(47):
+            capture._callback(tone, BLOCK, None, 0)
+        capture._rate_mark = (time.monotonic() - 1.0, 0)  # as if those 47 came over the last second
+        self.assertAlmostEqual(capture.rate(), 47, delta=1.5)
+        self.assertGreater(capture.latest()["level"], 0.0)
+        capture._rate_mark = (time.monotonic() - 1.0, capture._blocks)  # then nothing for a second
+        self.assertEqual(capture.rate(), 0.0)
+
     def test_sources(self) -> None:
         sources = list_sources()
         self.assertEqual(sources[0][0], "")
@@ -103,6 +115,9 @@ class FakeAudio:
 
     def latest(self) -> dict:
         return dict(self.values)
+
+    def rate(self) -> float:
+        return 47.0
 
 
 class EngineAudioTests(unittest.TestCase):
@@ -123,6 +138,7 @@ class EngineAudioTests(unittest.TestCase):
         self.assertEqual(output.last[SLIMPAR_105 - 1], 51)
         frame = engine.frames.get()
         self.assertEqual(frame.audio_state, "listening")
+        self.assertEqual(frame.audio_rate, 47.0)
         engine.audio = None  # Settings turned it off
         clock.advance(0.025)
         engine.tick()

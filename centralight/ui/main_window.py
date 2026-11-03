@@ -64,7 +64,7 @@ MIN_HEIGHT = 720
 LIVE_SAVE_DELAY_MS = 1500
 BACKUP_INTERVAL_MS = 10 * 60 * 1000
 # Keys the app already uses: an input's hotkey can't be one of these
-RESERVED_KEYS = {"Ctrl+Z", "Ctrl+Y", "Ctrl+Shift+Z", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+,"}
+RESERVED_KEYS = {"Ctrl+Z", "Ctrl+Y", "Ctrl+Shift+Z", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+,", "Ctrl+Shift+D", "Ctrl+V"}
 
 
 class MainWindow(QWidget):
@@ -170,6 +170,7 @@ class MainWindow(QWidget):
         for index, (key, _label) in enumerate(PAGES, start=1):
             QShortcut(QKeySequence(f"Ctrl+{index}"), self, activated=lambda k=key: self.show_page(k))
         QShortcut(QKeySequence("Ctrl+,"), self, activated=self.open_settings)
+        QShortcut(QKeySequence("Ctrl+Shift+D"), self, activated=self.open_diagnostics)
         QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo)
         QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo)
         QShortcut(QKeySequence("Ctrl+Shift+Z"), self, activated=self.redo)
@@ -414,6 +415,9 @@ class MainWindow(QWidget):
         if dialog.preview_requested:
             self.open_preview()
             return
+        if dialog.diagnostics_requested:
+            self.open_diagnostics()
+            return
         if result != QDialog.DialogCode.Accepted:
             return
         before = self._output_key()
@@ -424,6 +428,7 @@ class MainWindow(QWidget):
         if (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release) != audio_before:
             log_info(f"Audio source: {self.settings.audio_source or 'off'}")
             self.restart_audio()
+        self.editor_page.timeline.ndi_default = self.settings.ndi_default
         if self._output_key() != before:
             log_info(f"Output changed to {self.settings.output}")
             self.output.set_spec(device_spec(self.settings, universe_size(self.show_data.fixtures)))
@@ -436,6 +441,18 @@ class MainWindow(QWidget):
             self.remote.start()
             self._update_remote_chip()
         self._save_settings()
+
+    def open_diagnostics(self):
+        """How CentraLight is doing right now (not modal: it can stay open while you work)."""
+        from .diagnostics import DiagnosticsDialog
+
+        if getattr(self, "diagnostics", None) is not None and self.diagnostics.isVisible():
+            self.diagnostics.raise_()
+            self.diagnostics.activateWindow()
+            return self.diagnostics
+        self.diagnostics = DiagnosticsDialog(lambda: self.last_frame, self)
+        self.diagnostics.show()
+        return self.diagnostics
 
     def open_preview(self) -> None:
         preview = LookPreview(self)
@@ -649,6 +666,7 @@ class MainWindow(QWidget):
         tray.show_requested.connect(self.bring_to_front)
         tray.quit_requested.connect(self.quit_from_tray)
         tray.pause_toggled.connect(lambda paused: self.engine.submit(SetAutomationsPaused(paused)))
+        tray.diagnostics_requested.connect(lambda: (self.bring_to_front(), self.open_diagnostics()))
         tray.show()
 
     def bring_to_front(self) -> None:

@@ -21,9 +21,9 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M6 Timed mode + keyframes (+ video) | **done** (3 Nov, 02:38) |
 | M7 Painting and masks | **done** (3 Nov, 02:50) |
 | M8 Audio variables | **done** (3 Nov, 03:13) |
-| M9 Polish (launcher .exe, Diagnostics) | next |
+| M9 Polish (launcher .exe, Diagnostics) | **done** (3 Nov, 03:54) |
 
-Run all the tests (about three minutes, including the layout check at every scaling) from the CentraLight folder:
+Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -t .
@@ -35,14 +35,46 @@ Run all the tests (about three minutes, including the layout check at every scal
   pushed). M0–M4 went in as one commit, because they were finished before commits were allowed; each milestone
   after that gets its own. Before them is a commit with the console-script work (the Eurolite driver and scripts).
   Your checkout is still on `main` with every file as it was: this checkout is shared with other Claude
-  sessions, so the commits were made without switching branches. To make the branch the checked-out one:
-  `git switch claude/centralight-gui` (your files stay exactly as they are).
+  sessions, so the commits were made without switching branches. To make the branch the checked-out one
+  without touching a single file, run `git symbolic-ref HEAD refs/heads/claude/centralight-gui` and then
+  `git reset -q` (step 21 of `WEDNESDAY_TESTS.md`). A plain `git switch claude/centralight-gui` refuses, because
+  the app's files are already there (untracked, as far as `main` knows). Tried on a copy of the repository.
 - Your own earlier changes to the logo files in `Assets\` aren't in the commits (they're yours to commit); the
   app draws its logo itself if `CentraLight Logo 1024.png` isn't there.
 - The logo files in `Assets/` were already changed (and `CentraLight Logo 1024.png` added) before this work
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## M9 Polish — done
+
+- **CentraLight.exe** in the CentraLight folder: double-click it to start CentraLight without a console window. It
+  has the logo as its icon. Put a shortcut to it on the desktop or the taskbar (the exe itself has to stay in the
+  folder, next to main.py). The first time, if the app isn't set up yet, it runs `run.bat` instead. To rebuild it
+  (e.g. after changing the logo): `.venv\Scripts\python.exe tools\build_launcher.py`. It's built with the C#
+  compiler that comes with Windows, like Media Background Pane's. Git leaves the exe out (`.gitignore`): it's
+  built from `launcher\Program.cs` and `launcher\icon.ico`, which are in the commit. Tried: it started the app
+  (with temporary settings and Simulated output) with no console window, and that copy was stopped afterwards.
+- **Diagnostics** (Settings → Diagnostics…, the tray icon's menu, or Ctrl+Shift+D): the engine (ticks a second,
+  time per tick, faults, restarts), the output, each NDI feed (pictures a second, size), audio (how often sound
+  arrives, loudness), what's playing, the automations, and CentraLight's own CPU and memory, updated every second.
+  **Copy** puts it all on the clipboard to paste into a message; **Open the log** opens session.log.
+- **Less CPU.** Before each of its 40 ticks a second, the engine used to spin for the last 2 ms to wake exactly on
+  time. Now it just sleeps: Windows wakes it at most about 1 ms late (0.3 ms typically), which the lights can't
+  show. Following a 960×540, 24 fps feed, the whole app went from 4–7 % of one core to 1–2 % with its window
+  open and about 0.5 % in the tray. A 10-minute soak with the window open averaged 1.8 % of one core (2.5 % at
+  worst; 0.11 % of the PC), with memory flat. The lag from the screen to the lights is unchanged (median 46 ms).
+- **Settings → Screen feed (NDI)**: the feed that new NDI elements start with (any source whose name contains
+  it; "Media Background Pane" unless you change it).
+- Ctrl+Shift+D and Ctrl+V can't be taken as input hotkeys any more (CentraLight uses them).
+- **README**: a new "Always running" section, including how to let Windows sign in by itself after a restart
+  nobody signs in to (e.g. Windows Update in the night). The plan asked the README to explain it; CentraLight never
+  changes that setting.
+- **Switching to the branch**: the docs used to say `git switch claude/centralight-gui`, but on a copy of the
+  repository that refuses (the app's files are already in the folder, untracked as far as `main` knows). Step 21
+  of `WEDNESDAY_TESTS.md` now has two commands that switch without changing a single file.
+- Not built: the plan's **Sunrise / sunset** automation condition, which it marked "optional, later". A time range
+  does the same job for now.
 
 ## M8 Audio variables — done
 
@@ -382,8 +414,8 @@ Measured (Simulated output, so no lights):
 - **3-hour soak** (`tools\soak.py`, finished 3 Nov 02:02): the app (as it was after M4) followed a 640×360,
   24 fps test feed for 180 minutes. CPU averaged 4.3 % of one core (0.27 % of the PC; worst minute 6.1 %),
   memory stayed flat (121 MB at the start, 124 MB at the end; the second half averaged only 0.4 MB more than
-  the first), and the session log has no errors. The CPU is a little over the 3 %-of-one-core target; M9
-  (polish) will look at trimming it.
+  the first), and the session log has no errors. The CPU was a little over the 3 %-of-one-core target; M9 brought
+  it down to about 1 % (see M9).
 
 ### Media Background Pane is only sending one picture per connection
 
@@ -537,4 +569,4 @@ Problems the tests found and that are fixed:
 
 ## Next
 
-- M9: polish (a launcher .exe with the logo, and a Diagnostics window).
+Everything in the plan is built. What's left is Wednesday's checklist on the real lights (`docs/WEDNESDAY_TESTS.md`).

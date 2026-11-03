@@ -6,7 +6,7 @@ Built for [Central Church Bristol](https://github.com/Central-Church-Bristol). W
 
 ## The CentraLight app (new, being tested)
 
-Double-click `run.bat` to start the CentraLight app: a window with the **Festoon**, **Key lights** and **Master** faders, **Blackout**, a map of the lights, and *inputs* (looks) such as **Follow screen**, where the lights follow Media Background Pane like `ndi_pixel_mapper.py` does.
+Double-click `CentraLight.exe` (or `run.bat`, which also sets things up the first time) to start the CentraLight app: a window with the **Festoon**, **Key lights** and **Master** faders, **Blackout**, a map of the lights, and *inputs* (looks) such as **Follow screen**, where the lights follow Media Background Pane like `ndi_pixel_mapper.py` does.
 
 - The first time, `run.bat` installs what the app needs into `.venv` and copies the church fonts from `G:\My Drive\Video Projection\Brand\Fonts` into `fonts\`.
 - The app starts with **Simulated** output: it shows what it would send, but doesn't touch the lights. To drive the lights, click the gear (top right) → **Output** → **Eurolite USB-DMX512 PRO**. Close the console scripts and MagicQ first: only one program can use the dongle at a time.
@@ -17,6 +17,21 @@ Double-click `run.bat` to start the CentraLight app: a window with the **Festoon
 - **Inputs made by AI**: **Create with AI** on the **+ New input** tile (or the sparkle on a tile, to edit one). Describe the look, click **Copy prompt**, paste it into any AI chat (ChatGPT, Claude, Gemini, Copilot), and paste the reply back: it's checked and previewed before you add it. AI tools such as Claude Code or Cursor can also work in the show folder (Settings → AI → **Open show folder**): they read `AI_GUIDE.md` there, and inputs they write appear straight away (Ctrl+Z undoes them).
 - The show (lights, layout, inputs) is in `Documents\CentraLight Shows\Central Church`. Settings and the session log (`session.log`, for when something goes wrong) are in `%LOCALAPPDATA%\CentraLight`.
 - `docs\BUILD_LOG.md` lists what's done; `docs\WEDNESDAY_TESTS.md` is the checklist for trying it on the lights.
+
+### Always running
+
+- Closing the window keeps CentraLight running in the tray (by the clock), so automations, the Stream Deck and the
+  lights carry on. **Quit** is in the tray icon's menu.
+- **Start CentraLight when I sign in to Windows** (Settings → Starting and quitting) starts it in the tray at
+  sign-in. It stays off until it has been tried on the lights (`docs\WEDNESDAY_TESTS.md`, step 1b).
+- After a restart that nobody signs in to (e.g. Windows Update in the night), CentraLight only starts once someone
+  signs in. For it to come back by itself, Windows has to sign in automatically. That's your choice, and a Windows
+  setting that CentraLight never changes: press Win+R, type `netplwiz`, untick **Users must enter a user name and
+  password to use this computer**, and type the account's password. (No tick box? Settings → Accounts → Sign-in
+  options → turn off **Require Windows Hello sign-in for Microsoft accounts**, then try again.) Anyone who switches
+  the PC on then gets the desktop without a password.
+- Windows Update's **active hours** (Settings → Update & Security → Change active hours) stop it restarting the PC
+  during services.
 
 ### Stream Deck (and phones)
 
@@ -46,7 +61,7 @@ Settings → Remote → **Allow other computers and phones** is ticked; they the
 
 The console scripts below still work, and stay the fallback until the app has been tested on the lights.
 
-Run the app's tests (about three minutes; they never touch the lights):
+Run the app's tests (about five minutes; they never touch the lights):
 
 ```bat
 .venv\Scripts\python.exe -m unittest discover -s tests -t .

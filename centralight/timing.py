@@ -1,4 +1,4 @@
-"""Accurate sleeping for the engine loop (Windows' default timer only ticks every ~15 ms)."""
+"""Sleeping for the engine loop, to the millisecond."""
 
 from __future__ import annotations
 
@@ -30,14 +30,14 @@ def end_precise_timer() -> None:
 
 
 def sleep_until(deadline: float, running: Callable[[], bool] | None = None) -> None:
-    """Sleep until time.perf_counter() reaches deadline (or running() turns false)."""
+    """Sleep until time.perf_counter() reaches deadline (or running() turns false).
+
+    Python's time.sleep uses Windows' high-resolution timer, so this wakes at most about 1 ms late (0.3 ms typically,
+    measured on the church PC). It used to spin for the last 2 ms to be exact to the microsecond: that cost about
+    4 % of a core for nothing the lights could show.
+    """
     while running is None or running():
         remaining = deadline - time.perf_counter()
         if remaining <= 0:
             return
-        if remaining > 0.002:
-            time.sleep(min(remaining - 0.001, 0.25))
-            continue
-        while (running is None or running()) and time.perf_counter() < deadline:
-            pass
-        return
+        time.sleep(min(remaining, 0.25))

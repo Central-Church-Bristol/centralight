@@ -88,6 +88,7 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(560)
         self._show_folder = show_folder
         self.preview_requested = False
+        self.diagnostics_requested = False
 
         # --- output
         output_box = QGroupBox("Output: where the DMX goes")
@@ -142,6 +143,13 @@ class SettingsDialog(QDialog):
             )
         )
         self.output_group.buttonToggled.connect(lambda *_: self._sync_enabled())
+
+        # --- the screen's NDI feed: what new NDI elements (and Follow screen in a new show) follow
+        ndi_box = QGroupBox("Screen feed (NDI)")
+        ndi_form = QFormLayout(ndi_box)
+        self.ndi_default = QLineEdit(settings.ndi_default)
+        self.ndi_default.setToolTip("Any NDI source whose name contains this. New NDI elements start with it.")
+        ndi_form.addRow("Feed for new NDI elements", self.ndi_default)
 
         # --- the remote (Stream Deck, phones)
         remote_box = QGroupBox("Remote: Stream Deck and phones")
@@ -246,10 +254,14 @@ class SettingsDialog(QDialog):
         preview = QPushButton("Look preview…")
         preview.setToolTip("Colours, fonts and controls on one page (for checking the design)")
         preview.clicked.connect(self._preview)
+        diagnostics = QPushButton("Diagnostics…")
+        diagnostics.setToolTip("How CentraLight is doing right now (also Ctrl+Shift+D, and in the tray icon's menu)")
+        diagnostics.clicked.connect(self._diagnostics)
         files_buttons = QHBoxLayout()
         files_buttons.addWidget(open_show)
         files_buttons.addWidget(open_logs)
         files_buttons.addStretch(1)
+        files_buttons.addWidget(diagnostics)
         files_buttons.addWidget(preview)
         files_layout = QVBoxLayout(files_box)
         files_layout.addWidget(QLabel("Show folder"))
@@ -289,6 +301,7 @@ class SettingsDialog(QDialog):
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 6, 0)
         content_layout.addWidget(output_box)
+        content_layout.addWidget(ndi_box)
         content_layout.addWidget(remote_box)
         content_layout.addWidget(audio_box)
         content_layout.addWidget(quit_box)
@@ -344,6 +357,10 @@ class SettingsDialog(QDialog):
         self.preview_requested = True
         self.reject()
 
+    def _diagnostics(self) -> None:
+        self.diagnostics_requested = True
+        self.reject()
+
     def apply_to(self, settings: Settings) -> None:
         settings.output = self.selected_output()
         settings.usb_port = str(self.port.currentData() or "")
@@ -355,6 +372,7 @@ class SettingsDialog(QDialog):
         settings.remote_port = self.remote_port.value()
         settings.remote_lan = self.remote_lan.isChecked()
         settings.remote_key = self.remote_key.text().strip() or new_key()
+        settings.ndi_default = self.ndi_default.text().strip() or settings.ndi_default
         settings.audio_source = str(self.audio_source.currentData() or "")
         settings.audio_attack = self.audio_attack.value()
         settings.audio_release = self.audio_release.value()

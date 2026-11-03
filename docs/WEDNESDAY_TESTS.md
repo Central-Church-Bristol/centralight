@@ -240,6 +240,15 @@ Worship blue.
       lights come back as they were. Untick **Start CentraLight when I sign in to Windows** in Settings to stop that.
 - [ ] Quitting is now in the tray icon's menu (right-click → **Quit CentraLight…**); it asks first.
 
+## 15b. The launcher and Diagnostics
+
+- [ ] Quit CentraLight (tray → Quit), then double-click **CentraLight.exe** in the CentraLight folder: it starts
+      without a black console window, with the logo on the taskbar. If you like it, right-click it → Send to →
+      Desktop (create shortcut).
+- [ ] Ctrl+Shift+D (or the tray icon's menu → Diagnostics): the engine runs at about 40 ticks a second, the output
+      shows the Eurolite sending, and CentraLight's CPU is a few % of one core at most. Click **Copy** and paste it
+      somewhere: it's all there as text.
+
 ## 16. Unplug and replug the Eurolite (while it's running)
 
 - [ ] Pull the USB cable: the output chip goes red within a couple of seconds.
@@ -283,8 +292,17 @@ checked-out one:
 git log --oneline claude/centralight-gui
 ```
 
+These two make the branch the checked-out one without changing a single file (your own changes, like the logo
+files in `Assets\`, stay as uncommitted changes). A plain `git switch claude/centralight-gui` would refuse,
+because the app's files are already in the folder:
+
 ```powershell
-git switch claude/centralight-gui
+git symbolic-ref HEAD refs/heads/claude/centralight-gui
 ```
 
-Pushing it to GitHub, or merging it into `main`, is up to you (or ask Claude).
+```powershell
+git reset -q
+```
+
+Afterwards `git status` should list only your own changes. Pushing the branch to GitHub, or merging it into
+`main`, is up to you (or ask Claude).
