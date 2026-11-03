@@ -19,10 +19,10 @@ from pathlib import Path
 
 from PySide6.QtCore import QFileSystemWatcher, QObject, QTimer, Signal
 
-from ..log import log_info
+from ..files import loads_json_bytes, written_by_us
+from ..log import log_exception, log_info
 from ..model import Show
-from ..show_io import AUTOMATIONS_DIR, INPUTS_DIR, InputFileError, automation_from_dict, read_input_file
-from ..files import read_json
+from ..show_io import AUTOMATIONS_DIR, INPUTS_DIR, MAX_INPUT_BYTES, InputFileError, automation_from_dict, parse_input_bytes
 from .document import ShowDocument
 
 POLL_MS = 1000
@@ -103,16 +103,30 @@ class FolderWatcher(QObject):
         changed = [p for p, stamp in now.items() if self._stamps.get(p) != stamp]
         deleted = [p for p in self._stamps if p not in now]
         self._stamps = now
-        for path in sorted(changed):
-            if path.parent.name == INPUTS_DIR:
-                self._input_file(path)
-            else:
-                self._automation_file(path)
+        for path in sorted(changed):  # each file on its own: one odd file mustn't stop the others being picked up
+            try:
+                if path.parent.name == INPUTS_DIR:
+                    self._input_file(path)
+                else:
+                    self._automation_file(path)
+            except Exception as exc:
+                log_exception(f"reading {path.parent.name}\\{path.name}", exc)
         for path in deleted:
-            if path.parent.name == INPUTS_DIR:
-                self._input_gone(path.stem)
-            else:
-                self._automation_gone(path.stem)
+            try:
+                if path.parent.name == INPUTS_DIR:
+                    self._input_gone(path.stem)
+                else:
+                    self._automation_gone(path.stem)
+            except Exception as exc:
+                log_exception(f"{path.parent.name}\\{path.name} deleted", exc)
+
+    def _read(self, path: Path) -> bytes | None:
+        """The file's bytes, or None if it can't be read just now (it's checked again next time)."""
+        try:
+            return path.read_bytes()
+        except OSError:
+            self._stamps.pop(path, None)  # e.g. another program is still writing it: try again at the next check
+            return None
 
     def _set_problem(self, input_id: str, problem: str) -> None:
         if problem:
@@ -123,8 +137,15 @@ class FolderWatcher(QObject):
 
     def _input_file(self, path: Path) -> None:
         input_id = path.stem
+        raw = self._read(path)
+        if raw is None:
+            return
+        if written_by_us(path, raw):  # CentraLight's own save, byte for byte
+            if input_id in self.problems:
+                self._set_problem(input_id, "")
+            return
         try:
-            inp, warnings = read_input_file(path)
+            inp, warnings = parse_input_bytes(raw, path)
         except InputFileError as exc:
             had = input_id in self.document.show.inputs
             self._set_problem(input_id, f"{path.name}: {exc}" + (" (the last good version is still used)" if had else ""))
@@ -161,9 +182,14 @@ class FolderWatcher(QObject):
         document.apply(show.with_inputs(inputs, tuple(i for i in show.input_order if i != input_id)), f"Deleted outside CentraLight: {name}")
 
     def _automation_file(self, path: Path) -> None:
+        raw = self._read(path)
+        if raw is None or written_by_us(path, raw):  # (CentraLight's own save, byte for byte)
+            return
         try:
-            automation, warnings = automation_from_dict(read_json(path), expected_id=path.stem)
-        except (InputFileError, ValueError, OSError) as exc:
+            if len(raw) > MAX_INPUT_BYTES:
+                raise InputFileError("the file is too big")
+            automation, warnings = automation_from_dict(loads_json_bytes(raw), expected_id=path.stem)
+        except (InputFileError, ValueError) as exc:
             log_info(f"automations\\{path.name} couldn't be used: {exc}", key=f"bad-automation-{path.stem}")
             return
         document = self.document

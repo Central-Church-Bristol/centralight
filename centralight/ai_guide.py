@@ -409,7 +409,9 @@ def guide_text(show: Show, full: bool = True) -> str:
                             {"do": "house", "light": show.house[-1].fixture if show.house else "dimmer-4", "level": 0.7, "fade": 2}],
             }) + "```\n\n"
             "Days are `mon` ... `sun`; times `\"HH:MM\"` (overnight ranges like 22:00-02:00 are fine); dates `\"MM-DD\"` "
-            "with an optional `year`."
+            "with an optional `year`. Sunrise / sunset (Bristol's times): `{\"type\": \"sun\", \"when\": \"after\", "
+            "\"event\": \"sunset\", \"minutes\": -30}` is true from half an hour before sunset until midnight "
+            "(`when` after / before, `event` sunset / sunrise, `minutes` -180 to 180)."
         )
     return "\n\n".join(parts) + "\n"
 

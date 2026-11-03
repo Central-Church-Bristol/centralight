@@ -72,8 +72,9 @@ class NumberField(QWidget):
         return self._value
 
     def set_value(self, value: float) -> None:
-        """Show a value (from the document) without emitting edited."""
-        if self.slider.is_dragging():
+        """Show a value (from the document) without emitting edited. Not while it's being dragged or typed into
+        (the playing Editor updates values every moment, which used to wipe out what was being typed)."""
+        if self.slider.is_dragging() or self.spin.hasFocus():
             return
         value = float(value)
         self._value = value

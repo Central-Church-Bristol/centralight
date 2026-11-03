@@ -96,12 +96,28 @@ FLASH_STEP = 0.15  # a flash is on/off/on/off/on/off in steps this long
 FLASH_STEPS = 6
 OVERLAY_SLOTS = 4
 WAKE_GAP = 60.0  # seconds: a jump this big in the clocks means the PC slept (or the clock was changed)
+WAKE_DEBOUNCE = 60.0  # seconds: wake signals this close together are the same wake
+STARTUP_HOLD = 3.0  # seconds: at most this long at startup, nothing is sent while the screen feed's first picture comes
 BLACK: RGB = (0.0, 0.0, 0.0)
 WHITE: RGB = (1.0, 1.0, 1.0)
 
 
+def _brings_lights_up(command: Any) -> bool:
+    """An automation action that means "lights on": an input to Base or an overlay, or a house light up."""
+    if isinstance(command, SendToBase):
+        return True
+    if isinstance(command, SendToOverlay):
+        return getattr(command, "state", None) != "off"
+    if isinstance(command, SetHouse):
+        return command.on is True or (command.on is None and (command.level or 0.0) > 0.0)
+    return False
+
+
 def clamp01(value: float) -> float:
-    return 0.0 if value <= 0.0 else 1.0 if value >= 1.0 else float(value)
+    """0-1 (and NaN -> 0: one bad number must never stop the lights)."""
+    if value >= 1.0:
+        return 1.0
+    return float(value) if value > 0.0 else 0.0
 
 
 class Ramp:
@@ -236,13 +252,16 @@ class Engine:
         wall: Callable[[], float] = time.time,
         local_time: Callable[[float], datetime] = datetime.fromtimestamp,
         uptime: Callable[[], float] = system_uptime,
+        started_by_windows: bool = False,
     ) -> None:
         """output: a DmxOutputThread (anything with submit(bytes) and status()).
         sources: a SourceManager (NDI feeds), or None for no video.
         audio: an audio.AudioCapture (anything with latest() -> {"level": ..., ...}, state and detail), or None.
         initial_base: an input to put on Base when there's no live state (the very first run).
         wall / local_time / uptime: the real clock, local time (with the clock changes) and how long
-        Windows has been running, for automations (tests pass fakes)."""
+        Windows has been running, for automations (tests pass fakes).
+        started_by_windows: Windows started CentraLight at sign-in, which counts as "The PC starts" (with Fast
+        Startup, a shut-down PC doesn't really restart, so Windows' running time doesn't go back to 0)."""
         self.show = show
         self.output = output
         self.sources = sources if sources is not None else _NoSources()
@@ -256,6 +275,9 @@ class Engine:
         self._master = Ramp(clamp01(live.master))
         self._blackout = bool(live.blackout)
         self._blackout_ramp = Ramp(1.0 if live.blackout else 0.0)
+        # a Blackout from before the restart (e.g. quit with "Turn lights off") gives way to an automation that
+        # brings the lights up, so an unattended Sunday morning isn't left dark
+        self._blackout_restored = bool(live.blackout)
         self._house: dict[str, _House] = {}
         self._house_driven: dict[str, str] = {}  # house light id -> the input that set it
         self._sync_house(live.house)
@@ -271,6 +293,8 @@ class Engine:
         self._runner.restore(live.automations, wall())
         self._first_check = True
         self._woke = False
+        self._last_wake: float | None = None
+        self._started_by_windows = started_by_windows
         self._prev_mono: float | None = None
         self._prev_wall: float | None = None
         self._auto_key: tuple | None = None
@@ -285,6 +309,10 @@ class Engine:
         self._solo_fixed = False  # the solo input came with its command (not from the show)
         self._restore_buses(live, initial_base, now)
         self._last_canvas = transparent(CANVAS_H, CANVAS_W)
+        # At startup the lights keep showing what they showed (the dongle repeats it) until the feeds Base and the
+        # overlays use have their first picture, instead of going black for a second or two meanwhile
+        self._holding = True
+        self._hold_until = now + STARTUP_HOLD
         self._identify = False
         self._identify_seed = show.identify_seed
         self._identify_map: dict[str, RGB] = {}
@@ -395,6 +423,7 @@ class Engine:
         applied = self._finish_timed(now) or applied
         self._update_driven_house(now)
 
+        self._ctx.waiting = False
         canvas = self._render(now)
         sampled = self._sampler.sample(canvas)
         master = self._master.value(now)
@@ -406,7 +435,10 @@ class Engine:
         out_colours = {fid: (r * keep, g * keep, b * keep) for fid, (r, g, b) in colours.items()}
         house_out = {fid: h.out(now) * keep for fid, h in self._house.items()}
 
-        self.output.submit(encode_dmx(self.show.fixtures, out_colours, house_out))
+        if self._holding and not (self._ctx.waiting and now < self._hold_until):
+            self._holding = False  # every feed has a picture (or it's been long enough): from now on, always send
+        if not self._holding:
+            self.output.submit(encode_dmx(self.show.fixtures, out_colours, house_out))
 
         if now - self._last_tidy >= TIDY_INTERVAL:
             self._last_tidy = now
@@ -502,6 +534,7 @@ class Engine:
                 house.switch.set(1.0 if on else 0.0, fade, now)
         elif isinstance(command, SetBlackout):
             target = (not self._blackout) if command.on is None else bool(command.on)
+            self._blackout_restored = False  # someone (or an automation) has taken charge of it
             if target != self._blackout or command.instant:
                 self._blackout = target
                 self._blackout_ramp.set(1.0 if target else 0.0, 0.0 if command.instant else BLACKOUT_FADE, now)
@@ -596,7 +629,7 @@ class Engine:
         events = set()
         if self._first_check:
             events.add("app_started")
-            if self._uptime() < STARTUP_WINDOW:
+            if self._started_by_windows or self._uptime() < STARTUP_WINDOW:
                 events.add("pc_startup")
         if self._woke:
             events.add("pc_woke")
@@ -618,6 +651,12 @@ class Engine:
         return ran
 
     def _do_action(self, who: str, action: dict, now: float) -> None:
+        try:
+            self._do_action_now(who, action, now)
+        except Exception as exc:  # a wrong value in an automation's file must never stop the engine
+            log_exception(f"automation {who}: doing {action.get('do')!r}", exc)
+
+    def _do_action_now(self, who: str, action: dict, now: float) -> None:
         if action.get("do") in GUI_ACTIONS:
             name = self.show.automations[who].name if who in self.show.automations else who
             self.gui_requests.put((name, action))
@@ -626,10 +665,17 @@ class Engine:
         if command is None:
             log_info(f"Automation {who}: couldn't {describe_action(action, self.show)} (is it still there?)", key=f"automation-skip-{who}")
             return
+        if self._blackout and self._blackout_restored and _brings_lights_up(command):
+            log_info(f"Automation {who}: lifting the Blackout left from before CentraLight restarted")
+            self._apply(SetBlackout(on=False), now)
         self._apply(command, now)
 
     def _on_wake(self) -> None:
         """After sleep: reconnect the dongle and NDI, and check every automation ("The PC wakes")."""
+        wall = self._wall()
+        if self._last_wake is not None and 0.0 <= wall - self._last_wake < WAKE_DEBOUNCE:
+            return  # the same wake noticed again (Windows sends two messages, and the clocks jump too)
+        self._last_wake = wall
         self._woke = True
         log_info("The PC woke up: reconnecting, and checking the automations")
         for owner in (self.output, self.sources):
@@ -718,6 +764,8 @@ class Engine:
         if self._solo is not None and self._solo.input.id in show.inputs and not self._solo_fixed:
             self._solo.input = show.inputs[self._solo.input.id]
         self.sources.set_keep(self._ndi_names(show))
+        if show.identify_seed != old.identify_seed:
+            self._identify_seed = show.identify_seed  # (Shuffle, and its undo / redo: the lights match the legend)
         self._refresh_identify()
 
     def _refresh_identify(self) -> None:
@@ -753,6 +801,15 @@ class Engine:
         names: set[str] = set()
         for inp in show.inputs.values():
             names |= ndi_sources_used(inp.tracks)
+        # feeds that automations look at ("An NDI feed is there") and no input uses are kept connected too
+        lowered = {n.strip().lower() for n in names}
+        for automation in show.automations.values():
+            for cond in automation.conditions if automation.enabled else ():
+                wanted = str(cond.get("source") or "").strip() if cond.get("type") == "ndi" else ""
+                key = wanted.lower()
+                if key and not any(key in n or n in key for n in lowered):
+                    names.add(wanted)
+                    lowered.add(key)
         return names
 
     def _sync_house(self, settings: Mapping[str, HouseSetting]) -> None:
@@ -766,6 +823,11 @@ class Engine:
                 del self._house[fid]
 
     # ------------------------------------------------------------ publishing
+
+    def is_running(self) -> bool:
+        """The engine thread has been started and not stopped (the window watches it for getting stuck)."""
+        thread = getattr(self, "_thread", None)
+        return bool(getattr(self, "_running", False)) and thread is not None and thread.is_alive()
 
     def _audio_rate(self) -> float:
         rate = getattr(self.audio, "rate", None)
@@ -810,7 +872,13 @@ class Engine:
         except Exception as exc:
             log_exception("NDI status", exc)
             ndi = {}
-        self._ndi_sending = {str(name).lower(): getattr(status, "state", "") == "connected" for name, status in ndi.items()}
+        sending: dict[str, bool] = {}
+        for name, status in ndi.items():  # by the name asked for, and by the full name found on the network
+            on = getattr(status, "state", "") == "connected"
+            for key in (str(name).lower(), str(getattr(status, "found_name", "") or "").lower()):
+                if key:
+                    sending[key] = sending.get(key, False) or on
+        self._ndi_sending = sending
         frame = EngineFrame(
             seq=self._seq,
             colours=frozen_map(colours),

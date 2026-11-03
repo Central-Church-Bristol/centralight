@@ -94,6 +94,7 @@ class RenderContext:
     audio: Mapping[str, float] = MappingProxyType({})  # audio.level and friends (M8)
     static: _LRU = field(default_factory=lambda: _LRU(512, STATIC_CACHE_BYTES))  # drawn static elements
     video_threaded: bool = True  # videos decode ahead in their own thread (the engine); False: exact frames (Editor, tests)
+    waiting: bool = False  # an NDI feed or video in this picture hasn't got its first picture yet
 
 
 # ---------------------------------------------------------------- helpers
@@ -354,6 +355,7 @@ def render_video(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray |
     speed = max(0.0, float(param(element, "speed", ctx.time, 1.0)))
     frame = clip.frame_at(max(0.0, ctx.time) * speed)
     if frame is None:
+        ctx.waiting = not clip.error
         return None
     fit = _fit_of(element)
     key = ("video", str(path), fit, ctx.width, ctx.height)
@@ -373,6 +375,7 @@ def render_ndi(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | N
     name = ndi_source_name(element)
     frame = ctx.sources.frame(name) if ctx.sources is not None else None
     if frame is None:
+        ctx.waiting = True
         return None
     fit = _fit_of(element)
     key = ("ndi", name.lower(), fit, frame.seq, ctx.width, ctx.height)

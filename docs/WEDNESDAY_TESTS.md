@@ -171,6 +171,8 @@ Worship blue.
 - [ ] Wait: at the start time Worship blue goes to Base and the key lights go to 40 %. The **History** (bottom right)
       says it ran; **Coming up** lists it for next week.
 - [ ] Click the green **Automations on** chip at the top: it turns amber, **Automations paused**. Click it again to resume.
+- [ ] (Optional) **+ Add a condition → Sunrise / sunset**: the row shows today's sunrise and sunset in Bristol. Check
+      they look right (e.g. against the weather app), then delete the condition.
 
 ## 14b. Inputs made by AI
 

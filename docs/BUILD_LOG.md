@@ -22,6 +22,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M7 Painting and masks | **done** (3 Nov, 02:50) |
 | M8 Audio variables | **done** (3 Nov, 03:13) |
 | M9 Polish (launcher .exe, Diagnostics) | **done** (3 Nov, 03:54) |
+| A review of the whole app (five reviewers, 46 problems) | part 1 fixed (3 Nov, 05:21; 504 tests pass); the rest next |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -45,6 +46,83 @@ Run all the tests (about five minutes, including the layout check at every scali
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## A review of the whole app (3 Nov, after M9)
+
+Five reviewers (separate Claude agents, read-only, one per area: the lights path, automations and the remote, the
+show's files, the Editor, the main window) went through all 23,500 lines looking for things that would go wrong
+for you, and reproduced each one with a small script. They found 46 problems. Each fix has a test in
+`tests\test_review_fixes.py` that fails without it. Fixed so far:
+
+**Things that could stop or freeze CentraLight**
+- One wrongly typed value in a show or automation file (e.g. an AI writing a list where a word should be) stopped
+  CentraLight starting at all. Now that one item is left out with a warning; if the show can't be opened at all,
+  CentraLight starts with the standard church lights, read-only, and says why.
+- A NaN ("not a number") in an input file froze all DMX, Blackout included. Now it reads as missing, and the lights'
+  maths treats it as 0.
+- An automation with a wrong value could break the engine's checks. Now that condition just isn't true (logged).
+- The session log could fail on an odd character in a message (what Media Background Pane hit on 1 Nov) and take the
+  thread that was logging down with it. Logging can't fail now.
+
+**Automations**
+- Restarting CentraLight in the middle of a service ran the morning automation again, over whatever someone had
+  chosen since. Now an automation only runs again when a new occurrence begins (next Sunday), whether CentraLight was
+  closed, asleep or restarted. Deleting one by mistake and pressing Ctrl+Z doesn't run it again either.
+- An overnight time range with a day or date ("24 Dec, 23:00–01:00") ran on the wrong night and stopped at midnight,
+  mid-service. Now the part after midnight counts as the day it started.
+- Delayed actions ("after 5 s: …") still happened after the automation had stopped, been turned off or deleted.
+  Now they're dropped.
+- "Sound is loud enough" with a "when it stops" action tripped the loop guard during ordinary music. Its stops don't
+  count now, and a sound condition only stops after 2 s of quiet (a gap between songs doesn't stop it).
+- After a sleep, a range that ended meanwhile ran at wake (e.g. 13:00 for 09:00–12:30), and a new day's range could be
+  missed. Fixed. A wake that Windows reports twice counts once.
+- "The PC starts" didn't fire after a normal power-on (Fast Startup is on here, so Windows' running time doesn't go
+  back to 0) and would have fired on every start after 25 days. Now it also counts when Windows starts CentraLight
+  at sign-in, and Windows' running time is read correctly.
+- "An NDI feed is there" never became true for the names its own drop-down offers. Names now match the way inputs
+  match them, and feeds that only automations look at are kept connected.
+- After a "Turn lights off" quit, CentraLight starts blacked out, so an unattended Sunday automation "ran" while the
+  room stayed dark. Now a Blackout left from before the restart gives way when an automation sends an input. (A
+  Blackout someone chooses is never lifted by an automation.)
+- New: the **Sunrise / sunset** condition (see M9).
+
+**The lights**
+- A light added on the Layout page (or moved past channel 76) got no DMX until a restart: the packet length was
+  fixed at startup. Now it follows the show at once.
+- Restarting with Follow screen on Base sent the lights black for 1–2 s while the NDI feed connected (Wednesday's
+  step 18 would have failed). Now nothing is sent until the feed's first picture arrives (at most 3 s); the dongle
+  keeps showing the old look meanwhile.
+- After the PC wakes, the dongle is now really reopened (the "reconnect" did nothing).
+- A video whose file is shorter than it claims made its reader spin a whole CPU core near the end. Fixed.
+- Shuffle colours and then Ctrl+Z left the lights and the Identify legend different. Fixed.
+
+**The window**
+- Closing the window to the tray (or minimising it) left Identify, test colours or the Editor's Show on lights on,
+  so nothing sent to Base showed on the lights until someone opened the window again. Now they switch off when the
+  window goes out of sight.
+- Rolling the mouse wheel over a fader changed live levels (and switched the festoon on), and scrolling the
+  Dashboard changed overlay opacities on the way past. Now the wheel only changes a control you've clicked into;
+  otherwise it scrolls the page.
+- Number boxes couldn't be typed into while the Editor was playing (it plays by default). Fixed.
+- The Editor kept drawing about 8 times a second after you left it, all week in the tray. Now it stops.
+- A double-click on Blackout (or a tile's overlay button) toggled twice. Now it counts as one click.
+- The padlock didn't lock the Layers panel's switches and faders. Now it does.
+- After visiting the Editor's Globals tab, Ctrl+Z could undo an unrelated show step (even remove an input). Now
+  undo follows what's selected.
+- The Automation tab's rows kept showing old values after Undo, and the next edit put the undone value back. Fixed.
+- A stuck engine (lights frozen) looked healthy. Now a red **Not responding** chip appears, and Diagnostics says
+  how long it's been.
+- Ctrl+V on the Dashboard only worked after a tile had been clicked. Fixed.
+- Small leaks: closed Settings dialogs (each with a timer still running), right-click menus, live.json rewritten
+  every 1.5 s while an overlay was on, and the Layout page redrawing its territories on every step of a drag. Fixed.
+- Ticking an automation's days in two steps (untick Sun, then tick Sat) could switch the automation off for good:
+  CentraLight read its own in-between save back as an outside change. Now its own saves are recognised by their
+  exact bytes. Also, a date's day can't go past the month's end, and "no days ticked" says so.
+
+Still to do from the review: the Editor's timeline and keyframe problems, retrying a failed save (and saying so),
+the "Load the changed file?" question racing the autosave, broken files that vanish silently after a restart,
+Ctrl+Z on the Dashboard after an AI change, AGENTS.md being overwritten, notes that follow a light by its id, and
+escaping in the remote's help page.
 
 ## M9 Polish — done
 
@@ -73,8 +151,12 @@ Run all the tests (about five minutes, including the layout check at every scali
 - **Switching to the branch**: the docs used to say `git switch claude/centralight-gui`, but on a copy of the
   repository that refuses (the app's files are already in the folder, untracked as far as `main` knows). Step 21
   of `WEDNESDAY_TESTS.md` now has two commands that switch without changing a single file.
-- Not built: the plan's **Sunrise / sunset** automation condition, which it marked "optional, later". A time range
-  does the same job for now.
+- **Sunrise / sunset** (the plan's one optional condition, added after M9): Automation → + Add a condition →
+  **Sunrise / sunset**: **After / Before** **sunset / sunrise**, moved by up to 3 hours either way (e.g. "after
+  sunset − 30 min" for the festoon at dusk). It uses Bristol's times, worked out on the PC (no internet), within a
+  couple of minutes of the published ones; the row shows today's. "After sunset" lasts until midnight and "Before
+  sunrise" starts at midnight, so "all night" is the two together with **Any**. Coming up lists them at the right
+  minute each day.
 
 ## M8 Audio variables — done
 
@@ -569,4 +651,5 @@ Problems the tests found and that are fixed:
 
 ## Next
 
-Everything in the plan is built. What's left is Wednesday's checklist on the real lights (`docs/WEDNESDAY_TESTS.md`).
+Everything in the plan is built. Now: the rest of the review's fixes (see "A review of the whole app"), then
+Wednesday's checklist on the real lights (`docs/WEDNESDAY_TESTS.md`).

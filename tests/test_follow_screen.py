@@ -86,11 +86,13 @@ class FollowScreenTests(BaseTestCase):
         engine.tick()
         self.assertEqual(self.rgb(41), (0, 255, 0))
 
-    def test_no_picture_yet_is_black_and_master_scales(self) -> None:
+    def test_no_picture_yet_holds_then_is_black_and_master_scales(self) -> None:
         self.sources.drop("Media Background Pane")
         engine = self.make()
         engine.tick()
-        self.assertEqual(self.rgb(41), (0, 0, 0))
+        self.assertEqual(self.output.frames, [])  # at startup nothing is sent while the feed's first picture comes...
+        self.run_for(engine, 3.1)
+        self.assertEqual(self.rgb(41), (0, 0, 0))  # ...for at most 3 s: then no picture is black
         self.sources.put("Media Background Pane", split_picture())
         engine.submit(SetMaster(0.5))
         self.run_for(engine, 0.2)

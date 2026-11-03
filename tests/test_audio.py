@@ -162,9 +162,16 @@ class AudioConditionTests(unittest.TestCase):
         self.assertFalse(check(100.0, 0.7))
         self.assertFalse(check(102.0, 0.7))  # loud, but not for long enough yet
         self.assertTrue(check(103.5, 0.7))
-        self.assertFalse(check(104.0, 0.3))  # quiet again: it starts counting afresh
-        self.assertFalse(check(105.0, 0.9))
-        self.assertTrue(check(108.0, 0.9))
+        self.assertTrue(check(104.0, 0.3))  # a moment's quiet (a gap between songs) doesn't stop it...
+        self.assertTrue(check(105.0, 0.9))  # ...and the sound coming back carries on
+        self.assertTrue(check(106.0, 0.2))
+        self.assertFalse(check(108.5, 0.2))  # 2 s of quiet: stopped
+        self.assertFalse(check(109.0, 0.9))  # loud again: it counts afresh
+        self.assertTrue(check(112.0, 0.9))
+        self.assertTrue(check(113.0, 0.1))  # quiet: held for a moment
+        self.assertFalse(check(116.0, 0.1))
+        self.assertFalse(check(200.0, 0.9))
+        self.assertFalse(check(201.0, 0.1))  # loud for less than N seconds, then quiet: it never counted
 
 
 if __name__ == "__main__":

@@ -30,7 +30,10 @@ def log_exception(context: str, exc: BaseException | None = None, *, path: Path 
     key = f"{context}:{type(exc).__name__}"
     if not _should_write(key):
         return
-    text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    try:
+        text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    except Exception:  # e.g. an exception whose own text can't be made
+        text = f"{type(exc).__name__} (its details couldn't be written)\n"
     _write(path, f"{context}\n{text}")
 
 
@@ -80,6 +83,7 @@ def _should_write(key: str) -> bool:
 
 
 def _write(path: Path | None, text: str) -> None:
+    """Never raises: it runs inside error handlers (the engine's, every thread's), where a second error would do harm."""
     try:
         target = path if path is not None else session_log_path()
         with _lock:
@@ -90,7 +94,7 @@ def _write(path: Path | None, text: str) -> None:
                     previous.unlink()
                 target.replace(previous)
             stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            with target.open("a", encoding="utf-8") as handle:
+            with target.open("a", encoding="utf-8", errors="backslashreplace") as handle:
                 handle.write(f"{stamp} {text}")
-    except OSError:
+    except Exception:  # a full disk, a locked file, a stray character: logging must never break the caller
         return

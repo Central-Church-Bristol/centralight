@@ -40,11 +40,12 @@ def open_show(settings: Settings) -> tuple[Show, str]:
     folder = Path(settings.show_folder) if settings.show_folder else default_show_dir()
     try:
         show = open_or_create_show(folder)
-    except (ShowError, OSError) as exc:
+    except Exception as exc:  # whatever is wrong with the files, CentraLight still starts (and says why)
         log_exception("opening the show", exc)
+        reason = str(exc) if isinstance(exc, (ShowError, OSError)) else f"something in it couldn't be read ({type(exc).__name__}: {exc})"
         show = replace(show_from_patch(), folder=str(folder), read_only=True)
         return show, (
-            f"CentraLight couldn't open the show in\n{folder}\n\n{exc}\n\n"
+            f"CentraLight couldn't open the show in\n{folder}\n\n{reason}\n\n"
             "It's running with the standard church lights and won't save any changes until this is "
             "fixed. Earlier copies are in the show's backups folder."
         )
@@ -102,7 +103,8 @@ def main(argv: list[str] | None = None) -> int:
 
     audio = AudioCapture(settings.audio_source, settings.audio_attack, settings.audio_release)
     audio.start()  # off unless Settings → Audio says what to listen to
-    engine = Engine(show, output, live, sources=sources, audio=audio, initial_base=FOLLOW_SCREEN_ID)
+    engine = Engine(show, output, live, sources=sources, audio=audio, initial_base=FOLLOW_SCREEN_ID,
+                    started_by_windows="--minimized" in argv)
     engine.start()
     log_info(f"CentraLight started: show {show.folder}, output {settings.output}")
 

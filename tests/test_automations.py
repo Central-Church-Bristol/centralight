@@ -10,13 +10,23 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from centralight.automations import AutomationRunner, Situation, check_action, check_condition, summary, upcoming
+from centralight.automations import (
+    AutomationRunner,
+    Situation,
+    check_action,
+    check_condition,
+    describe_condition,
+    summary,
+    sun_threshold,
+    upcoming,
+)
 from centralight.commands import PowerEvent, RunAutomation, SetAutomationsPaused, SetBlackout, SetHouse, SwitchLayout
 from centralight.engine import Engine
 from centralight.live_state import LiveState
 from centralight.model import Automation, GlobalVar, Input
 from centralight.new_show import create_show, show_from_patch
 from centralight.show_io import automation_from_dict, automation_to_dict, freeze, load_show, save_whole_show
+from centralight.sun import sun_times
 from tests.fakes import FakeOutput
 
 
@@ -141,12 +151,18 @@ class WhenTheyRunTests(AutomationEngineTestCase):
                        local_time=uk_local, uptime=lambda: 9999.0)
         again.tick()
         self.assertEqual([h.what for h in again._runner.history].count("ran"), 1)  # still just the first run
-        # but if the PC was off for longer, it catches up again
+        # nor does a longer gap in the same morning (it would undo whatever someone chose since)
         self.clocks.advance(3600)
         later = Engine(self.show, FakeOutput(), saved, clock=lambda: self.clocks.mono, wall=lambda: self.clocks.wall,
                        local_time=uk_local, uptime=lambda: 9999.0)
         later.tick()
-        self.assertEqual([h.what for h in later._runner.history].count("ran"), 2)
+        self.assertEqual([h.what for h in later._runner.history].count("ran"), 1)
+        # but if the PC was off until the next Sunday morning, that's a new occurrence: it catches up
+        self.clocks.advance(7 * 86400 - 3600)
+        week = Engine(self.show, FakeOutput(), saved, clock=lambda: self.clocks.mono, wall=lambda: self.clocks.wall,
+                      local_time=uk_local, uptime=lambda: 9999.0)
+        week.tick()
+        self.assertEqual([h.what for h in week._runner.history].count("ran"), 2)
 
     def test_pc_startup_and_sunday_runs_once(self) -> None:
         both = automation("startup", [{"type": "pc_startup"}, {"type": "days", "days": ["sun"]}], [{"do": "base", "input": "evening"}])
@@ -243,11 +259,17 @@ class SleepWakeAndControlTests(AutomationEngineTestCase):
         self.assertEqual(len(self.runs("woke")), 1)
         self.clocks.advance(5.0)
         engine.tick()
+        engine.submit(PowerEvent("woke"))  # Windows' second message for the same wake, a few seconds on: still one
+        self.clocks.advance(0.025)
+        engine.tick()
+        self.assertEqual(len(self.runs("woke")), 1)
+        self.clocks.advance(120.0)
+        engine.tick()
         engine.submit(PowerEvent("woke"))  # a later wake, reported by Windows: runs again
         self.clocks.advance(0.025)
         engine.tick()
         self.assertEqual(len(self.runs("woke")), 2)
-        self.assertEqual(self.output.reconnects, 3)
+        self.assertEqual(self.output.reconnects, 2)
 
     def test_catch_up_after_waking(self) -> None:
         engine = self.make(datetime(2026, 11, 8, 8, 0), [automation("welcome", SUNDAY_MORNING, WELCOME)])
@@ -368,6 +390,69 @@ class DataTests(unittest.TestCase):
             (datetime(2026, 11, 8, 9, 0), "welcome", False),
             (datetime(2026, 11, 8, 17, 30), "evening", True),
         ])
+
+
+
+class SunTests(unittest.TestCase):
+    """Sunrise / sunset. Times are the PC's local times (like Windows' clock), so these compare against sun_times."""
+
+    def true_at(self, conditions: list, local: datetime, logic: str = "all") -> bool:
+        return AutomationRunner().matches(automation("sun", conditions, [], logic), Situation(now=0.0, local=local))[0]
+
+    def test_after_sunset_and_before_sunrise(self) -> None:
+        day = date(2026, 11, 8)
+        rise, sunset = sun_times(day)
+        after = [{"type": "sun", "when": "after", "event": "sunset", "minutes": 0}]
+        self.assertFalse(self.true_at(after, sunset - timedelta(minutes=1)))
+        self.assertTrue(self.true_at(after, sunset.replace(second=0)))
+        self.assertTrue(self.true_at(after, datetime(2026, 11, 8, 23, 59)))
+        self.assertFalse(self.true_at(after, datetime(2026, 11, 9, 0, 0)))  # it lasts until midnight
+        before = [{"type": "sun", "when": "before", "event": "sunrise", "minutes": 0}]
+        self.assertTrue(self.true_at(before, datetime(2026, 11, 8, 0, 0)))
+        self.assertTrue(self.true_at(before, rise - timedelta(minutes=1)))
+        self.assertFalse(self.true_at(before, rise.replace(second=0)))
+        night = after + before  # all night, across midnight
+        for moment in (sunset + timedelta(minutes=5), datetime(2026, 11, 8, 23, 59), datetime(2026, 11, 9, 0, 0),
+                       datetime(2026, 11, 9, 3, 0)):
+            self.assertTrue(self.true_at(night, moment, "any"), moment)
+        self.assertFalse(self.true_at(night, datetime(2026, 11, 8, 12, 0), "any"))
+
+    def test_minutes_before_and_after(self) -> None:
+        day = date(2026, 6, 21)
+        sunset = sun_times(day)[1].replace(second=0)
+        half_hour_before = [{"type": "sun", "when": "after", "event": "sunset", "minutes": -30}]
+        self.assertFalse(self.true_at(half_hour_before, sunset - timedelta(minutes=31)))
+        self.assertTrue(self.true_at(half_hour_before, sunset - timedelta(minutes=30)))
+        late = {"type": "sun", "when": "after", "event": "sunset", "minutes": 180}  # 00:32 tomorrow: clamped to midnight
+        self.assertEqual(sun_threshold(late, day), 24 * 60)
+        self.assertFalse(self.true_at([late], datetime(2026, 6, 21, 23, 59)))
+
+    def test_on_a_clock_change_day(self) -> None:
+        for day in (date(2026, 3, 29), date(2026, 10, 25)):  # the last Sundays of March and October
+            rise, sunset = sun_times(day)
+            self.assertLess(rise, sunset)
+            self.assertTrue(6 <= rise.hour <= 8, rise)
+            self.assertTrue(16 <= sunset.hour <= 20, sunset)
+
+    def test_checks_and_words(self) -> None:
+        good = {"type": "sun", "when": "before", "event": "sunrise", "minutes": 15}
+        self.assertEqual(check_condition(good), [])
+        self.assertEqual(check_condition({"type": "sun"}), [])  # defaults: after sunset
+        self.assertTrue(check_condition({**good, "event": "noon"}))
+        self.assertTrue(check_condition({**good, "when": "during"}))
+        self.assertTrue(check_condition({**good, "minutes": 500}))
+        self.assertTrue(check_condition({**good, "minutes": 1.5}))
+        self.assertEqual(describe_condition(good), "before sunrise + 15 min")
+        self.assertEqual(describe_condition({**good, "when": "after", "event": "sunset", "minutes": -30}), "after sunset − 30 min")
+        self.assertEqual(describe_condition({"type": "sun", "when": "after", "event": "sunset", "minutes": 0}), "after sunset")
+
+    def test_upcoming(self) -> None:
+        cond = {"type": "sun", "when": "after", "event": "sunset", "minutes": -15}
+        show = show_from_patch().with_automations({"dusk": automation("dusk", [cond], [])}, ("dusk",))
+        start = datetime(2026, 11, 4, 12, 0)
+        found = upcoming(show, start, days=3)
+        expected = [datetime(2026, 11, 4) + timedelta(days=d, minutes=sun_threshold(cond, date(2026, 11, 4 + d))) for d in range(4)]
+        self.assertEqual([when for when, _a, _others in found], [m for m in expected if start < m <= start + timedelta(days=3)])
 
 
 if __name__ == "__main__":

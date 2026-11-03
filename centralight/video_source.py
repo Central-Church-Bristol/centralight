@@ -114,14 +114,16 @@ class VideoClip:
                     continue
             try:
                 with self._lock:
-                    self._decode_towards(want, ahead=LEAD, limit=3)
+                    if self._decode_towards(want, ahead=LEAD, limit=3) == 0:
+                        self._lock.wait(0.05)  # nothing more to read just now: never spin
             except Exception as exc:
                 log_exception(f"decoding the video {self.path.name}", exc)
                 time.sleep(0.5)
 
-    def _decode_towards(self, t: float, ahead: float, limit: int = 10_000) -> None:
+    def _decode_towards(self, t: float, ahead: float, limit: int = 10_000) -> int:
         """Decode pictures until there's one at t + ahead (seeking first if t is before what's kept or far
-        ahead of it). limit: at most this many pictures per call (the reader thread lets the engine in)."""
+        ahead of it). limit: at most this many pictures per call (the reader thread lets the engine in).
+        Returns how many were decoded."""
         import cv2
 
         cap = self._cap
@@ -135,7 +137,13 @@ class VideoClip:
         decoded = 0
         while (not self._times or self._times[-1] < target - 1e-6) and decoded < limit:
             if not cap.grab():
-                break  # the end of the file
+                # the end of the file. If that's well before the length the file claims (some MKV / WebM / TS
+                # files, or a cut-short copy), the clip really ends here: loop from here instead of waiting
+                if self._times and self._times[-1] < self.duration - 2.0 / self.fps:
+                    real = self._times[-1] + 1.0 / self.fps
+                    log_info(f"Video {self.path.name}: it ends at {real:.1f} s, not {self.duration:.1f} s as it says")
+                    self.duration = real
+                break
             moment = max(0.0, cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0)
             decoded += 1
             if self._times and moment < self._next_keep:
@@ -147,6 +155,7 @@ class VideoClip:
         while len(self._times) > 2 and self._times[1] <= t - 1.0 / self.fps:  # drop what's been shown
             self._times.pop(0)
             self._frames.pop(0)
+        return decoded
 
     def _keep(self, moment: float, image: np.ndarray) -> None:
         import cv2

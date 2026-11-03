@@ -131,6 +131,46 @@ class TrayTests(unittest.TestCase):
         process(self.app)
         self.assertTrue(self.window.isVisible())
 
+    def test_hiding_or_minimising_switches_off_identify_tests_and_show_on_lights(self) -> None:
+        from PySide6.QtCore import Qt
+
+        from centralight.commands import SendToBase, SetTestColour
+
+        window, engine = self.window, self.engine
+        window.show_page("layout")
+        window.layout_page.set_identify(True)
+        engine.submit(SetTestColour((255, 0, 0), ("slimpar-101",)))
+        engine.settle(0.2)
+        frame = engine.frames.get()
+        self.assertTrue(frame.identify)
+        window.close()  # into the tray
+        process(self.app)
+        engine.settle(0.2)
+        frame = engine.frames.get()
+        self.assertFalse(frame.identify)
+        self.assertFalse(frame.testing)
+        engine.submit(SendToBase("worship-blue", cut=True))
+        engine.settle(0.2)
+        self.assertEqual(engine.frames.get().base_id, "worship-blue")  # and the lights show what's sent
+        self.tray.show_requested.emit()
+        process(self.app)
+        self.assertEqual(window._page, "layout")  # back where it was, with Identify off
+        self.assertFalse(window.layout_page.identify_switch.isChecked())
+        # the Editor's Show on lights, then minimising
+        window.open_editor("warm-white")
+        process(self.app)
+        window.editor_page.solo_button.setChecked(True)
+        engine.settle(0.2)
+        self.assertEqual(engine.frames.get().solo, "warm-white")
+        window.setWindowState(Qt.WindowState.WindowMinimized)
+        process(self.app)
+        engine.settle(0.2)
+        self.assertEqual(engine.frames.get().solo, "")
+        self.assertFalse(window.editor_page.solo_button.isChecked())
+        window.setWindowState(Qt.WindowState.WindowNoState)
+        process(self.app)
+        self.assertTrue(window.editor_page._entered)  # its views draw again
+
     def test_quit_asks_first(self) -> None:
         with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
             self.assertFalse(self.window.quit_from_tray())

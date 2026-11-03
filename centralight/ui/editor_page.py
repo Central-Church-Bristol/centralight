@@ -71,6 +71,7 @@ class EditorPage(QWidget):
         self._renderer_running = False
         self._picture_version = -1
         self._live = False
+        self._solo_live = False  # the engine is showing this input alone (from the last frame)
         self._entered = False  # the Editor is the page on screen
         self._variables = None  # global variables' values, from the engine
         show = document.show
@@ -136,7 +137,7 @@ class EditorPage(QWidget):
             context=lambda: (self.variables(), self.playhead),
             url_base=lambda: f"http://127.0.0.1:{settings.remote_port}",
         )
-        self.details.tab_changed.connect(lambda _index: self._entered and self.document.set_scope(self.undo_scope()))
+        self.details.tab_changed.connect(lambda _index: self._sync_scope())
         self.body = ResettableSplitter(Qt.Orientation.Horizontal, self._default_body_split)
         self.body.addWidget(self.palette)
         self.body.addWidget(self.centre)
@@ -251,6 +252,7 @@ class EditorPage(QWidget):
         self.timeline.set_input(input_id)
         self._push_time()
         self.details.set_target(input_id, None, None)
+        self._sync_scope()
         self.selected_canvas.set_element(None, None)
         self.selected_panel.set_paint_tools(False)
         self._sync_buttons()
@@ -261,6 +263,7 @@ class EditorPage(QWidget):
         self.shape_id = ""
         self.timeline.set_selected(self.element_id)
         self.details.set_target(self.input_id, self.element_id or None, None)
+        self._sync_scope()
         self._sync_selected_view()
         self._request()
 
@@ -354,6 +357,12 @@ class EditorPage(QWidget):
     def variables(self):
         """Global variables' current values (from the engine), for drawing and live values."""
         return self._variables if self._variables is not None else {}
+
+    def _sync_scope(self) -> None:
+        """Undo follows what the details show: the input being edited, or the show's history on the Globals tab
+        (checked whenever the selection changes: selecting an element leaves the Globals tab)."""
+        if self._entered:
+            self.document.set_scope(self.undo_scope())
 
     def undo_scope(self) -> str:
         """The undo history the Editor uses: the input it's editing (or the show's, on the Globals tab)."""
@@ -457,6 +466,7 @@ class EditorPage(QWidget):
         if live != self._live:
             self._live = live
             self.live_banner.setVisible(live)
+        self._solo_live = frame.solo == self.input_id and bool(self.input_id)
         if self.solo_button.isChecked() != (frame.solo == self.input_id and bool(self.input_id)):
             blocked = self.solo_button.blockSignals(True)
             self.solo_button.setChecked(frame.solo == self.input_id and bool(self.input_id))
@@ -506,7 +516,12 @@ class EditorPage(QWidget):
         self._entered = False
         if self.solo_button.isChecked():
             self.solo_button.setChecked(False)
+        elif self._solo_live:  # (a stale frame can have unticked the button while the lights still show it)
+            self.engine.submit(SetSolo(None))
+        self._solo_live = False
         self._poll.stop()
+        if self._renderer_running:
+            self._renderer.idle()  # it re-draws moving inputs a few times a second: not while nobody looks
 
     def shutdown(self) -> None:
         self.on_leave()

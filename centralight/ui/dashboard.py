@@ -101,6 +101,7 @@ class LayerRow(QFrame):
         top.addWidget(self.content, 1)
         self.switch: ToggleSwitch | None = None
         self.opacity: Fader | None = None
+        self.locked = False  # the padlock is on
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 5, 0, 5)
         layout.setSpacing(4)
@@ -133,7 +134,7 @@ class LayerRow(QFrame):
         if self.switch is not None:
             if self.switch.isChecked() != on:
                 self.switch.setChecked(on)
-            self.switch.setEnabled(has_input)
+            self.switch.setEnabled(has_input and not self.locked)
         if self.opacity is not None:
             self.opacity.set_level(opacity)
             if not self.opacity.is_dragging():
@@ -308,6 +309,12 @@ class DashboardPage(QWidget):
         self._locked = locked
         self.grid.set_locked(locked)
         self.variables.setEnabled(not locked)
+        for row in self.layer_rows.values():  # the overlays' switches and opacity faders too
+            row.locked = locked
+            if row.switch is not None:
+                row.switch.setEnabled(not locked and row.switch.isEnabled())
+            if row.opacity is not None:
+                row.opacity.setEnabled(not locked)
 
     def _build_output_rows(self) -> None:
         for fx in self.show_data.fixtures:
@@ -337,6 +344,7 @@ class DashboardPage(QWidget):
             menu.addSeparator()
             menu.addAction("Stop (fade Base to black)", lambda: self.clear_base_requested.emit(False))
         menu.exec(where)
+        menu.deleteLater()  # (each right-click used to leave its menus behind)
 
     def set_frame(self, frame: EngineFrame) -> None:
         self.variables.set_values(frame.variables)

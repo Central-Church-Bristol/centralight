@@ -92,6 +92,26 @@ class LogTests(unittest.TestCase):
         thread.join()
         self.assertIn("thread crash marker", target.read_text(encoding="utf-8")[len(before):])
 
+    def test_logging_never_raises(self) -> None:
+        from centralight.log import log_exception, log_info
+
+        target = Path(self._tmp.name) / "odd.log"
+        log_info("a file called bad\udcffname.json", path=target)  # a stray surrogate (from a mangled file name)
+        try:
+            raise ValueError("bad \udcff text")
+        except ValueError as exc:
+            log_exception("odd text test", exc, path=target)
+
+        class Unprintable(Exception):
+            def __str__(self) -> str:
+                raise RuntimeError("no words")
+
+        log_exception("unprintable test", Unprintable(), path=target)
+        text = target.read_text(encoding="utf-8")
+        self.assertIn("bad\\udcffname.json", text)
+        self.assertIn("odd text test", text)
+        self.assertIn("unprintable test", text)
+
 
 if __name__ == "__main__":
     unittest.main()

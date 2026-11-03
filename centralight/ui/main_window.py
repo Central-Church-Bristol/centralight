@@ -57,8 +57,9 @@ from .layout_page import LayoutPage
 from .preview_page import LookPreview
 from .quit_dialog import QuitDialog
 from .settings_dialog import SettingsDialog
-from .widgets import STATE_ERROR, STATE_INFO, STATE_OK, STATE_WARN
+from .widgets import STATE_ERROR, STATE_INFO, STATE_OK, STATE_WARN, install_wheel_guard
 
+ENGINE_STUCK_S = 3.0  # no new frame for this long: the engine is stuck (the lights are frozen)
 MIN_WIDTH = 1280
 MIN_HEIGHT = 720
 LIVE_SAVE_DELAY_MS = 1500
@@ -95,6 +96,14 @@ class MainWindow(QWidget):
         self._live_path = live_path
         self._shut_down = False
         self._locked = False
+        install_wheel_guard(QApplication.instance())  # the wheel only changes controls that have been clicked into
+        self._last_seq: int | None = None
+        self._last_new_frame = time.monotonic()
+        self._engine_stuck = False
+        self._engine_check = QTimer(self)
+        self._engine_check.setInterval(1000)
+        self._engine_check.timeout.connect(self._check_engine)
+        self._engine_check.start()
         self._pending_live: LiveState | None = None
         self._saved_live: dict | None = None
         self._splits_applied = False
@@ -122,7 +131,7 @@ class MainWindow(QWidget):
         self.dashboard.clear_base_requested.connect(lambda cut: self.engine.submit(ClearBase(cut=cut)))
         self.dashboard.overlay_requested.connect(lambda input_id, slot: self.engine.submit(SendToOverlay(slot, input_id)))
         self.dashboard.overlay_switched.connect(self._overlay_switched)
-        self.dashboard.overlay_opacity.connect(lambda slot, level: self.engine.submit(SetOverlayOpacity(slot, level)))
+        self.dashboard.overlay_opacity.connect(lambda slot, level: self._locked or self.engine.submit(SetOverlayOpacity(slot, level)))
         self.dashboard.edit_requested.connect(self.open_editor)
         self.dashboard.new_requested.connect(self.new_input)
         self.dashboard.duplicate_requested.connect(self.duplicate_input)
@@ -174,8 +183,9 @@ class MainWindow(QWidget):
         QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo)
         QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo)
         QShortcut(QKeySequence("Ctrl+Shift+Z"), self, activated=self.redo)
-        paste = QShortcut(QKeySequence.StandardKey.Paste, self.dashboard, activated=self.paste_input)
-        paste.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)  # Ctrl+V on the Dashboard: an input from an AI
+        # Ctrl+V on the Dashboard: an input from an AI. (A window shortcut: focus is often on the header's tab
+        # button, outside the Dashboard. Text boxes still paste into themselves.)
+        QShortcut(QKeySequence.StandardKey.Paste, self, activated=lambda: self._page == "dashboard" and self.paste_input())
 
         self.bridge = EngineBridge(engine, self)
         self.bridge.frame_ready.connect(self._on_frame)
@@ -265,6 +275,8 @@ class MainWindow(QWidget):
             self.document.apply(delete_input(self.document.show, input_id), f"Delete {inp.name}")
 
     def _overlay_switched(self, slot: int, on: bool) -> None:
+        if self._locked:
+            return
         if not on:
             self.engine.submit(OverlayOff(slot))
             return
@@ -298,6 +310,9 @@ class MainWindow(QWidget):
             self.document.redo()
 
     def _show_changed(self, show: Show) -> None:
+        set_trim = getattr(self.output, "set_trim", None)
+        if set_trim is not None:  # a light added or moved past the last channel sent so far gets DMX at once
+            set_trim(universe_size(show.fixtures))
         self._update_hotkeys(show)
         if self._save_files and self._guide_inputs(show) != self._guide_key:
             self._guide_timer.start()  # the lights or globals changed: rewrite the AI guide soon
@@ -316,6 +331,12 @@ class MainWindow(QWidget):
         self.engine.submit(SetHouse(fixture, level=level, on=on))
 
     def _on_frame(self, frame: EngineFrame) -> None:
+        if frame.seq != self._last_seq:  # (a stuck engine sends no new frames: see _check_engine)
+            self._last_seq = frame.seq
+            self._last_new_frame = time.monotonic()
+            if self._engine_stuck:
+                self._engine_stuck = False
+                self.header.set_chip("engine", None)
         self.last_frame = frame
         self._do_engine_requests()
         self._save_live_soon(frame)
@@ -340,6 +361,8 @@ class MainWindow(QWidget):
             data.pop("saved_at", None)
             if data.get("base") is not None:
                 data["base"] = {"input": data["base"].get("input")}  # the clock moves every frame: don't save for that
+            data["overlays"] = [{k: v for k, v in o.items() if k != "time"} if isinstance(o, dict) else o
+                                for o in data.get("overlays") or ()]  # (the overlays' clocks too)
             if data != self._saved_live:
                 self._pending_live = frame.live
                 if not self._live_timer.isActive():
@@ -412,6 +435,12 @@ class MainWindow(QWidget):
         dialog = SettingsDialog(self.settings, self.show_data.folder, self, show=self.show_data, audio_sources=list_sources(),
                                 audio_values=lambda: dict(self.last_frame.audio) if self.last_frame is not None else {})
         result = dialog.exec()
+        try:
+            self._settings_closed(dialog, result)
+        finally:
+            dialog.deleteLater()  # (closed dialogs used to stay, hidden, with their audio meter's timer running)
+
+    def _settings_closed(self, dialog: SettingsDialog, result: int) -> None:
         if dialog.preview_requested:
             self.open_preview()
             return
@@ -442,6 +471,25 @@ class MainWindow(QWidget):
             self._update_remote_chip()
         self._save_settings()
 
+    def _check_engine(self) -> None:
+        """Every second: has the engine stopped sending frames? (Its watchdog restarts a thread that died, but a
+        tick stuck inside a call can't be replaced: the lights freeze, so the window says so.)"""
+        running = getattr(self.engine, "is_running", None)
+        if self._shut_down or not callable(running) or not running():
+            return
+        quiet = time.monotonic() - self._last_new_frame
+        if quiet > ENGINE_STUCK_S and not self._engine_stuck:
+            self._engine_stuck = True
+            log_info(f"The engine hasn't sent a frame for {quiet:.0f} s")
+            self.header.set_chip("engine", STATE_ERROR, "Not responding",
+                                 "The lights engine has stopped updating, so the lights are frozen.\n"
+                                 "If this doesn't clear in a few seconds, quit CentraLight (tray → Quit) and start it again.\n"
+                                 "Diagnostics (Ctrl+Shift+D) has the details.")
+
+    def frame_age(self) -> float:
+        """Seconds since the engine's last new frame."""
+        return time.monotonic() - self._last_new_frame
+
     def open_diagnostics(self):
         """How CentraLight is doing right now (not modal: it can stay open while you work)."""
         from .diagnostics import DiagnosticsDialog
@@ -450,7 +498,7 @@ class MainWindow(QWidget):
             self.diagnostics.raise_()
             self.diagnostics.activateWindow()
             return self.diagnostics
-        self.diagnostics = DiagnosticsDialog(lambda: self.last_frame, self)
+        self.diagnostics = DiagnosticsDialog(lambda: self.last_frame, self, age_provider=self.frame_age)
         self.diagnostics.show()
         return self.diagnostics
 
@@ -634,9 +682,25 @@ class MainWindow(QWidget):
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
             self.bridge.set_slow(self.isMinimized())
+            if self.isMinimized():
+                self._leave_live_modes()
+            elif self.isVisible():
+                self._back_in_sight()
+
+    def _leave_live_modes(self) -> None:
+        """The window is going out of sight (into the tray, or minimised): Identify, test colours and the Editor's
+        Show on lights switch off. Otherwise the lights would stay on them, and nothing sent to Base (automations,
+        the Stream Deck, hotkeys) would show until someone opened the window again."""
+        self.layout_page.on_leave()
+        self.editor_page.on_leave()
+
+    def _back_in_sight(self) -> None:
+        if self._page == "editor":
+            self.editor_page.on_enter()  # its viewports draw again
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
+        self._back_in_sight()
         if not self._splits_applied:
             self._splits_applied = True
             QTimer.singleShot(0, self._apply_splits)
@@ -698,6 +762,7 @@ class MainWindow(QWidget):
     def hideEvent(self, event) -> None:  # noqa: N802
         super().hideEvent(event)
         self.dashboard.set_active(False)  # no drawing while hidden
+        self._leave_live_modes()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._shut_down:

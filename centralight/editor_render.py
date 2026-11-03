@@ -92,6 +92,10 @@ class EditorRenderer:
         if self._thread is not None:
             self._thread.join(2.0)
 
+    def idle(self) -> None:
+        """Nothing to draw (the Editor isn't on screen): the thread waits until the next request."""
+        self._requests.put(None)
+
     def request(self, show: Show, input_id: str, element_id: str | None, at: float,
                 globals_: Mapping[str, Any] = MappingProxyType({})) -> None:
         self._requests.put(EditorRequest(show, input_id, element_id, at, globals_))
@@ -140,7 +144,11 @@ class EditorRenderer:
         version = 0
         current: EditorRequest | None = None
         while self._running:
-            timeout = LIVE_REFRESH if current is not None and self._moving(current) else None
+            try:
+                timeout = LIVE_REFRESH if current is not None and self._moving(current) else None
+            except Exception as exc:  # never let the thread end: the viewports would freeze until a restart
+                log_exception("editor render (is it moving?)", exc)
+                timeout = LIVE_REFRESH
             new_version, request = self._requests.wait_newer(version, timeout)
             if not self._running:
                 return

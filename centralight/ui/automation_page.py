@@ -14,9 +14,10 @@ Edits go through the show document (one undo step each) and are saved to automat
 
 from __future__ import annotations
 
+import calendar
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from PySide6.QtCore import QDate, Qt, QTime, Signal
@@ -47,6 +48,7 @@ from ..automations import (
     DAY_NAMES,
     DAYS,
     MONTHS,
+    SUN_MINUTES,
     add_automation,
     default_action,
     default_condition,
@@ -63,16 +65,19 @@ from ..automations import (
 from ..commands import ResetAutomation, RunAutomation, SetAutomationsPaused
 from ..engine import AutomationsView, EngineFrame
 from ..model import TRANSITION_KINDS, Automation, Show
+from ..sun import sun_times
 from .document import ShowDocument
 from .undo_bar import UndoBar
 from .widgets import ElidedLabel, FlowLayout, Panel, ResettableSplitter, ToggleSwitch, discard
 
 EVENT_HINTS = {
-    "pc_startup": "When CentraLight starts within 10 minutes of Windows starting.",
+    "pc_startup": "When Windows starts CentraLight at sign-in (Start with Windows), or CentraLight starts within 10 minutes of the PC starting.",
     "app_started": "Every time CentraLight starts (restarts too).",
     "pc_woke": "When the PC wakes from sleep.",
     "blackout": "While Blackout is on.",
 }
+SUN_WHEN_LABELS = (("after", "After"), ("before", "Before"))
+SUN_EVENT_LABELS = (("sunset", "sunset"), ("sunrise", "sunrise"))
 AUDIO_BAND_LABELS = (("level", "loudness"), ("bass", "bass"), ("mid", "middle"), ("treble", "treble"), ("beat", "beat"), ("pitch", "pitch"))
 WHERE_LABELS = (("anywhere", "anywhere"), ("base", "on Base")) + tuple((f"overlay{n}", f"in Overlay {n}") for n in range(1, 5))
 COMPARE_LABELS = (("=", "is"), ("!=", "is not"), ("<", "is below"), (">", "is above"), ("on", "is on"), ("off", "is off"))
@@ -84,6 +89,31 @@ def _hint(text: str) -> QLabel:
     label.setObjectName("Hint")
     label.setWordWrap(True)
     return label
+
+
+def _sun_today() -> str:
+    """Today's times, so the condition is easy to picture."""
+    times = sun_times(date.today())
+    if times is None:
+        return ""
+    return (f"Today in Bristol: sunrise {times[0]:%H:%M}, sunset {times[1]:%H:%M}. After sunset lasts until midnight; "
+            "for all night, add \"Before sunrise\" with Any.")
+
+
+def _plain(value: Any) -> Any:
+    """Frozen show data and a row's own dict, made comparable (tuples and lists alike)."""
+    if hasattr(value, "items"):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    return value
+
+
+def _num(value: Any, default: float) -> float:
+    """A number from the automation's data, or the default if a file holds something else."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value or value in (float("inf"), float("-inf")):
+        return default
+    return float(value)
 
 
 def _combo(items: list[tuple[Any, str]] | tuple, current: Any) -> QComboBox:
@@ -172,6 +202,7 @@ class RuleRow(QFrame):
         layout.addLayout(top)
         layout.addWidget(self.settings)
         layout.addLayout(self.notes)
+        self._no_days_note: QLabel | None = None
         self._build()
         self.settings.setVisible(self.flow.count() > 0)
 
@@ -228,19 +259,23 @@ class RuleRow(QFrame):
                 self._add(self._text("from"), start, self._text("to"), end)
                 self._note("Overnight is fine: 22:00 to 02:00.")
             elif kind == "days":
+                chosen = d.get("days") if isinstance(d.get("days"), (list, tuple)) else ()
                 for code, name in zip(DAYS, DAY_NAMES):
                     button = QPushButton(name)
                     button.setObjectName("ToolToggle")
                     button.setCheckable(True)
-                    button.setChecked(code in (d.get("days") or ()))
+                    button.setChecked(code in chosen)
                     button.toggled.connect(lambda on, c=code: self._toggle_day(c, on))
                     self._add(button)
+                self._no_days_note = _hint("Tick at least one day: with none, this automation never runs.")
+                self._no_days_note.setVisible(not chosen)
+                self.notes.addWidget(self._no_days_note)
             elif kind == "dates":
                 for key in ("from", "to"):
                     month_day = parse_day_month(d.get(key)) or (12, 1)
                     day = QSpinBox()
                     day.setObjectName("NumberSpin")
-                    day.setRange(1, 31)
+                    day.setRange(1, calendar.monthrange(2024, month_day[0])[1])
                     day.setValue(month_day[1])
                     day.setFixedWidth(day.fontMetrics().horizontalAdvance("31") + 24)
                     month = _combo([(i + 1, m) for i, m in enumerate(MONTHS)], month_day[0])
@@ -258,6 +293,16 @@ class RuleRow(QFrame):
                 only.toggled.connect(lambda on: (year.setEnabled(on), self._set("year", year.value()) if on else self._drop("year")))
                 year.valueChanged.connect(lambda v: only.isChecked() and self._set("year", v))
                 self._add(only, year)
+            elif kind == "sun":
+                when = _combo(SUN_WHEN_LABELS, d.get("when", "after"))
+                when.currentIndexChanged.connect(lambda _i: self._set("when", when.currentData()))
+                event = _combo(SUN_EVENT_LABELS, d.get("event", "sunset"))
+                event.currentIndexChanged.connect(lambda _i: self._set("event", event.currentData()))
+                minutes = _spin(-SUN_MINUTES, SUN_MINUTES, _num(d.get("minutes"), 0.0), " min", 0)
+                minutes.setToolTip("Earlier (−) or later (+) than sunrise / sunset, in minutes")
+                minutes.valueChanged.connect(lambda v: self._set("minutes", int(round(v))))
+                self._add(when, event, self._text("moved by"), minutes)
+                self._note(_sun_today())
             elif kind == "input_live":
                 pick = _combo(inputs, d.get("input"))
                 pick.currentIndexChanged.connect(lambda _i: self._set("input", pick.currentData()))
@@ -288,13 +333,13 @@ class RuleRow(QFrame):
             elif kind == "audio":
                 band = _combo(AUDIO_BAND_LABELS, d.get("band", "level"))
                 band.currentIndexChanged.connect(lambda _i: self._set("band", band.currentData()))
-                above = _spin(0.0, 100.0, float(d.get("above", 0.6)) * 100, " %", 0)
+                above = _spin(0.0, 100.0, _num(d.get("above"), 0.6) * 100, " %", 0)
                 above.valueChanged.connect(lambda v: self._set("above", round(v / 100, 3)))
-                hold = _spin(0.0, 600.0, float(d.get("for", 5)), " s", 0)
+                hold = _spin(0.0, 600.0, _num(d.get("for"), 5.0), " s", 0)
                 hold.setToolTip("How long it has to stay that loud first (so one loud moment doesn't count)")
                 hold.valueChanged.connect(lambda v: self._set("for", v))
                 self._add(band, self._text("above"), above, self._text("for"), hold)
-                self._note("Needs sound: Settings → Audio.")
+                self._note("Needs sound: Settings → Audio. It counts as stopped after 2 s of quiet.")
             else:
                 self._note(EVENT_HINTS.get(kind, ""))
             return
@@ -305,7 +350,7 @@ class RuleRow(QFrame):
             transition = d.get("transition")
             current = transition if transition == "cut" else (transition.get("kind") if hasattr(transition, "get") else "")
             how = _combo(TRANSITION_LABELS, current)
-            duration = _spin(0.0, 60.0, float(transition.get("duration", 1.0)) if hasattr(transition, "get") else 1.0, " s")
+            duration = _spin(0.0, 60.0, _num(transition.get("duration"), 1.0) if hasattr(transition, "get") else 1.0, " s")
             duration.setVisible(how.currentData() not in ("", "cut"))
             how.currentIndexChanged.connect(lambda _i: self._set_transition(how, duration))
             duration.valueChanged.connect(lambda _v: self._set_transition(how, duration))
@@ -325,13 +370,13 @@ class RuleRow(QFrame):
         elif kind == "house":
             light = _combo([(h.fixture, h.label) for h in show.house], d.get("light"))
             light.currentIndexChanged.connect(lambda _i: self._set("light", light.currentData()))
-            level = _spin(0.0, 100.0, float(d.get("level", 1.0) or 0.0) * 100, " %", 0)
+            level = _spin(0.0, 100.0, _num(d.get("level", 1.0), 0.0) * 100, " %", 0)
             level.valueChanged.connect(lambda v: self._set("level", round(v / 100, 3)))
             switch = _combo(((True, "switch on"), (False, "switch off"), (None, "leave the switch")), d.get("on", True if d.get("level") is not None else None))
             switch.currentIndexChanged.connect(lambda _i: self._set("on", switch.currentData()) if switch.currentData() is not None else self._drop("on"))
             self._add(light, level, switch, *self._fade_widgets())
         elif kind == "master":
-            level = _spin(0.0, 100.0, float(d.get("level", 1.0)) * 100, " %", 0)
+            level = _spin(0.0, 100.0, _num(d.get("level"), 1.0) * 100, " %", 0)
             level.valueChanged.connect(lambda v: self._set("level", round(v / 100, 3)))
             self._add(level, *self._fade_widgets())
         elif kind == "blackout":
@@ -357,21 +402,26 @@ class RuleRow(QFrame):
             on = _combo(((True, "on"), (False, "off")), bool(d.get("enabled", False)))
             on.currentIndexChanged.connect(lambda _i: self._set("enabled", on.currentData()))
             self._add(self._text("turn"), pick, on)
-        delay = _spin(0.0, 3600.0, float(d.get("delay", 0) or 0), " s", 0)
+        delay = _spin(0.0, 3600.0, _num(d.get("delay"), 0.0), " s", 0)
         delay.setToolTip("Wait this long first (0 = straight away)")
         delay.valueChanged.connect(lambda v: self._set("delay", v) if v else self._drop("delay"))
         self._add(self._text("after"), delay)
 
     def _fade_widgets(self) -> list[QWidget]:
-        fade = _spin(0.0, 600.0, float(self.data.get("fade", 0) or 0), " s fade", 1)
+        fade = _spin(0.0, 600.0, _num(self.data.get("fade"), 0.0), " s fade", 1)
         fade.valueChanged.connect(lambda v: self._set("fade", v) if v else self._drop("fade"))
         return [fade]
 
     def _toggle_day(self, code: str, on: bool) -> None:
         days = [d for d in DAYS if d in (self.data.get("days") or ()) and d != code] + ([code] if on else [])
         self._set("days", [d for d in DAYS if d in days])
+        if self._no_days_note is not None:
+            self._no_days_note.setVisible(not days)
 
     def _set_date(self, key: str, day: QSpinBox, month: QComboBox) -> None:
+        last = calendar.monthrange(2024, int(month.currentData()))[1]  # (a leap year: 29 Feb is allowed)
+        if day.maximum() != last:
+            day.setMaximum(last)  # e.g. 31 Mar -> April makes it 30 Apr, never "04-31"
         self._set(key, f"{int(month.currentData()):02d}-{day.value():02d}")
 
     def _set_transition(self, how: QComboBox, duration: QDoubleSpinBox) -> None:
@@ -593,7 +643,10 @@ class AutomationPage(QWidget):
         self.upcoming.clear()
         found = upcoming(show, datetime.now())
         for moment, automation, others in found[:30]:
-            extra = " (if its other conditions are true then)" if others else ""
+            extra = ""
+            if others:  # with Any, its other conditions being true already means it's running: no new start
+                extra = (" (unless its other conditions are already true)" if automation.logic == "any"
+                         else " (if its other conditions are true then)")
             self._add_line(self.upcoming, f"{moment:%a %d %b %H:%M}  {automation.name}{extra}")
         if not found:
             self._add_line(self.upcoming, "Nothing in the next 7 days.")
@@ -616,7 +669,7 @@ class AutomationPage(QWidget):
     def _build_editor(self, show: Show, force: bool = False) -> None:
         automation = self.current()
         key = self._structure_key(automation)
-        if key == self._structure and not force:
+        if key == self._structure and not force and self._rows_match(automation):
             self._refresh_editor(automation)
             return
         self._structure = key
@@ -712,6 +765,17 @@ class AutomationPage(QWidget):
             menu.addAction(label, lambda k=kind: self.add_rule(key, k))
         button.setMenu(menu)
         panel.body.addWidget(button, 0, Qt.AlignmentFlag.AlignLeft)
+
+    def _rows_match(self, automation: Automation | None) -> bool:
+        """Do the rows show what the automation holds? (Not after Undo, Redo or an outside edit: rebuild then,
+        or a row's own copy would put the old values back with the next change.)"""
+        if automation is None:
+            return True
+        for key in ("conditions", "actions", "on_end"):
+            items, rows = list(getattr(automation, key)), self.rows.get(key, [])
+            if len(items) != len(rows) or any(_plain(row.data) != _plain(item) for row, item in zip(rows, items)):
+                return False
+        return True
 
     def _refresh_editor(self, automation: Automation | None) -> None:
         if automation is None or not hasattr(self, "summary"):

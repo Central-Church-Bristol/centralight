@@ -22,10 +22,11 @@ Everything here is plain Python (no Qt); the engine runs the AutomationRunner on
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -42,6 +43,7 @@ from .commands import (
 )
 from .log import log_info
 from .model import TRANSITION_KINDS, Automation, Show, Transition
+from .sun import sun_minutes
 
 # ---------------------------------------------------------------- what there is
 
@@ -49,6 +51,7 @@ CONDITIONS: dict[str, str] = {
     "time": "Time of day",
     "days": "Days of the week",
     "dates": "Dates",
+    "sun": "Sunrise / sunset",
     "input_live": "An input is live",
     "variable": "A global variable",
     "ndi": "An NDI feed is there",
@@ -76,16 +79,29 @@ DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 WHERE = ("base", "overlay1", "overlay2", "overlay3", "overlay4", "anywhere")
 COMPARES = ("=", "!=", "<", ">", "on", "off")
 AUDIO_BANDS = ("level", "bass", "mid", "treble", "beat", "pitch")
+SUN_EVENTS = ("sunset", "sunrise")
+SUN_WHEN = ("after", "before")
+SUN_MINUTES = 180  # how far before or after sunrise / sunset a condition can be moved
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 LOOP_RUNS = 5  # more than this many runs...
 LOOP_WINDOW = 30.0  # ...in this many seconds pauses an automation
 STARTUP_WINDOW = 600.0  # "The PC starts": CentraLight started within 10 minutes of Windows
-RECENT = 600.0  # saved states older than this are forgotten at startup (so catch-up happens)
+NOT_LOOKING = 120.0  # seconds between two checks that mean CentraLight wasn't looking (asleep, off, stuck)
+QUIET_HOLD = 2.0  # seconds of quiet before a sound condition counts as stopped (a gap between songs isn't)
+REMEMBER_REMOVED = 3600.0  # a deleted automation's state is kept this long, so Undo doesn't run it again
+TIMED_KINDS = ("time", "days", "dates", "sun")  # conditions that depend only on the clock
 HISTORY_SIZE = 100
 EVALUATE_EVERY = 1.0  # seconds
 TIME_PATTERN = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 DAY_MONTH = re.compile(r"^(\d{1,2})-(\d{1,2})$")
+
+
+def _num(value: Any, default: float) -> float:
+    """A number from a file, or the default if it isn't one (a wrong value must never stop anything)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return default
+    return float(value)
 
 
 def parse_time(text: Any) -> int | None:
@@ -113,7 +129,7 @@ def parse_day_month(text: Any) -> tuple[int, int] | None:
 def check_condition(cond: Mapping[str, Any]) -> list[str]:
     """What's wrong with a condition, in plain words ([] = nothing)."""
     kind = cond.get("type")
-    if kind not in CONDITIONS:
+    if not isinstance(kind, str) or kind not in CONDITIONS:
         return [f"unknown condition {kind!r} (use one of: {', '.join(CONDITIONS)})"]
     problems = []
     if not isinstance(cond.get("invert", False), bool):
@@ -133,6 +149,14 @@ def check_condition(cond: Mapping[str, Any]) -> list[str]:
         year = cond.get("year")
         if year is not None and (not isinstance(year, int) or isinstance(year, bool) or not 2000 <= year <= 2200):
             problems.append('"year" must be a year like 2026 (or left out for every year)')
+    elif kind == "sun":
+        if cond.get("event", "sunset") not in SUN_EVENTS:
+            problems.append('"event" must be "sunset" or "sunrise"')
+        if cond.get("when", "after") not in SUN_WHEN:
+            problems.append('"when" must be "after" or "before"')
+        minutes = cond.get("minutes", 0)
+        if not isinstance(minutes, int) or isinstance(minutes, bool) or not -SUN_MINUTES <= minutes <= SUN_MINUTES:
+            problems.append(f'"minutes" must be a whole number from -{SUN_MINUTES} to {SUN_MINUTES}')
     elif kind == "input_live":
         if not isinstance(cond.get("input"), str) or not cond.get("input"):
             problems.append('"input" must be an input id')
@@ -160,7 +184,7 @@ def check_condition(cond: Mapping[str, Any]) -> list[str]:
 
 def check_action(action: Mapping[str, Any]) -> list[str]:
     kind = action.get("do")
-    if kind not in ACTIONS:
+    if not isinstance(kind, str) or kind not in ACTIONS:
         return [f"unknown action {kind!r} (use one of: {', '.join(ACTIONS)})"]
     problems = []
     delay = action.get("delay", 0)
@@ -213,14 +237,22 @@ def describe_condition(cond: Mapping[str, Any], show: Show | None = None) -> str
         if start is not None and end is not None:
             text = f"{_hhmm(start)}–{_hhmm(end)}"
     elif kind == "days":
-        days = [d for d in DAYS if d in (cond.get("days") or ())]
+        chosen = cond.get("days")
+        days = [d for d in DAYS if isinstance(chosen, (list, tuple)) and d in chosen]
         text = "every day" if len(days) == 7 else ", ".join(DAY_NAMES[DAYS.index(d)] for d in days) or "no days"
     elif kind == "dates":
         a, b = parse_day_month(cond.get("from")), parse_day_month(cond.get("to"))
         if a and b:
             text = f"{a[1]} {MONTHS[a[0] - 1]} – {b[1]} {MONTHS[b[0] - 1]}" + (f" {cond['year']}" if cond.get("year") else "")
+    elif kind == "sun":
+        minutes = cond.get("minutes", 0)
+        minutes = minutes if isinstance(minutes, int) and not isinstance(minutes, bool) else 0
+        text = f"{cond.get('when', 'after')} {cond.get('event', 'sunset')}"
+        if minutes:
+            text += f" {'+' if minutes > 0 else '−'} {abs(minutes)} min"
     elif kind == "input_live":
-        inp = show.inputs.get(cond.get("input", "")) if show else None
+        wanted = cond.get("input", "")
+        inp = show.inputs.get(wanted) if show and isinstance(wanted, str) else None
         name = inp.name if inp else cond.get("input", "?")
         where = cond.get("where", "anywhere")
         place = {"base": "on Base", "anywhere": "live"}.get(where, f"in Overlay {where[-1]}")
@@ -234,7 +266,7 @@ def describe_condition(cond: Mapping[str, Any], show: Show | None = None) -> str
     elif kind == "audio":
         band = cond.get("band", "level")
         seconds = cond.get("for", 0)
-        text = (f"sound ({band}) above {round(float(cond.get('above', 0.5)) * 100)} %"
+        text = (f"sound ({band}) above {round(_num(cond.get('above'), 0.5) * 100)} %"
                 + (f" for {seconds:g} s" if isinstance(seconds, (int, float)) and seconds > 0 else ""))
     return f"not ({text})" if cond.get("invert") else text
 
@@ -265,12 +297,12 @@ def describe_action(action: Mapping[str, Any], show: Show | None = None) -> str:
         label = show.house_label(action.get("light", "")) if show else action.get("light", "?")
         parts = []
         if action.get("level") is not None:
-            parts.append(f"{round(float(action['level']) * 100)} %")
+            parts.append(f"{round(_num(action['level'], 0.0) * 100)} %")
         if action.get("on") is not None:
             parts.append("on" if action["on"] else "off")
         text = f"{label} {' '.join(parts) or 'unchanged'}"
     elif kind == "master":
-        text = f"Master {round(float(action.get('level', 1.0)) * 100)} %"
+        text = f"Master {round(_num(action.get('level'), 1.0) * 100)} %"
     elif kind == "blackout":
         text = "Blackout on" if action.get("on", True) else "Blackout off"
     elif kind == "variable":
@@ -279,11 +311,12 @@ def describe_action(action: Mapping[str, Any], show: Show | None = None) -> str:
         layout = show.layout(action.get("layout")) if show else None
         text = f"layout {layout.name if layout else action.get('layout')}"
     elif kind == "automation":
-        other = show.automations.get(action.get("automation", "")) if show else None
+        other_id = action.get("automation", "")
+        other = show.automations.get(other_id) if show and isinstance(other_id, str) else None
         text = f"{'turn on' if action.get('enabled', True) else 'turn off'} “{other.name if other else action.get('automation')}”"
     else:
         text = str(kind)
-    delay = action.get("delay", 0)
+    delay = _num(action.get("delay"), 0.0)
     return f"after {delay:g} s: {text}" if delay else text
 
 
@@ -312,6 +345,7 @@ class Situation:
     audio: Mapping[str, float] = field(default_factory=dict)  # audio.level and friends, now
     events: frozenset[str] = frozenset()  # app_started, pc_startup, pc_woke happening now
     previous_local: datetime | None = None  # local time at the last check (to spot clock changes)
+    previous_now: float | None = None  # wall clock at the last check (a clock change moves local time, not this)
 
 
 def _in_range(start: int, end: int, minutes: int) -> bool:
@@ -330,9 +364,12 @@ def range_instance(start: int, end: int, local: datetime) -> tuple[date, int]:
     return (local.date(), start)
 
 
-def _skipped_start(start: int, previous: datetime | None, local: datetime) -> bool:
-    """True if the clocks jumped forward over this start time since the last check."""
-    if previous is None or local <= previous or local - previous < timedelta(minutes=30):
+def _skipped_start(start: int, previous: datetime | None, local: datetime, wall_jump: float | None = None) -> bool:
+    """True if the clocks went forward (summer time) over this start time since the last check. After a sleep both
+    clocks jump together: that isn't a clock change, and a range that ended meanwhile mustn't run."""
+    if previous is None or wall_jump is None or local <= previous:
+        return False
+    if (local - previous) - timedelta(seconds=max(0.0, wall_jump)) < timedelta(minutes=30):
         return False
     probe = previous.replace(second=0, microsecond=0) + timedelta(minutes=1)
     while probe <= local:
@@ -340,6 +377,61 @@ def _skipped_start(start: int, previous: datetime | None, local: datetime) -> bo
             return True
         probe += timedelta(minutes=1)
     return False
+
+
+def range_day(conditions: Iterable[Mapping[str, Any]], local: datetime) -> date:
+    """The day Days and Dates conditions look at: while an overnight time range (e.g. 23:00-01:00) is in its
+    after-midnight part, the day it started; otherwise today."""
+    minutes = local.hour * 60 + local.minute
+    for cond in conditions:
+        if cond.get("type") != "time":
+            continue
+        start, end = parse_time(cond.get("from")), parse_time(cond.get("to"))
+        if start is not None and end is not None and start > end and minutes < end:
+            return local.date() - timedelta(days=1)
+    return local.date()
+
+
+def change_moments(timed: list, first_day: datetime, days: int) -> list[datetime]:
+    """Every moment from first_day (midnight) over `days` days at which these clock-only conditions can change:
+    midnights, the times in time conditions, and each day's sunrise / sunset moment."""
+    minutes = {0} | {m for c in timed if c.get("type") == "time"
+                     for m in (parse_time(c.get("from")), parse_time(c.get("to"))) if m is not None}
+    moments = {first_day + timedelta(days=d, minutes=m) for d in range(days + 1) for m in minutes}
+    for d in range(days + 1):  # sunrise and sunset move a little every day
+        day = (first_day + timedelta(days=d)).date()
+        moments |= {first_day + timedelta(days=d, minutes=m) for c in timed if c.get("type") == "sun"
+                    for m in (sun_threshold(c, day),) if m is not None and m < 24 * 60}
+    return sorted(moments)
+
+
+def timed_continuous(automation: Automation, start: datetime, end: datetime) -> bool:
+    """Were the automation's clock-only conditions true all the way from `start` to `end`? If not, the occurrence
+    it ran for is over and a new one may have begun (after a sleep, or while CentraLight was closed)."""
+    timed = [c for c in automation.conditions if c.get("type") in TIMED_KINDS]
+    if not timed:
+        return True  # nothing about the clock says otherwise
+    if end <= start:
+        return True
+    if end - start > timedelta(days=60):
+        return False
+    probe = Automation(automation.id, automation.name, True, automation.logic, tuple(timed))
+
+    def true_at(moment: datetime) -> bool:
+        return AutomationRunner().matches(probe, Situation(now=0.0, local=moment))[0]  # fresh: no memory
+
+    first_day = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    for moment in change_moments(timed, first_day, (end - first_day).days + 1):
+        if start < moment <= end and not true_at(moment):
+            return False
+    return true_at(end)
+
+
+def _ndi_true(source: Any, ndi: Mapping[str, bool]) -> bool:
+    """A feed is there if a connected feed's name contains the one asked for, or the other way round (so the
+    drop-down's full "PC (Media Background Pane)" and an input's "Media Background Pane" both work)."""
+    wanted = str(source or "").strip().lower()
+    return bool(wanted) and any(sending and (wanted in name or name in wanted) for name, sending in ndi.items() if name)
 
 
 def _number(value: Any) -> float | None:
@@ -396,6 +488,25 @@ def _dates_true(cond: Mapping[str, Any], today: date) -> bool:
     return inside
 
 
+def sun_threshold(cond: Mapping[str, Any], day: date) -> int | None:
+    """Minutes after midnight on `day` where a sunrise / sunset condition changes (0-1440), or None."""
+    moment = sun_minutes(day, "sunrise" if cond.get("event") == "sunrise" else "sunset")
+    minutes = cond.get("minutes", 0)
+    if moment is None or not isinstance(minutes, int) or isinstance(minutes, bool):
+        return None
+    return max(0, min(24 * 60, moment + minutes))
+
+
+def _sun_true(cond: Mapping[str, Any], local: datetime) -> bool:
+    """After sunset = from sunset until midnight; before sunrise = from midnight until sunrise (Bristol's times).
+    "At night" is Any(after sunset, before sunrise); "daytime" is All(after sunrise, before sunset)."""
+    threshold = sun_threshold(cond, local.date())
+    if threshold is None:
+        return False
+    minutes = local.hour * 60 + local.minute
+    return minutes < threshold if cond.get("when") == "before" else minutes >= threshold
+
+
 # ---------------------------------------------------------------- the runner
 
 
@@ -408,6 +519,7 @@ class AutomationState:
     tripped: bool = False  # paused by the loop guard
     seen: dict = field(default_factory=dict)  # condition index -> (range day, start) last entered
     inside: dict = field(default_factory=dict)  # condition index -> inside that time range at the last check
+    restored: bool = False  # matched when CentraLight last stopped (checked against the clock at the first look)
 
 
 @dataclass(frozen=True)
@@ -436,11 +548,14 @@ class AutomationRunner:
         self.paused_since: float | None = None
         self.states: dict[str, AutomationState] = {}
         self.history: deque[HistoryEntry] = deque(maxlen=HISTORY_SIZE)
-        self.pending: list[tuple[float, int, str, dict]] = []  # (due engine time, order, automation id, action)
+        self.pending: list[tuple[float, int, str, dict, str]] = []  # (due engine time, order, automation id, action, why)
         self._order = 0
         self._last_check = -1e9
         self._audio_since: dict[tuple[str, int], float] = {}  # (automation, condition) -> when the sound went above
+        self._audio_quiet: dict[tuple[str, int], float] = {}  # (automation, condition) -> when it went quiet
         self._last_local: datetime | None = None
+        self._last_now: float | None = None
+        self._removed: dict[str, tuple[AutomationState, float]] = {}  # deleted automations' states (for Undo)
 
     # --- saving and restoring (live.json)
 
@@ -459,8 +574,9 @@ class AutomationRunner:
         }
 
     def restore(self, data: Mapping[str, Any] | None, now: float) -> None:
-        """Pick up where the last run left off. Matched states older than RECENT are forgotten,
-        so a long gap (the PC was off) catches up; a quick restart doesn't run things again."""
+        """Pick up where the last run left off. An automation that was matched stays matched (so a restart in the
+        middle of a service doesn't run it again over what someone chose since), unless the clock says its
+        occurrence ended meanwhile: the first check sees to that, and catches up a new one."""
         if not isinstance(data, Mapping):
             return
         self.paused = bool(data.get("paused", False))
@@ -474,7 +590,8 @@ class AutomationRunner:
                 state = AutomationState()
                 stamp = saved.get("since")
                 stamp = float(stamp) if isinstance(stamp, (int, float)) else 0.0
-                state.matched = bool(saved.get("matched")) and now - stamp < RECENT
+                state.matched = bool(saved.get("matched")) and 0.0 < stamp <= now
+                state.restored = state.matched
                 state.since = stamp
                 last = saved.get("last_run")
                 state.last_run = float(last) if isinstance(last, (int, float)) else None
@@ -511,17 +628,22 @@ class AutomationRunner:
 
     # --- checking
 
-    def condition_true(self, automation: Automation, index: int, cond: Mapping[str, Any], situation: Situation) -> bool:
+    def condition_true(self, automation: Automation, index: int, cond: Mapping[str, Any], situation: Situation,
+                       day: date | None = None) -> bool:
         kind = cond.get("type")
         local = situation.local
+        day = local.date() if day is None else day
         if kind in EVENTS:
             result = kind in situation.events
         elif kind == "time":
             result = self._time_true(automation, index, cond, situation)
         elif kind == "days":
-            result = DAYS[local.weekday()] in (cond.get("days") or ())
+            days = cond.get("days")
+            result = isinstance(days, (list, tuple)) and DAYS[day.weekday()] in days
         elif kind == "dates":
-            result = _dates_true(cond, local.date())
+            result = _dates_true(cond, day)
+        elif kind == "sun":
+            result = _sun_true(cond, local)
         elif kind == "input_live":
             wanted, where = cond.get("input"), cond.get("where", "anywhere")
             if where == "base":
@@ -533,7 +655,7 @@ class AutomationRunner:
         elif kind == "variable":
             result = _variable_true(cond, situation.variables.get(cond.get("name", "")))
         elif kind == "ndi":
-            result = bool(situation.ndi.get(str(cond.get("source", "")).lower()))
+            result = _ndi_true(cond.get("source"), situation.ndi)
         elif kind == "blackout":
             result = situation.blackout
         elif kind == "audio":
@@ -542,15 +664,36 @@ class AutomationRunner:
             result = False
         return result != bool(cond.get("invert", False))
 
-    def _audio_true(self, automation: Automation, index: int, cond: Mapping[str, Any], situation: Situation) -> bool:
-        """Sound above a level, for at least N seconds (so a single loud moment doesn't count)."""
-        key = (automation.id, index)
-        value = float(situation.audio.get(str(cond.get("band", "level")), 0.0) or 0.0)
-        if value <= float(cond.get("above", 0.5)):
-            self._audio_since.pop(key, None)
+    def _condition_safely(self, automation: Automation, index: int, cond: Mapping[str, Any], situation: Situation,
+                          day: date | None = None) -> bool:
+        """A condition that can't be worked out (a wrong value in its file) is simply not true: it must never stop
+        the engine, which checks the automations in its own thread."""
+        try:
+            return self.condition_true(automation, index, cond, situation, day)
+        except Exception as exc:
+            log_info(f"Automation “{automation.name}”: condition {index + 1} couldn't be checked ({type(exc).__name__}: {exc})",
+                     key=f"automation-condition-{automation.id}-{index}")
             return False
-        since = self._audio_since.setdefault(key, situation.now)
-        return situation.now - since >= float(cond.get("for", 0) or 0)
+
+    def _audio_true(self, automation: Automation, index: int, cond: Mapping[str, Any], situation: Situation) -> bool:
+        """Sound above a level, for at least N seconds (so a single loud moment doesn't count). Once it counts, it
+        stops counting after QUIET_HOLD seconds below the level (so a moment's quiet doesn't stop and start it)."""
+        key = (automation.id, index)
+        value = _num(situation.audio.get(str(cond.get("band", "level"))), 0.0)
+        held = _num(cond.get("for"), 0.0)
+        if value > _num(cond.get("above"), 0.5):
+            self._audio_quiet.pop(key, None)
+            since = self._audio_since.setdefault(key, situation.now)
+            return situation.now - since >= held
+        since = self._audio_since.get(key)
+        if since is None:
+            return False
+        quiet = self._audio_quiet.setdefault(key, situation.now)
+        if quiet - since >= held and situation.now - quiet < QUIET_HOLD:
+            return True  # it had counted: a moment's quiet doesn't stop it
+        self._audio_since.pop(key, None)
+        self._audio_quiet.pop(key, None)
+        return False
 
     def _time_true(self, automation: Automation, index: int, cond: Mapping[str, Any], situation: Situation) -> bool:
         start, end = parse_time(cond.get("from")), parse_time(cond.get("to"))
@@ -563,12 +706,13 @@ class AutomationRunner:
         if not inside:
             state.inside[index] = False
             # clocks went forward over the start: run at the next valid minute (just this once)
-            return _skipped_start(start, situation.previous_local, local)
+            wall_jump = situation.now - situation.previous_now if situation.previous_now is not None else None
+            return _skipped_start(start, situation.previous_local, local, wall_jump)
         occurrence = range_instance(start, end, local)
         if not state.inside.get(index, False) and state.seen.get(index) == occurrence:
             return False  # the clocks went back into a range that already ran today: once is enough
-        if not state.inside.get(index, False):
-            state.seen[index] = occurrence
+        if not state.inside.get(index, False) or state.seen.get(index) != occurrence:
+            state.seen[index] = occurrence  # (a new day's occurrence after a sleep counts as entering it)
         state.inside[index] = True
         return True
 
@@ -576,7 +720,8 @@ class AutomationRunner:
         """(combined result, descriptions of the conditions that were true)."""
         if not automation.conditions:
             return False, []
-        results = [self.condition_true(automation, i, c, situation) for i, c in enumerate(automation.conditions)]
+        day = range_day(automation.conditions, situation.local)
+        results = [self._condition_safely(automation, i, c, situation, day) for i, c in enumerate(automation.conditions)]
         true = [describe_condition(c) for c, r in zip(automation.conditions, results) if r]
         combined = all(results) if automation.logic == "all" else any(results)
         return combined, true
@@ -585,37 +730,63 @@ class AutomationRunner:
         """One check of every automation, top to bottom. Returns actions to do now, in order
         (delayed ones are kept, and come back from due() when it's time)."""
         self._last_check = mono_now
+        previous_now = self._last_now
         if situation.previous_local is None and self._last_local is not None:
-            situation = replace(situation, previous_local=self._last_local)
-        self._last_local = situation.local
+            situation = replace(situation, previous_local=self._last_local, previous_now=previous_now)
+        self._last_local, self._last_now = situation.local, situation.now
+        # CentraLight wasn't looking for a while (asleep, closed, stuck): see whether new occurrences began meanwhile
+        away_since = previous_now if previous_now is not None and situation.now - previous_now > NOT_LOOKING else None
         now_actions: list[tuple[str, dict]] = []
         known = set(show.automations)
-        for aid in [a for a in self.states if a not in known]:
-            del self.states[aid]
+        for aid in [a for a in self.states if a not in known]:  # deleted: kept a while, in case Undo brings it back
+            self._removed[aid] = (self.states.pop(aid), situation.now)
+            self._drop_pending(aid, everything=True)
+        for aid in [a for a, (_s, when) in self._removed.items() if situation.now - when > REMEMBER_REMOVED]:
+            del self._removed[aid]
         for automation in show.ordered_automations():
+            if automation.id not in self.states and automation.id in self._removed:
+                self.states[automation.id] = self._removed.pop(automation.id)[0]
             state = self.states.setdefault(automation.id, AutomationState())
             if not automation.enabled or state.tripped:
                 state.matched = False  # turned on again later while true = it runs then
+                state.restored = False
+                self._drop_pending(automation.id)
                 continue
             matched, true = self.matches(automation, situation)
+            start = state.since if state.restored else away_since
+            state.restored = False
+            if matched and state.matched and start is not None:
+                start_local = situation.local - timedelta(seconds=max(0.0, situation.now - start))
+                if not timed_continuous(automation, start_local, situation.local):
+                    state.matched = False  # a new occurrence began while CentraLight wasn't looking: it runs again
             if matched == state.matched:
                 continue
             state.matched = matched
             state.since = situation.now
+            if matched or not any(c.get("type") in EVENTS for c in automation.conditions):
+                # what was waiting belonged to the run (or the stop) that's over. (An event such as "CentraLight
+                # starts" only lasts a moment: its stop a second later mustn't cancel the run's delayed actions.)
+                self._drop_pending(automation.id)
             if self.paused:
                 continue  # paused: keep track quietly, run nothing
             if matched:
                 now_actions += self._run(automation, list(automation.actions), mono_now, situation.now, "ran", ", ".join(true))
             elif automation.on_end:
-                now_actions += self._run(automation, list(automation.on_end), mono_now, situation.now, "stopped matching")
+                now_actions += self._run(automation, list(automation.on_end), mono_now, situation.now, "stopped matching",
+                                         count=False)
         return now_actions
+
+    def _drop_pending(self, automation_id: str, everything: bool = False) -> None:
+        """Forget an automation's waiting actions (Run now's stay, unless `everything`)."""
+        if any(p[2] == automation_id for p in self.pending):
+            self.pending = [p for p in self.pending if p[2] != automation_id or (p[4] == "by hand" and not everything)]
 
     def run_now(self, automation: Automation, mono_now: float, wall_now: float) -> list[tuple[str, dict]]:
         """The Run now button (and the API): its actions, whatever the conditions."""
-        return self._run(automation, list(automation.actions), mono_now, wall_now, "run by hand", count=False)
+        return self._run(automation, list(automation.actions), mono_now, wall_now, "run by hand", count=False, why="by hand")
 
     def _run(self, automation: Automation, actions: list, mono_now: float, wall_now: float, what: str,
-             detail: str = "", count: bool = True) -> list[tuple[str, dict]]:
+             detail: str = "", count: bool = True, why: str = "conditions") -> list[tuple[str, dict]]:
         state = self.states.setdefault(automation.id, AutomationState())
         if count:
             state.runs.append(mono_now)
@@ -639,7 +810,7 @@ class AutomationRunner:
             delay = float(delay) if isinstance(delay, (int, float)) and not isinstance(delay, bool) else 0.0
             if delay > 0:
                 self._order += 1
-                self.pending.append((mono_now + delay, self._order, automation.id, dict(action)))
+                self.pending.append((mono_now + delay, self._order, automation.id, dict(action), why))
             else:
                 now_actions.append((automation.id, dict(action)))
         return now_actions
@@ -651,7 +822,7 @@ class AutomationRunner:
         ready = sorted(p for p in self.pending if p[0] <= mono_now)
         if ready:
             self.pending = [p for p in self.pending if p[0] > mono_now]
-        return [(aid, action) for _due, _order, aid, action in ready]
+        return [(aid, action) for _due, _order, aid, action, _why in ready]
 
 
 # ---------------------------------------------------------------- doing the actions
@@ -672,7 +843,7 @@ def action_command(action: Mapping[str, Any], show: Show) -> Any | None:
         if isinstance(transition, Mapping) and transition.get("kind") in TRANSITION_KINDS:
             own = show.inputs[input_id].transition
             duration = transition.get("duration", own.duration)
-            return SendToBase(input_id, transition=Transition(transition["kind"], float(duration), own.direction, own.softness))
+            return SendToBase(input_id, transition=Transition(transition["kind"], _num(duration, own.duration), own.direction, own.softness))
         return SendToBase(input_id)
     if kind == "overlay":
         if action.get("input") not in show.inputs or action.get("slot") not in (1, 2, 3, 4):
@@ -706,10 +877,10 @@ def action_command(action: Mapping[str, Any], show: Show) -> Any | None:
 
 def upcoming(show: Show, start: datetime, days: int = 7, limit: int = 50) -> list[tuple[datetime, Automation, bool]]:
     """When enabled automations with time, day or date conditions will next start matching,
-    over the next few days: (local time, automation, other conditions also have to be true).
+    over the next few days: (local time, automation, it has other (untimed) conditions too).
     Only midnights and the times in time conditions can start a match, so only those are checked."""
     found: list[tuple[datetime, Automation, bool]] = []
-    timed_kinds = ("time", "days", "dates")
+    timed_kinds = TIMED_KINDS
     first_day = start.replace(hour=0, minute=0, second=0, microsecond=0)
     for automation in show.ordered_automations():
         timed = [c for c in automation.conditions if c.get("type") in timed_kinds]
@@ -717,8 +888,7 @@ def upcoming(show: Show, start: datetime, days: int = 7, limit: int = 50) -> lis
             continue
         others = len(timed) < len(automation.conditions)
         probe = Automation(automation.id, automation.name, True, automation.logic, tuple(timed))
-        minutes = {0} | {m for c in timed if c.get("type") == "time" for m in (parse_time(c.get("from")), parse_time(c.get("to"))) if m is not None}
-        moments = sorted(first_day + timedelta(days=d, minutes=m) for d in range(days + 1) for m in minutes)
+        moments = change_moments(timed, first_day, days)
         for moment in moments:
             if moment <= start or moment > start + timedelta(days=days):
                 continue
@@ -736,7 +906,9 @@ def system_uptime() -> float:
     try:
         import ctypes
 
-        return ctypes.windll.kernel32.GetTickCount64() / 1000.0
+        tick = ctypes.WinDLL("kernel32").GetTickCount64
+        tick.restype = ctypes.c_uint64  # (left as a 32-bit int, it goes negative after 25 days)
+        return tick() / 1000.0
     except Exception:
         return time.monotonic()
 
@@ -752,6 +924,8 @@ def default_condition(kind: str, show: Show) -> dict[str, Any]:
         return {"type": "days", "days": ["sun"]}
     if kind == "dates":
         return {"type": "dates", "from": "12-01", "to": "12-31"}
+    if kind == "sun":
+        return {"type": "sun", "when": "after", "event": "sunset", "minutes": 0}
     if kind == "input_live":
         first = next(iter(show.ordered_inputs()), None)
         return {"type": "input_live", "input": first.id if first else "", "where": "anywhere"}

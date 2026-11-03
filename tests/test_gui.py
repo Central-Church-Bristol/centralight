@@ -122,10 +122,18 @@ class HeaderTests(WindowTestCase):
         self.refresh(window)
         self.assertIn("Lights off", window.header.blackout.text())
         self.assertTrue(window.header.blackout.property("active"))
+        window.header._last_blackout_click -= 1.0  # (a second later, as a person would: not a double-click)
         QTest.mouseClick(window.header.blackout, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier)
         self.assertEqual(engine.fake_output.last[KEY], 255)  # restored at once
         self.refresh(window)
         self.assertEqual(window.header.blackout.text(), "Blackout")
+
+    def test_a_double_click_on_blackout_is_one_click(self) -> None:
+        window, engine = self.make()
+        QTest.mouseDClick(window.header.blackout, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(window.header.blackout, Qt.MouseButton.LeftButton)  # (some mice send click, click)
+        engine.settle(0.7)
+        self.assertTrue(engine.frames.get().blackout)  # off, not off-and-on-again
 
     def test_engine_fades_show_on_the_faders(self) -> None:
         window, engine = self.make()

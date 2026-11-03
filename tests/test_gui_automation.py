@@ -82,6 +82,30 @@ class AutomationPageTests(unittest.TestCase):
         self.window.undo()
         self.assertEqual([c["type"] for c in self.automation(new_id).conditions], ["days", "time", "variable"])
 
+    def test_a_sunset_condition(self) -> None:
+        from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QLabel
+
+        new_id = self.page.new_automation()
+        process(self.app)
+        self.page.add_rule("conditions", "sun")
+        process(self.app)
+        self.assertEqual(self.automation(new_id).conditions[-1], {"type": "sun", "when": "after", "event": "sunset", "minutes": 0})
+        row = self.page.rows["conditions"][-1]
+        when, event = [c for c in row.findChildren(QComboBox) if c is not row.kind][:2]
+        minutes = row.findChildren(QDoubleSpinBox)[0]
+        event.setCurrentIndex(event.findData("sunrise"))
+        when.setCurrentIndex(when.findData("before"))
+        minutes.setValue(-20)
+        process(self.app)
+        self.assertEqual(dict(self.automation(new_id).conditions[-1]),
+                         {"type": "sun", "when": "before", "event": "sunrise", "minutes": -20})
+        self.assertTrue(any("Today in Bristol: sunrise" in label.text() for label in row.findChildren(QLabel)))
+        self.assertIn("before sunrise − 20 min", self.page.list.currentItem().text())
+        self.page._fill_upcoming(self.window.document.show, force=True)
+        lines = [self.page.upcoming.item(i).text() for i in range(self.page.upcoming.count())]
+        # "Evening worship" is an Any automation with a sunset condition and others
+        self.assertTrue(any("Evening worship (unless its other conditions are already true)" in line for line in lines), lines)
+
     def test_tick_in_the_list_turns_it_off(self) -> None:
         item = self.page.list.item(0)
         automation_id = item.data(Qt.ItemDataRole.UserRole)

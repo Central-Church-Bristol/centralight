@@ -53,11 +53,11 @@ class Device(Protocol):
 
 
 def to_byte(value: float) -> int:
-    """0-1 -> 0-255, rounded (so a 0-255 value survives the round trip exactly)."""
-    if value <= 0.0:
-        return 0
+    """0-1 -> 0-255, rounded (so a 0-255 value survives the round trip exactly). NaN -> 0."""
     if value >= 1.0:
         return 255
+    if not value > 0.0:
+        return 0
     return int(value * 255.0 + 0.5)
 
 
@@ -214,6 +214,7 @@ class DmxOutputThread:
         self._seen_version = 0
         self._closing = False
         self._close_blackout = True
+        self._reconnect = False
         self._device: Device | None = None
         self._last_sent: bytes | None = None
         self._next_keepalive = 0.0
@@ -243,6 +244,28 @@ class DmxOutputThread:
             self._next_spec = spec
             self._cond.notify_all()
 
+    def set_trim(self, size: int) -> None:
+        """The show's lights now need `size` channels (a light was added, or moved up): send that many from now on,
+        straight away and without reopening the port. Outputs that always send all 512 aren't affected."""
+        with self._cond:
+            changed = False
+            for name in ("_spec", "_next_spec"):
+                spec = getattr(self, name)
+                if spec is not None and spec.trim is not None and spec.trim != size:
+                    setattr(self, name, replace(spec, trim=max(1, int(size))))
+                    changed = True
+            if changed:
+                self._last_sent = None  # send the current frame again, at the new length
+                self._frame_version += 1
+                self._cond.notify_all()
+
+    def reconnect(self) -> None:
+        """After the PC wakes: close the port (leaving the lights as they are) and open it again at once, in case
+        Windows gave the dongle a new handle while it slept."""
+        with self._cond:
+            self._reconnect = True
+            self._cond.notify_all()
+
     def status(self) -> OutputStatus:
         now = self._clock()
         with self._cond:
@@ -270,12 +293,14 @@ class DmxOutputThread:
     def _run(self) -> None:
         while True:
             with self._cond:
-                if not (self._closing or self._next_spec is not None or self._frame_version != self._seen_version):
+                if not (self._closing or self._next_spec is not None or self._reconnect
+                        or self._frame_version != self._seen_version):
                     self._cond.wait(self._wait_time())
                 closing = self._closing
                 blackout = self._close_blackout
                 spec = self._next_spec
                 self._next_spec = None
+                reconnect, self._reconnect = self._reconnect, False
                 frame = self._frame
                 self._seen_version = self._frame_version
             try:
@@ -284,6 +309,8 @@ class DmxOutputThread:
                     return
                 if spec is not None:
                     self._switch(spec)
+                elif reconnect and self._device is not None:
+                    self._reopen()
                 if self._device is None and self._clock() >= self._next_retry:
                     self._open()
                 if self._device is not None and frame is not None:
@@ -360,6 +387,15 @@ class DmxOutputThread:
         message = f"Lost the connection ({exc}). Retrying every {self._retry:g} s."
         log_info(f"Output {self._spec.kind} {self._status.label}: {message}")
         self._set_status(ERROR, message)
+
+    def _reopen(self) -> None:
+        device, self._device = self._device, None
+        try:
+            device.close(blackout=False)  # the dongle keeps showing the last look meanwhile
+        except Exception as exc:
+            log_exception("dmx-out close (reconnecting)", exc)
+        self._next_retry = 0.0
+        log_info(f"Output {self._spec.kind} {self._status.label}: reconnecting after the PC woke")
 
     def _switch(self, spec: DeviceSpec) -> None:
         device, self._device = self._device, None

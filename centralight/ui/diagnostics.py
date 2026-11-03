@@ -82,13 +82,17 @@ class ProcessMeter:
         return counters.PrivateUsage / 1e6
 
 
-def report(frame, meter: ProcessMeter | None = None, cores: int | None = None) -> list[tuple[str, str]]:
-    """(what, how it is) lines for a frame from the engine."""
+def report(frame, meter: ProcessMeter | None = None, cores: int | None = None, age: float | None = None) -> list[tuple[str, str]]:
+    """(what, how it is) lines for a frame from the engine. age: seconds since the engine's last new frame."""
     lines: list[tuple[str, str]] = []
     if frame is None:
         return [("Engine", "not started yet")]
-    lines.append(("Engine", f"{frame.tick_rate:.0f} ticks a second · {frame.tick_ms:.2f} ms a tick on average, "
-                            f"{frame.tick_max_ms:.1f} ms at worst"))
+    if age is not None and age > 3.0:
+        lines.append(("Engine", f"NOT RESPONDING: no new frame for {age:.0f} s, so the lights are frozen "
+                                f"(before that: {frame.tick_rate:.0f} ticks a second)"))
+    else:
+        lines.append(("Engine", f"{frame.tick_rate:.0f} ticks a second · {frame.tick_ms:.2f} ms a tick on average, "
+                                f"{frame.tick_max_ms:.1f} ms at worst"))
     trouble = []
     if frame.faults:
         trouble.append(f"{frame.faults} ticks failed")
@@ -127,10 +131,12 @@ def report(frame, meter: ProcessMeter | None = None, cores: int | None = None) -
 
 
 class DiagnosticsDialog(QDialog):
-    def __init__(self, frame_provider: Callable[[], object], parent: QWidget | None = None) -> None:
+    def __init__(self, frame_provider: Callable[[], object], parent: QWidget | None = None,
+                 age_provider: Callable[[], float] | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Diagnostics")
         self._frame = frame_provider
+        self._age = age_provider
         self._meter = ProcessMeter()  # its first look (in the first refresh) starts the measuring
         self._rows: dict[str, QLabel] = {}
         self._lines: list[tuple[str, str]] = []
@@ -164,7 +170,7 @@ class DiagnosticsDialog(QDialog):
         self.resize(640, 420)
 
     def lines(self) -> list[tuple[str, str]]:
-        return report(self._frame(), self._meter)
+        return report(self._frame(), self._meter, age=self._age() if self._age is not None else None)
 
     def refresh(self) -> None:
         self._lines = self.lines()

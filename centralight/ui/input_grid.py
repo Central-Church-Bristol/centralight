@@ -11,11 +11,13 @@ instead of squashing them.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping
 
 from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -124,6 +126,7 @@ class InputTile(QFrame):
         self.input = inp
         self.map = MiniLightMap(show)
         self.overlay_buttons: list[QToolButton] = []
+        self._last_overlay_click: dict[int, float] = {}
         bottom = QHBoxLayout()
         bottom.setContentsMargins(0, 0, 0, 0)
         bottom.setSpacing(3)
@@ -133,7 +136,7 @@ class InputTile(QFrame):
             button.setText(str(slot))
             button.setToolTip(f"Overlay {slot}: put this input on top (click again to take it off)")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.clicked.connect(lambda _c=False, s=slot: self.overlay_requested.emit(self.input.id, s))
+            button.clicked.connect(lambda _c=False, s=slot: self._overlay_clicked(s))
             button.setProperty("inSlot", False)
             bottom.addWidget(button)
             self.overlay_buttons.append(button)
@@ -190,6 +193,13 @@ class InputTile(QFrame):
         self.setProperty("onBase", False)
         self._pressed = False
         self.set_input(inp)
+
+    def _overlay_clicked(self, slot: int) -> None:
+        now = time.monotonic()
+        if now - self._last_overlay_click.get(slot, -1e9) < QApplication.doubleClickInterval() / 1000.0:
+            return  # a double-click is one click (the toggle rule would take it straight off again)
+        self._last_overlay_click[slot] = now
+        self.overlay_requested.emit(self.input.id, slot)
 
     def set_input(self, inp: Input) -> None:
         self.input = inp

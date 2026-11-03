@@ -11,6 +11,8 @@ or the Stream Deck), and only send changes when someone moves them.
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
@@ -191,7 +193,7 @@ class Header(QFrame):
         chip_layout = QHBoxLayout(self.chip_box)
         chip_layout.setContentsMargins(0, 0, 0, 0)
         chip_layout.setSpacing(6)
-        for name in ("output", "automations", "ndi", "audio", "remote"):
+        for name in ("engine", "output", "automations", "ndi", "audio", "remote"):
             chip = StatusChip(name)
             chip_layout.addWidget(chip)
             chip.setVisible(name == "output")
@@ -226,6 +228,7 @@ class Header(QFrame):
         levels_layout.addWidget(self.master)
 
         self.blackout = QPushButton(BLACKOUT_TEXT)
+        self._last_blackout_click = -1e9
         self.blackout.setObjectName("Blackout")
         self.blackout.setCursor(Qt.CursorShape.PointingHandCursor)
         self.blackout.setToolTip("Fade every light to black (Shift-click: instantly)")
@@ -369,6 +372,10 @@ class Header(QFrame):
     # ------------------------------------------------------------ layout
 
     def _blackout_clicked(self) -> None:
+        now = time.monotonic()
+        if now - self._last_blackout_click < QApplication.doubleClickInterval() / 1000.0:
+            return  # a double-click (in a hurry) is one click, not off-and-on-again
+        self._last_blackout_click = now
         instant = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
         self.blackout_clicked.emit(instant)
 

@@ -8,10 +8,13 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QFontMetricsF, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QAbstractSlider,
+    QAbstractSpinBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -165,6 +168,38 @@ class ToggleSwitch(QAbstractButton):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), h / 2 + 1, h / 2 + 1)
         painter.end()
+
+
+class WheelGuard(QObject):
+    """The mouse wheel only changes a fader, number box or drop-down once it's been clicked into. Otherwise the
+    wheel goes on to the page around it (which scrolls), so scrolling past a control never changes a live level."""
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.Wheel and isinstance(obj, QWidget):
+            control = obj
+            for _ in range(3):  # (the wheel can land on a control's inner line edit)
+                if isinstance(control, (QAbstractSlider, QAbstractSpinBox, QComboBox)):
+                    break
+                control = control.parentWidget()
+                if control is None:
+                    return False
+            else:
+                return False
+            if not control.hasFocus() and not (control.focusProxy() is not None and control.focusProxy().hasFocus()):
+                event.ignore()
+                return True  # ignored: Qt passes it on to the parent widgets (the scroll area scrolls)
+        return False
+
+
+_wheel_guard: WheelGuard | None = None
+
+
+def install_wheel_guard(app) -> None:
+    """Once per application (the main window calls it)."""
+    global _wheel_guard
+    if _wheel_guard is None:
+        _wheel_guard = WheelGuard()
+        app.installEventFilter(_wheel_guard)
 
 
 class Fader(QSlider):

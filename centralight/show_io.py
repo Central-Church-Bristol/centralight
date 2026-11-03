@@ -25,7 +25,7 @@ from typing import Any, Mapping
 
 from fixtures import PROFILES
 
-from .files import json_text, read_json, write_atomic, write_json_atomic
+from .files import json_text, loads_json_bytes, read_json, write_atomic, write_json_atomic
 from .layouts import ensure_layouts
 from .model import (
     COLOUR_PATTERN,
@@ -148,9 +148,10 @@ def input_to_dict(inp: Input) -> dict[str, Any]:
         data["colour"] = inp.colour
     if not inp.infinite:
         data["infinite"] = False
+    if not inp.infinite or inp.length != 10.0:  # kept for an infinite one too, for when it's timed again
         data["length"] = inp.length
-        if inp.end != END_HOLD:
-            data["end"] = inp.end
+    if inp.end != END_HOLD:
+        data["end"] = inp.end
     if inp.transition != Transition():
         data["transition"] = transition_to_dict(inp.transition)
     if inp.hotkey:
@@ -268,14 +269,28 @@ def read_input_file(path: Path) -> tuple[Input, list[str]]:
     try:
         if path.stat().st_size > MAX_INPUT_BYTES:
             raise InputFileError(f"the file is too big (over {MAX_INPUT_BYTES // 1_000_000} MB)")
-        data = read_json(path)
+        raw = path.read_bytes()
     except InputFileError:
         raise
-    except ValueError as exc:
-        raise InputFileError(f"it isn't valid JSON ({exc})") from exc
     except OSError as exc:
         raise InputFileError(f"it couldn't be read ({exc.strerror or exc})") from exc
-    return input_from_dict(data, expected_id=path.stem)
+    return parse_input_bytes(raw, path)
+
+
+def parse_input_bytes(raw: bytes, path: Path) -> tuple[Input, list[str]]:
+    """An input file's bytes -> (input, warnings). Raises InputFileError (only) when it can't be used."""
+    if len(raw) > MAX_INPUT_BYTES:
+        raise InputFileError(f"the file is too big (over {MAX_INPUT_BYTES // 1_000_000} MB)")
+    try:
+        data = loads_json_bytes(raw)
+    except ValueError as exc:  # (UnicodeDecodeError is one)
+        raise InputFileError(f"it isn't valid JSON ({exc})") from exc
+    try:
+        return input_from_dict(data, expected_id=Path(path).stem)
+    except InputFileError:
+        raise
+    except Exception as exc:  # a value of a type nothing expected: this file is left out, never the whole show
+        raise InputFileError(f"something in it couldn't be read ({type(exc).__name__}: {exc})") from exc
 
 
 def load_inputs(folder: Path) -> tuple[dict[str, Input], dict[str, str], list[str]]:
@@ -291,6 +306,9 @@ def load_inputs(folder: Path) -> tuple[dict[str, Input], dict[str, str], list[st
             inp, input_warnings = read_input_file(path)
         except InputFileError as exc:
             errors[path.stem] = str(exc)
+            continue
+        except Exception as exc:  # never let one file stop the show opening
+            errors[path.stem] = f"something in it couldn't be read ({type(exc).__name__}: {exc})"
             continue
         inputs[inp.id] = inp
         warnings.extend(f"{path.name}: {w}" for w in input_warnings)
@@ -409,6 +427,9 @@ def load_layouts(folder: Path) -> tuple[list[Layout], list[str]]:
         except OSError as exc:
             warnings.append(f"{where} was left out: it couldn't be read ({exc.strerror or exc})")
             continue
+        except Exception as exc:  # never let one file stop the show opening
+            warnings.append(f"{where} was left out: something in it couldn't be read ({type(exc).__name__}: {exc})")
+            continue
         layouts.append(layout)
         warnings.extend(f"{where}: {w}" for w in layout_warnings)
     return layouts, warnings
@@ -515,6 +536,9 @@ def load_automations(folder: Path) -> tuple[dict[str, Automation], list[str]]:
         except OSError as exc:
             warnings.append(f"{where} was left out: it couldn't be read ({exc.strerror or exc})")
             continue
+        except Exception as exc:  # never let one file stop the show opening
+            warnings.append(f"{where} was left out: something in it couldn't be read ({type(exc).__name__}: {exc})")
+            continue
         automations[automation.id] = automation
         warnings.extend(f"{where}: {w}" for w in problems)
     return automations, warnings
@@ -591,7 +615,10 @@ def show_from_dict(data: Any) -> tuple[Show, list[str]]:
 
     fixtures: list[Fixture] = []
     seen: set[str] = set()
-    for index, item in enumerate(data.get("fixtures", []), start=1):
+    fixture_data = data.get("fixtures", [])
+    if not isinstance(fixture_data, list):
+        raise ShowError('show.json "fixtures" must be a list of lights')
+    for index, item in enumerate(fixture_data, start=1):
         try:
             fx = _fixture_from_dict(item)
         except (ShowError, InputFileError) as exc:
@@ -603,8 +630,12 @@ def show_from_dict(data: Any) -> tuple[Show, list[str]]:
 
     by_id = {fx.id: fx for fx in fixtures}
     house: list[HouseLight] = []
-    for item in data.get("house", []):
-        if not isinstance(item, dict) or item.get("fixture") not in by_id:
+    house_data = data.get("house", [])
+    if not isinstance(house_data, list):
+        warnings.append('show.json "house" isn\'t a list, so the house lights were left out')
+        house_data = []
+    for item in house_data:
+        if not isinstance(item, dict) or not isinstance(item.get("fixture"), str) or item.get("fixture") not in by_id:
             warnings.append(f"house light {item!r} doesn't match a light, so it was left out")
             continue
         if by_id[item["fixture"]].role != ROLE_HOUSE:
@@ -613,10 +644,14 @@ def show_from_dict(data: Any) -> tuple[Show, list[str]]:
         house.append(HouseLight(item["fixture"], str(item.get("label") or by_id[item["fixture"]].name)))
 
     globals_: list[GlobalVar] = []
-    for item in data.get("globals", []):
+    globals_data = data.get("globals", [])
+    if not isinstance(globals_data, list):
+        warnings.append('show.json "globals" isn\'t a list, so the global variables were left out')
+        globals_data = []
+    for item in globals_data:
         try:
             globals_.append(_global_from_dict(item))
-        except ShowError as exc:
+        except (ShowError, TypeError, ValueError) as exc:
             warnings.append(f"global variable left out: {exc}")
 
     order = data.get("input_order", [])
@@ -650,7 +685,7 @@ def _fixture_from_dict(item: Any) -> Fixture:
     if not isinstance(fixture_id, str) or not ID_PATTERN.match(fixture_id):
         raise ShowError(f"bad id {fixture_id!r}")
     profile = item.get("profile")
-    if profile not in PROFILES:
+    if not isinstance(profile, str) or profile not in PROFILES:
         raise ShowError(f"unknown profile {profile!r} (known: {', '.join(PROFILES)})")
     address = item.get("address")
     if isinstance(address, bool) or not isinstance(address, int) or not 1 <= address <= 512:
@@ -658,7 +693,7 @@ def _fixture_from_dict(item: Any) -> Fixture:
     if address + PROFILES[profile]["channels"] - 1 > 512:
         raise ShowError(f"address {address} runs past channel 512")
     role = item.get("role", ROLE_COLOUR if "red" in PROFILES[profile] else ROLE_HOUSE)
-    if role not in ROLES:
+    if not isinstance(role, str) or role not in ROLES:
         raise ShowError(f"role must be one of {', '.join(ROLES)}")
     spot = None
     if role == ROLE_COLOUR:
@@ -687,7 +722,7 @@ def _global_from_dict(item: Any) -> GlobalVar:
     if not isinstance(name, str) or not NAME_PATTERN.match(name):
         raise ShowError(f"bad name {name!r} (use letters, digits and _ , starting with a letter)")
     kind = item.get("type", "number")
-    if kind not in GLOBAL_TYPES:
+    if not isinstance(kind, str) or kind not in GLOBAL_TYPES:
         raise ShowError(f'"{name}": type must be one of {", ".join(GLOBAL_TYPES)}')
     default = item.get("default")
     low = _soft_number(item.get("min"), 0.0)

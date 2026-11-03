@@ -357,6 +357,10 @@ class SettingsDialog(QDialog):
         self.preview_requested = True
         self.reject()
 
+    def done(self, result: int) -> None:  # noqa: D401 (Qt name)
+        self._meter_timer.stop()  # (no meter to update once it's closed)
+        super().done(result)
+
     def _diagnostics(self) -> None:
         self.diagnostics_requested = True
         self.reject()
