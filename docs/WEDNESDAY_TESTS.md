@@ -169,6 +169,25 @@ Worship blue.
       says it ran; **Coming up** lists it for next week.
 - [ ] Click the green **Automations on** chip at the top: it turns amber, **Automations paused**. Click it again to resume.
 
+## 14b. Inputs made by AI
+
+- [ ] Dashboard → the **+ New input** tile → **Create with AI**. Describe a look, e.g. "the pillars breathing
+      purple, slowly, and leave the other lights alone". Click **Copy prompt**.
+- [ ] Open any AI chat website (ChatGPT, Claude, Gemini, Copilot…), paste, send, and copy its whole reply.
+- [ ] Back in CentraLight: **Paste from clipboard**. It's checked straight away and the preview shows the lights
+      moving. Click **Try it on the lights**: the real lights show it (and stop when you close the window).
+      Click **Add**: a new tile appears with a small sparkle by its name.
+- [ ] Put it in an overlay (button **2** on its tile) over Follow screen: the pillars breathe over the screen's colours.
+- [ ] If CentraLight lists problems instead, click **Copy error for the AI**, paste that into the chat, and paste
+      the AI's new reply. Note what went wrong (it helps improve the prompt).
+- [ ] The sparkle at the bottom right of a tile → **Edit with AI** → "make it a bit faster" → Copy prompt → AI →
+      paste. It lists what changes. **Replace**. Then (Editor, that input) Ctrl+Z puts the old version back.
+- [ ] Copy an AI reply again, click an empty part of the Dashboard and press **Ctrl+V**: the same window opens with it.
+- [ ] (Optional) Claude Code or Cursor: Settings (gear) → AI → **Open show folder**, and start Claude Code (or
+      Cursor) in that folder. Ask it: "make an input where the top lights sweep blue from left to right". Within a
+      second or two of it saving the file, the tile appears by itself. Ask it to change that input: the change
+      shows straight away, and Ctrl+Z (in the Editor, on that input) puts the old version back.
+
 ## 15. Always running: the tray, a second launch, sleep
 
 - [ ] Close the window (✕): CentraLight keeps running in the tray by the clock (a message says so the first time);

@@ -34,7 +34,7 @@ from . import icons, theme
 from .light_view import rgb_colour
 from .widgets import ElidedLabel, set_property, discard
 
-TILE_MIN = 190
+TILE_MIN = 200  # wide enough for the bottom row: overlays 1-4, pencil and sparkle
 TILE_MAX = 270
 
 
@@ -102,6 +102,7 @@ class InputTile(QFrame):
     menu_requested = Signal(str, QPoint)  # input id, where (global)
     overlay_requested = Signal(str, int)  # input id, overlay slot 1-4
     edit_requested = Signal(str)
+    ai_requested = Signal(str)  # input id: edit it with AI
 
     def __init__(self, inp: Input, show: Show, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -112,7 +113,7 @@ class InputTile(QFrame):
         self.overlay_buttons: list[QToolButton] = []
         bottom = QHBoxLayout()
         bottom.setContentsMargins(0, 0, 0, 0)
-        bottom.setSpacing(4)
+        bottom.setSpacing(3)
         for slot in range(1, 5):
             button = QToolButton()
             button.setObjectName("TileButton")
@@ -130,7 +131,14 @@ class InputTile(QFrame):
         self.edit_button.setToolTip("Edit this input")
         self.edit_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.edit_button.clicked.connect(lambda: self.edit_requested.emit(self.input.id))
+        self.ai_button = QToolButton()
+        self.ai_button.setObjectName("TileIcon")
+        self.ai_button.setIcon(icons.line_icon(icons.draw_sparkle, theme.TEXT_2, theme.ACCENT))
+        self.ai_button.setToolTip("Edit with AI: describe a change, and let any AI chat write it")
+        self.ai_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.ai_button.clicked.connect(lambda: self.ai_requested.emit(self.input.id))
         bottom.addWidget(self.edit_button)
+        bottom.addWidget(self.ai_button)
         self.bottom = bottom
         self.name = ElidedLabel(inp.name)
         self.name.setObjectName("TileName")
@@ -139,14 +147,15 @@ class InputTile(QFrame):
         badge_layout.setContentsMargins(0, 0, 0, 0)
         badge_layout.setSpacing(4)
         self._badge_labels: dict[str, QLabel] = {}
-        for key, draw, tip in (
-            ("timed", icons.draw_clock, "Timed: plays for a set length"),
-            ("audio", icons.draw_wave, "Follows the sound"),
-            ("ai", icons.draw_sparkle, "Made with AI"),
+        for key, draw, tip, colour in (
+            ("problem", icons.draw_warning, "Its file has a problem", theme.DANGER),
+            ("timed", icons.draw_clock, "Timed: plays for a set length", theme.TEXT_2),
+            ("audio", icons.draw_wave, "Follows the sound", theme.TEXT_2),
+            ("ai", icons.draw_sparkle, "Made with AI", theme.TEXT_2),
         ):
             label = QLabel()
             label.setToolTip(tip)
-            label.setPixmap(icons.line_icon(draw, theme.TEXT_2).pixmap(14, 14))
+            label.setPixmap(icons.line_icon(draw, colour).pixmap(14, 14))
             label.setVisible(False)
             badge_layout.addWidget(label)
             self._badge_labels[key] = label
@@ -179,6 +188,12 @@ class InputTile(QFrame):
 
     def set_show(self, show: Show) -> None:
         self.map.set_show(show)
+
+    def set_problem(self, problem: str) -> None:
+        """A red badge when its file (changed outside CentraLight) can't be used; the tooltip says why."""
+        badge = self._badge_labels["problem"]
+        badge.setVisible(bool(problem))
+        badge.setToolTip(f"Its file has a problem: {problem}" if problem else "")
 
     def set_on_base(self, on_base: bool) -> None:
         set_property(self, "onBase", on_base)
@@ -235,6 +250,7 @@ class NewInputTile(QFrame):
     """The last tile: start a new input (and, from M4, ask an AI to make one)."""
 
     new_requested = Signal()
+    ai_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -243,10 +259,16 @@ class NewInputTile(QFrame):
         self.button.setProperty("accent", True)
         self.button.setToolTip("Start an empty input and open it in the Editor")
         self.button.clicked.connect(self.new_requested.emit)
+        self.ai_button = QPushButton("Create with AI")
+        self.ai_button.setIcon(icons.line_icon(icons.draw_sparkle, theme.TEXT_2))
+        self.ai_button.setToolTip("Describe a look and let any AI chat write it (copy, paste)")
+        self.ai_button.clicked.connect(self.ai_requested.emit)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
         layout.addStretch(1)
         layout.addWidget(self.button, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self.ai_button, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addStretch(1)
         policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         policy.setHeightForWidth(True)
@@ -353,10 +375,12 @@ class InputGrid(QWidget):
     overlay_requested = Signal(str, int)  # input id, slot
     edit_requested = Signal(str)
     new_requested = Signal()
+    ai_requested = Signal(str)  # input id ("" = a new one)
 
     def __init__(self, show: Show, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("ScrollContent")
+        self._problems: dict[str, str] = {}
         self._show = show
         self._layout = TileGridLayout(self)
         self.tiles: dict[str, InputTile] = {}
@@ -366,6 +390,7 @@ class InputGrid(QWidget):
         self._locked = False
         self.new_tile = NewInputTile(self)
         self.new_tile.new_requested.connect(self._new)
+        self.new_tile.ai_requested.connect(lambda: self._locked or self.ai_requested.emit(""))
         self.set_show(show)
         policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         policy.setHeightForWidth(True)
@@ -394,6 +419,8 @@ class InputGrid(QWidget):
                 tile.menu_requested.connect(self.menu_requested.emit)
                 tile.overlay_requested.connect(self._overlay)
                 tile.edit_requested.connect(self.edit_requested.emit)
+                tile.ai_requested.connect(lambda input_id: self._locked or self.ai_requested.emit(input_id))
+                tile.set_problem(self._problems.get(inp.id, ""))
                 self.tiles[inp.id] = tile
             else:
                 tile.set_input(inp)
@@ -409,6 +436,12 @@ class InputGrid(QWidget):
         self.new_tile.show()
         self.updateGeometry()
         self.set_live(self._base_id, self._overlay_ids, {})
+
+    def set_problems(self, problems: dict) -> None:
+        """Input files that can't be used (from the folder watcher): their tiles get a red badge."""
+        self._problems = dict(problems)
+        for input_id, tile in self.tiles.items():
+            tile.set_problem(self._problems.get(input_id, ""))
 
     def set_locked(self, locked: bool) -> None:
         self._locked = locked

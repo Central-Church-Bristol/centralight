@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QInputDialog, QMessageBox
 from centralight.new_show import create_show, show_from_patch
 from centralight.notes import load_notes
 from centralight.settings import Settings
+from centralight.ui.input_grid import TILE_MAX, TILE_MIN
 from centralight.ui.main_window import MainWindow
 from tests.fakes import FakeEngine
 from tests.gui_fixtures import with_inputs
@@ -98,7 +99,7 @@ class InputGridTests(M1WindowTestCase):
         tiles = list(window.dashboard.grid.tiles.values())
         widths = {tile.width() for tile in tiles}
         self.assertEqual(len(widths), 1)
-        self.assertTrue(190 <= widths.pop() <= 270)
+        self.assertTrue(TILE_MIN <= widths.pop() <= TILE_MAX)
         rows = {tile.y() for tile in tiles}
         self.assertGreater(len(rows), 1)
 

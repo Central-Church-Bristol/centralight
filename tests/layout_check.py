@@ -51,7 +51,7 @@ def main() -> int:
 
     from tests import layout_rules
     from tests.fakes import FakeEngine
-    from tests.gui_fixtures import busy_show_engine, long_names_show, with_inputs
+    from tests.gui_fixtures import ai_edit_reply, ai_problem_reply, busy_show_engine, long_names_show, with_inputs
 
     from centralight.new_show import show_from_patch
     from centralight.settings import Settings
@@ -128,6 +128,21 @@ def main() -> int:
         popup.grab().save(str(out / f"history-{variant}.png"))
         shots += 1
         popup.close()
+        # the AI window: Create with a reply that has problems, Edit with a good reply (preview and changes)
+        long = variant == "long"
+        for name, input_id, reply in (("ai-create", "", ai_problem_reply(long)),
+                                      ("ai-edit", "pillars-purple", ai_edit_reply(window.show_data, long))):
+            dialog = window.open_ai_dialog(input_id, reply)
+            dialog.description.setPlainText("the pillars breathing purple, slowly, while the other lights follow the screen"
+                                            if not input_id else "make it breathe a little faster")
+            for w, h in ((1100, 640), (880, 560)):
+                dialog.resize(w, h)
+                process(app, 3)
+                problems += layout_rules.check(dialog, f"{fonts_tag} {args.scale:g}x {name} {w}x{h} {variant}")
+                dialog.grab().save(str(out / f"{name}-{w}x{h}-{variant}.png"))
+                shots += 1
+            dialog.reject()
+            process(app, 1)
         window.editor_page.shutdown()
         window.document.close()
         window.hide()
@@ -136,7 +151,8 @@ def main() -> int:
 
     settings = Settings(show_folder=str(ROOT))
     for name, dialog in (
-        ("settings", SettingsDialog(settings, LONG_SHOW_NAME, None, ports=[("COM3", "USB Serial Port (looks like the Eurolite)"), ("COM1", "Communications Port (COM1)")])),
+        ("settings", SettingsDialog(settings, LONG_SHOW_NAME, None, ports=[("COM3", "USB Serial Port (looks like the Eurolite)"), ("COM1", "Communications Port (COM1)")],
+                                    show=with_inputs(show_from_patch()))),
         ("quit", QuitDialog(None)),
         ("preview", LookPreview(None)),
     ):

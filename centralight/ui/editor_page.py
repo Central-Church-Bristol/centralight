@@ -45,6 +45,7 @@ POLL_MS = 66  # pick up new pictures from the editor renderer ~15 times a second
 class EditorPage(QWidget):
     done = Signal()
     new_input_requested = Signal()
+    ai_requested = Signal(str)  # edit this input with AI
 
     def __init__(self, document: ShowDocument, engine: Any, settings: Settings, sources: Any | None = None,
                  parent: QWidget | None = None) -> None:
@@ -68,6 +69,9 @@ class EditorPage(QWidget):
         # --- the strip along the top
         self.editing = ElidedLabel("Editing: nothing")
         self.editing.setObjectName("EditorTitle")
+        self.ai_button = QPushButton("Edit with AI")
+        self.ai_button.setToolTip("Describe a change, and let any AI chat write it (copy, paste)")
+        self.ai_button.clicked.connect(lambda: self.input_id and self.ai_requested.emit(self.input_id))
         self.solo_button = QPushButton("Show on lights")
         self.solo_button.setCheckable(True)
         self.solo_button.setToolTip("Show only this input on the lights while you edit (switches off when you leave the Editor)")
@@ -85,6 +89,7 @@ class EditorPage(QWidget):
         strip.addWidget(self.editing, 1)
         strip.addWidget(self.undo_bar)
         strip.addSpacing(6)
+        strip.addWidget(self.ai_button)
         strip.addWidget(self.solo_button)
         strip.addWidget(self.send_button)
         strip.addWidget(self.done_button)
@@ -267,7 +272,7 @@ class EditorPage(QWidget):
         inp = self.current_input()
         self.stack.setCurrentIndex(1 if inp is not None else 0)
         self.editing.setText(f"Editing: {inp.name}" if inp is not None else "Editing: nothing")
-        for button in (self.solo_button, self.send_button):
+        for button in (self.solo_button, self.send_button, self.ai_button):
             button.setEnabled(inp is not None)
 
     def variables(self):

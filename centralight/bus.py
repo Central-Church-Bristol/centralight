@@ -17,7 +17,7 @@ Every running copy of an input keeps its own clock, starting at 0 when it's sent
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -37,6 +37,7 @@ class Instance:
 
     input: Input
     started: float  # engine time when it was sent
+    memory: dict = field(default_factory=dict, compare=False, repr=False)  # where its formulas' cycles are
 
     def time(self, now: float) -> float:
         return max(0.0, now - self.started)
@@ -69,7 +70,7 @@ def render_input(instance: Instance, now: float, ctx: RenderContext) -> np.ndarr
     worked out first; expressions see them, the globals and the time."""
     t = instance.time(now)
     canvas = None
-    scope = scope_for(instance.input, t, ctx.globals, ctx.audio)
+    scope = scope_for(instance.input, t, ctx.globals, ctx.audio, instance.memory)
     with use_scope(scope):
         for track in instance.input.tracks:
             element = active_element(track, t, instance.input.infinite)

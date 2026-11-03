@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .model import Show, Transition
+from .model import Input, Show, Transition
 
 MASTER_SLEW = 0.08  # seconds: Master moves are smoothed over this long
 HOUSE_SLEW = 0.08  # seconds: festoon / key-light fader moves are smoothed over this long
@@ -168,9 +168,11 @@ class PowerEvent:
 
 @dataclass(frozen=True)
 class SetSolo:
-    """Show only this input on the lights (the Editor's "Show on lights"); None ends it."""
+    """Show only this input on the lights (the Editor's "Show on lights"); None ends it. input: an
+    input that isn't in the show (yet), e.g. one an AI just wrote, to try on the lights."""
 
     input_id: str | None
+    input: Input | None = None
 
 
 Command = (

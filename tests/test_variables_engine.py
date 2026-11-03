@@ -124,6 +124,28 @@ class EngineVariableTests(unittest.TestCase):
         self.engine.tick()
         self.assertEqual(dict(self.engine.frames.get().variables), {"level": 0.5, "speed": 0.3})
 
+    def test_dragging_a_speed_changes_the_pace_smoothly(self) -> None:
+        """Wednesday's step 11: dragging "speed" while the lights breathe mustn't make them flicker."""
+        element = {"id": "E1", "kind": "paint", "fill": {"type": "colour", "colour": "#FFFFFF"},
+                   "opacity": {"expr": "wave(time, speed)"}}
+        breathe = Input(id="breathe", name="Breathe", tracks=freeze([[element], [], [], []]))
+        show = replace(show_from_patch(), globals=(GlobalVar("speed", "number", 1.0, 0.0, 4.0, True),))
+        show = show.with_inputs({"breathe": breathe}, ("breathe",))
+        clock, output = FakeClock(), FakeOutput()
+        engine = Engine(show, output, None, clock=clock)
+        engine.submit(SendToBase("breathe", cut=True))
+        levels = []
+        for step in range(1200):  # 30 s; from 20 s to 21 s the speed is dragged from 1 to 1.5
+            if 800 <= step < 840:
+                engine.submit(SetVariable("speed", 1.0 + (step - 799) * 0.5 / 40))
+            clock.advance(0.025)
+            engine.tick()
+            levels.append(output.last[SLIMPAR_105 - 1])
+        steps = [abs(b - a) for a, b in zip(levels[790:900], levels[791:901])]
+        self.assertLess(max(steps), 40)  # at most pi * 1.5 * 0.025 of the way (30 / 255) per step: no jumps
+        self.assertGreater(max(levels[900:]) - min(levels[900:]), 240)  # still breathing all the way
+        self.assertAlmostEqual(levels[1100], levels[1100 + 80], delta=12)  # 3 breaths later (80 ticks = 3 x 26.7)
+
     def test_the_editor_draws_with_the_engines_values(self) -> None:
         renderer = EditorRenderer(None)
         green = {"accent": (0.0, 1.0, 0.0), "level": 0.5, "party": 0.0}

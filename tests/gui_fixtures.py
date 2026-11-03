@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import colorsys
+import json
 from dataclasses import replace
 
 import numpy as np
@@ -11,7 +12,7 @@ from centralight.commands import SendToBase, SetHouse
 from centralight.layouts import save_layout_as
 from centralight.model import Automation, GlobalVar, HouseLight, Input, Show, Transition
 from centralight.new_show import follow_screen_input, show_from_patch
-from centralight.show_io import freeze
+from centralight.show_io import freeze, input_to_dict
 from tests.fakes import FakeEngine
 
 LONG_NAMES = {
@@ -139,3 +140,30 @@ def busy_show_engine(show: Show | None = None) -> FakeEngine:
     engine.submit(SetHouse("dimmer-4", level=0.8, on=True))
     engine.settle(1.0)
     return engine
+
+
+def ai_problem_reply(long: bool = False) -> str:
+    """A chat AI's reply that CentraLight can't use yet: a made-up light, an unknown function and a missing
+    picture (for the AI window's problems list)."""
+    light = "pillar-left-by-the-organ-and-the-choir-stalls" if long else "pillar-left"
+    data = {
+        "format": "centralight-input", "version": 1, "id": "pillars-breathe", "name": "Pillars breathe",
+        "tracks": [
+            [{"id": "E1", "kind": "paint", "fill": {"type": "colour", "colour": {"expr": "mix(#4B1A99, #C9A6FF, wobble(time))"}},
+              "mask": {"exclude": [light, "slimpar-102"]}}],
+            [{"id": "E2", "kind": "image", "file": "media/sunrise-over-the-hills-behind-the-church.png" if long else "media/sunrise.png"}],
+            [], [],
+        ],
+    }
+    return "Here you go! The pillars breathe purple:\n\n```json\n" + json.dumps(data, indent=2) + "\n```\n"
+
+
+def ai_edit_reply(show: Show, long: bool = False) -> str:
+    """A chat AI's good reply to "Edit with AI" for pillars-purple: a new name, a breathing colour, and a changed id
+    (which CentraLight keeps as it was)."""
+    data = input_to_dict(show.inputs["pillars-purple"])
+    data["id"] = "pillars-breathing"
+    data["name"] = "Pillars purple, breathing a little faster than before for the last song" if long else "Pillars breathing"
+    data["tracks"][0][0]["fill"] = {"type": "colour", "colour": {"expr": "mix(#4B1A99, #C9A6FF, wave(time, 1/4))"}}
+    data["transition"] = {"kind": "fade", "duration": 2}
+    return "Sure, here's the faster version:\n\n```json\n" + json.dumps(data, indent=2) + "\n```\n"

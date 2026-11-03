@@ -284,3 +284,19 @@ def draw_history(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) -> 
         y = r.top() + r.height() * (0.18 + 0.32 * i)
         painter.drawPoint(QPointF(r.left() + r.width() * 0.06, y))
         painter.drawLine(QPointF(r.left() + r.width() * 0.3, y), QPointF(r.right(), y))
+
+
+def draw_warning(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) -> None:
+    """A triangle with an exclamation mark."""
+    r = _square(rect, 0.1)
+    path = QPainterPath()
+    path.moveTo(r.center().x(), r.top())
+    path.lineTo(r.right(), r.bottom())
+    path.lineTo(r.left(), r.bottom())
+    path.closeSubpath()
+    painter.setPen(_pen(colour, r, 0.09))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawPath(path)
+    x = r.center().x()
+    painter.drawLine(QPointF(x, r.top() + r.height() * 0.38), QPointF(x, r.top() + r.height() * 0.68))
+    painter.drawPoint(QPointF(x, r.top() + r.height() * 0.84))

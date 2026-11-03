@@ -75,8 +75,10 @@ class SettingsDialog(QDialog):
         show_folder: str,
         parent: QWidget | None = None,
         ports: list[tuple[str, str]] | None = None,
+        show=None,
     ) -> None:
         super().__init__(parent)
+        self._show = show
         self.setWindowTitle("Settings")
         self.setModal(True)
         self.setMinimumWidth(560)
@@ -210,6 +212,34 @@ class SettingsDialog(QDialog):
         files_layout.addWidget(show_path)
         files_layout.addLayout(files_buttons)
 
+        # --- AI
+        ai_box = QGroupBox("AI: inputs written by an AI")
+        ai_layout = QVBoxLayout(ai_box)
+        ai_layout.addWidget(hint(
+            "Any AI chat can write inputs: use Create with AI on the Dashboard. AI tools such as Claude Code or Cursor "
+            "can work in the show folder: they read AI_GUIDE.md there, and inputs they write appear straight away."
+        ))
+        ai_buttons = QHBoxLayout()
+        ai_folder = QPushButton("Open show folder")
+        ai_folder.setToolTip("Point Claude Code or Cursor at this folder")
+        ai_folder.clicked.connect(lambda: self._open(Path(self._show_folder)))
+        ai_folder.setEnabled(bool(show_folder))
+        ai_buttons.addWidget(ai_folder)
+        open_guide = QPushButton("Open the AI guide")
+        open_guide.clicked.connect(lambda: self._open(Path(self._show_folder) / "AI_GUIDE.md"))
+        export = QPushButton("Export Claude skill…")
+        export.setToolTip("A folder Claude Code can use (copy it into .claude\\skills), or upload to Claude")
+        export.clicked.connect(self._export_skill)
+        open_guide.setEnabled(bool(show_folder))
+        export.setEnabled(show is not None)
+        ai_buttons.addWidget(open_guide)
+        ai_buttons.addWidget(export)
+        ai_buttons.addStretch(1)
+        ai_layout.addLayout(ai_buttons)
+        self.ai_status = hint("")
+        self.ai_status.setVisible(False)
+        ai_layout.addWidget(self.ai_status)
+
         content = QWidget()
         content.setObjectName("ScrollContent")
         content_layout = QVBoxLayout(content)
@@ -218,6 +248,7 @@ class SettingsDialog(QDialog):
         content_layout.addWidget(remote_box)
         content_layout.addWidget(quit_box)
         content_layout.addWidget(files_box)
+        content_layout.addWidget(ai_box)
         content_layout.addStretch(1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -250,8 +281,19 @@ class SettingsDialog(QDialog):
             widget.setEnabled(output == OUTPUT_ARTNET)
 
     def _open(self, folder: Path) -> None:
-        if folder.is_dir():
-            os.startfile(folder)  # noqa: S606 (opens Explorer)
+        if folder.exists():
+            os.startfile(folder)  # noqa: S606 (opens Explorer, or the file in its own program)
+
+    def _export_skill(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        from ..ai_guide import export_skill
+
+        target = QFileDialog.getExistingDirectory(self, "Where should the Claude skill folder go?", str(Path.home() / "Documents"))
+        if target and self._show is not None:
+            folder = export_skill(self._show, Path(target))
+            self.ai_status.setText(f"Saved: {folder}")
+            self.ai_status.setVisible(True)
 
     def _preview(self) -> None:
         self.preview_requested = True

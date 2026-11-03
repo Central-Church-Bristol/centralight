@@ -151,6 +151,7 @@ class DashboardPage(QWidget):
     duplicate_requested = Signal(str)
     delete_requested = Signal(str)
     variable_changed = Signal(str, object)  # global variable name, value
+    ai_requested = Signal(str)  # input id to edit with AI ("" = make a new one)
 
     def __init__(self, show: Show, sources=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -179,6 +180,7 @@ class DashboardPage(QWidget):
         self.grid.overlay_requested.connect(self.overlay_requested.emit)
         self.grid.edit_requested.connect(self.edit_requested.emit)
         self.grid.new_requested.connect(self.new_requested.emit)
+        self.grid.ai_requested.connect(self.ai_requested.emit)
         grid_scroll = QScrollArea()
         grid_scroll.setWidgetResizable(True)
         grid_scroll.setWidget(self.grid)
@@ -328,6 +330,7 @@ class DashboardPage(QWidget):
             overlays.addAction(f"Overlay {slot} on / off", lambda s=slot: self.overlay_requested.emit(input_id, s))
         menu.addSeparator()
         menu.addAction("Edit", lambda: self.edit_requested.emit(input_id))
+        menu.addAction("Edit with AI…", lambda: self.ai_requested.emit(input_id))
         menu.addAction("Duplicate", lambda: self.duplicate_requested.emit(input_id))
         menu.addAction("Delete…", lambda: self.delete_requested.emit(input_id))
         if input_id == self._base_id:

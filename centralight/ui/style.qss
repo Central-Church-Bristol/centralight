@@ -227,6 +227,9 @@ QPushButton#ToolToggle:disabled {
     color: @text_3;
     border-color: @border;
 }
+QToolButton#TileButton {
+    padding: 2px 5px;  /* narrow enough for 1-4, the pencil and the sparkle on the smallest tile */
+}
 QToolButton#TileButton[inSlot="true"] {
     background: @overlay;
     color: #1B2600;
@@ -236,7 +239,7 @@ QToolButton#TileIcon {
     background: transparent;
     border: 1px solid transparent;
     border-radius: 6px;
-    padding: 2px;
+    padding: 1px;
 }
 QToolButton#TileIcon:hover {
     border-color: @border_strong;
@@ -388,6 +391,11 @@ QPushButton[accent="true"] {
 }
 QPushButton[accent="true"]:hover {
     background: #A6E2FF;
+}
+QPushButton[accent="true"]:disabled {  /* e.g. Add before there's anything to add: it mustn't look clickable */
+    background: @accent_soft;
+    color: @text_3;
+    border-color: @accent_soft;
 }
 QPushButton[danger="true"] {
     color: @danger;

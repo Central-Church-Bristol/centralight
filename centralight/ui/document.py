@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
+from collections import deque
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -44,6 +46,7 @@ from ..show_io import (
 
 SAVE_DELAY_MS = 1500
 UNDO_LIMIT = 200
+OWN_SAVE_MEMORY_S = 10.0  # how long CentraLight remembers the files it wrote (so they aren't taken as outside changes)
 
 SCOPE_SHOW = "show"  # inputs added / removed / reordered, global variables, the show's name
 SCOPE_LAYOUT = "layout"  # lights, house lights, identify colours, saved layouts
@@ -257,6 +260,7 @@ class ShowDocument(QObject):
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(save_delay_ms)
         self._save_timer.timeout.connect(self.flush)
+        self._recent_writes: dict[tuple[str, str], deque] = {}  # (kind, id) -> (when, version written or None)
 
     @property
     def show(self) -> Show:
@@ -265,6 +269,43 @@ class ShowDocument(QObject):
     @property
     def read_only(self) -> bool:
         return self._show.read_only
+
+    @property
+    def saved(self) -> Show:
+        """The show as CentraLight last saved it (so its own saves aren't mistaken for outside changes)."""
+        return self._saved
+
+    def note_on_disk(self, inputs: dict | None = None, automations: dict | None = None) -> None:
+        """Files changed outside CentraLight already hold these versions ({id: Input / Automation, or None for a
+        deleted file}), so saving compares with them: undoing an outside change then writes the old version back."""
+        saved = self._saved
+        if inputs:
+            merged = dict(saved.inputs)
+            for key, value in inputs.items():
+                if value is None:
+                    merged.pop(key, None)
+                else:
+                    merged[key] = value
+            saved = replace(saved, inputs=frozen_map(merged))
+        if automations:
+            merged = dict(saved.automations)
+            for key, value in automations.items():
+                if value is None:
+                    merged.pop(key, None)
+                else:
+                    merged[key] = value
+            saved = replace(saved, automations=frozen_map(merged))
+        self._saved = saved
+
+    def wrote_recently(self, kind: str, item_id: str, version: Any) -> bool:
+        """True if CentraLight itself saved this version of an "input" or "automation" (None: deleted its file) in
+        the last few seconds. A save can land after a newer change, so the latest one isn't always enough."""
+        now = time.monotonic()
+        return any(now - when <= OWN_SAVE_MEMORY_S and kept == version
+                   for when, kept in self._recent_writes.get((kind, item_id), ()))
+
+    def _wrote(self, kind: str, item_id: str, version: Any) -> None:
+        self._recent_writes.setdefault((kind, item_id), deque(maxlen=8)).append((time.monotonic(), version))
 
     # ------------------------------------------------------------ histories
 
@@ -363,6 +404,14 @@ class ShowDocument(QObject):
         automations = tuple(a for aid, a in new.automations.items() if old.automations.get(aid) != a)
         deleted_automations = tuple(i for i in old.automations if i not in new.automations)
         self._saved = new
+        for inp in inputs:
+            self._wrote("input", inp.id, inp)
+        for input_id in deleted:
+            self._wrote("input", input_id, None)
+        for automation in automations:
+            self._wrote("automation", automation.id, automation)
+        for automation_id in deleted_automations:
+            self._wrote("automation", automation_id, None)
         if changed_show or inputs or deleted or layouts or deleted_layouts or automations or deleted_automations:
             self._autosaver.save(SaveJob(new.folder, show_data if changed_show else None, inputs, deleted, layouts,
                                          deleted_layouts, automations, deleted_automations))

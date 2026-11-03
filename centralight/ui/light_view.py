@@ -22,6 +22,7 @@ from ..output import RGB, to_byte
 from . import icons, theme
 
 HOUSE_STRIP = 30  # logical px under the map for the house-light bulbs
+HOUSE_GAP = 22  # logical px between one house light's legend and the next
 
 
 def rgb_colour(rgb: RGB) -> QColor:
@@ -190,18 +191,32 @@ class LightView(QWidget):
         fm = QFontMetrics(font)
         x = strip.left() + 2
         icon_side = HOUSE_STRIP - 10
-        for item in self._show.house:
+        for item, text, room in zip(self._show.house, *self.house_texts(strip.width() - 2, fm)):
             level = self._house.get(item.fixture, 0.0)
             on = level > 0.002
             colour = theme.mix(theme.TEXT_3, theme.ACCENT, min(1.0, level)) if on else QColor(theme.TEXT_3)
             icons.draw_bulb(painter, QRectF(x, strip.top() + 5, icon_side, icon_side), colour, on)
-            text = f"{item.label} {round(level * 100)}%"
-            width = fm.horizontalAdvance(text)
-            if x + icon_side + 6 + width > strip.right():
-                break
             painter.setPen(QColor(theme.TEXT if on else theme.TEXT_3))
-            painter.drawText(QRectF(x + icon_side + 6, strip.top(), width + 2, strip.height()), Qt.AlignmentFlag.AlignVCenter, text)
-            x += icon_side + 6 + width + 22
+            painter.drawText(QRectF(x + icon_side + 6, strip.top(), room + 2, strip.height()), Qt.AlignmentFlag.AlignVCenter, text)
+            x += icon_side + 6 + room + HOUSE_GAP
+
+    def house_texts(self, width: float, fm: QFontMetrics | None = None) -> tuple[list[str], list[float]]:
+        """What each house light's legend says, and the room its text gets, in this width. When the full names
+        don't fit, the lights share the width and long names are shortened with "…" (the level always shows)."""
+        fm = fm or QFontMetrics(theme.ui_font(12))
+        icon_side = HOUSE_STRIP - 10
+        house = self._show.house
+        levels = [f"{round(self._house.get(item.fixture, 0.0) * 100)}%" for item in house]
+        full = [f"{item.label} {level}" for item, level in zip(house, levels)]
+        natural = sum(icon_side + 6 + fm.horizontalAdvance(text) for text in full) + HOUSE_GAP * (len(house) - 1)
+        if natural <= width:
+            return full, [float(fm.horizontalAdvance(text)) for text in full]
+        share = max(0.0, (width - HOUSE_GAP * (len(house) - 1)) / max(1, len(house)) - icon_side - 6)
+        texts = []
+        for item, level in zip(house, levels):
+            name = fm.elidedText(item.label, Qt.TextElideMode.ElideRight, max(0, int(share - fm.horizontalAdvance(f" {level}"))))
+            texts.append(f"{name} {level}" if name and name != "…" else level)
+        return texts, [share] * len(house)
 
     # ------------------------------------------------------------ hover
 

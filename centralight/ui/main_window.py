@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEvent, QRect, QTimer, QUrl
+from PySide6.QtCore import QEvent, QRect, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QStackedWidget, QVBoxLayout, QWidget
 
@@ -45,7 +45,10 @@ from ..show_io import backup_show
 from . import icons
 from .bridge import EngineBridge
 from .dashboard import DashboardPage
+from ..ai_guide import AIReplyError, parse_reply, write_guide_files
+from .ai_dialog import AIDialog
 from .automation_page import AutomationPage
+from .file_watcher import FolderWatcher
 from .document import SCOPE_AUTOMATIONS, SCOPE_LAYOUT, SCOPE_SHOW, ShowDocument
 from .editor_page import EditorPage
 from .header import PAGES, Header
@@ -124,10 +127,12 @@ class MainWindow(QWidget):
         self.dashboard.duplicate_requested.connect(self.duplicate_input)
         self.dashboard.delete_requested.connect(self.delete_input)
         self.dashboard.variable_changed.connect(lambda name, value: self.engine.submit(SetVariable(name, value)))
+        self.dashboard.ai_requested.connect(self.open_ai_dialog)
         self.layout_page = LayoutPage(self.document, engine, notes_path=notes_path)
         self.editor_page = EditorPage(self.document, engine, settings, sources=sources)
         self.editor_page.done.connect(lambda: self.show_page("dashboard"))
         self.editor_page.new_input_requested.connect(self.new_input)
+        self.editor_page.ai_requested.connect(self.open_ai_dialog)
         self.automation_page = AutomationPage(self.document, engine, sources_provider=(
             (lambda: sources.available()) if sources is not None and hasattr(sources, "available") else None))
         self.pages: dict[str, QWidget] = {
@@ -167,6 +172,8 @@ class MainWindow(QWidget):
         QShortcut(QKeySequence.StandardKey.Undo, self, activated=self.undo)
         QShortcut(QKeySequence.StandardKey.Redo, self, activated=self.redo)
         QShortcut(QKeySequence("Ctrl+Shift+Z"), self, activated=self.redo)
+        paste = QShortcut(QKeySequence.StandardKey.Paste, self.dashboard, activated=self.paste_input)
+        paste.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)  # Ctrl+V on the Dashboard: an input from an AI
 
         self.bridge = EngineBridge(engine, self)
         self.bridge.frame_ready.connect(self._on_frame)
@@ -179,6 +186,21 @@ class MainWindow(QWidget):
         self._backup_timer.timeout.connect(self._backup)
         if save_files and show.folder and not show.read_only:
             self._backup_timer.start()
+
+        # AI: watch the show folder for inputs written outside CentraLight, and keep the AI guide up to date
+        self.ai_dialog: AIDialog | None = None
+        self.watcher = FolderWatcher(self.document, ask_reload=self._ask_reload,
+                                     editing=lambda: self.editor_page.input_id if self._page == "editor" else "",
+                                     parent=self) if save_files else None
+        if self.watcher is not None:
+            self.watcher.problems_changed.connect(self.dashboard.grid.set_problems)
+        self._guide_key = None
+        self._guide_timer = QTimer(self)
+        self._guide_timer.setSingleShot(True)
+        self._guide_timer.setInterval(2000)
+        self._guide_timer.timeout.connect(self._write_guide)
+        if save_files:
+            self._guide_timer.start()
 
         self._update_title(show)
         self._update_hotkeys(show)
@@ -275,6 +297,8 @@ class MainWindow(QWidget):
 
     def _show_changed(self, show: Show) -> None:
         self._update_hotkeys(show)
+        if self._save_files and self._guide_inputs(show) != self._guide_key:
+            self._guide_timer.start()  # the lights or globals changed: rewrite the AI guide soon
         self.dashboard.set_show(show)
         self.header.set_house([(h.fixture, h.label) for h in show.house])
         self.header.set_show_name(show.name)
@@ -359,7 +383,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------ settings
 
     def open_settings(self) -> None:
-        dialog = SettingsDialog(self.settings, self.show_data.folder, self)
+        dialog = SettingsDialog(self.settings, self.show_data.folder, self, show=self.show_data)
         result = dialog.exec()
         if dialog.preview_requested:
             self.open_preview()
@@ -393,6 +417,52 @@ class MainWindow(QWidget):
 
     def _remote_key(self) -> tuple:
         return (self.settings.remote_port, self.settings.remote_lan, self.settings.remote_key)
+
+    # ------------------------------------------------------------ AI
+
+    @staticmethod
+    def _guide_inputs(show: Show) -> tuple:
+        return (show.name, show.fixtures, show.house, show.globals, show.folder)
+
+    def _write_guide(self) -> None:
+        show = self.show_data
+        self._guide_key = self._guide_inputs(show)
+        try:
+            written = write_guide_files(show)
+        except Exception as exc:
+            log_exception("writing the AI guide", exc)
+            return
+        if written:
+            log_info(f"AI guide updated: {', '.join(written)}")
+
+    def open_ai_dialog(self, input_id: str = "", reply: str = "") -> AIDialog | None:
+        """Create (input_id "") or edit an input with any AI chat."""
+        if self._locked or self.document.read_only:
+            return None
+        variables = self.last_frame.variables if self.last_frame is not None else {}
+        self.ai_dialog = AIDialog(self.document, self.engine, input_id, reply, variables,
+                                  getattr(self.engine, "sources", None), self)
+        self.ai_dialog.open()
+        return self.ai_dialog
+
+    def paste_input(self) -> AIDialog | None:
+        """Ctrl+V on the Dashboard: if the clipboard holds an input (e.g. an AI's reply), check it and offer to add it."""
+        text = QGuiApplication.clipboard().text()
+        try:
+            data = parse_reply(text)
+        except AIReplyError:
+            return None
+        if not isinstance(data.get("tracks"), list):
+            return None  # some other JSON, not an input
+        return self.open_ai_dialog("", text)
+
+    def _ask_reload(self, name: str) -> bool:
+        answer = QMessageBox.question(
+            self, "Changed outside CentraLight",
+            f"“{name}” was just changed outside CentraLight (by an AI tool or a text editor), but your latest change "
+            f"here isn't saved yet.\n\nLoad the changed file? (No keeps yours, and saves it over the file.)",
+        )
+        return answer == QMessageBox.StandardButton.Yes
 
     # ------------------------------------------------------------ automations
 
@@ -622,6 +692,9 @@ class MainWindow(QWidget):
         self._backup_timer.stop()
         self.layout_page.on_leave()
         self.editor_page.shutdown()
+        if self.watcher is not None:
+            self.watcher.stop()
+        self._guide_timer.stop()
         if self.remote is not None:
             self.remote.stop()
         state = self.engine.stop(lights_off=lights_off)

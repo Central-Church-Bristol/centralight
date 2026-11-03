@@ -136,6 +136,7 @@ class Scope:
     time: float = 0.0  # input time
     audio: Mapping[str, float] = AUDIO_SILENT
     element: str = ""  # "input/element": random() is stable per element
+    memory: dict | None = None  # the running input's cycle positions (expressions.continuous_phase)
 
     def lookup(self, name: str) -> Value | None:
         found = self.locals.get(name)
@@ -169,7 +170,7 @@ def _hook(text: str, value: Any, kind: str, t: float) -> Any:
         if scope is None:
             env = Env(None, value, t)
         else:
-            env = Env(scope.lookup, value, t, scope.time, scope.audio, scope.element)
+            env = Env(scope.lookup, value, t, scope.time, scope.audio, scope.element, scope.memory)
         result = compiled.run(env)
         if kind == "number" and type(result) is tuple:
             raise ExpressionError("this setting needs a number, but the expression gives a colour")
@@ -232,12 +233,12 @@ def local_order(definitions) -> tuple[list[Mapping[str, Any]], dict[str, str]]:
 
 
 def evaluate_locals(inp: Input, time: float, globals_: Mapping[str, Value] = NO_VALUES,
-                    audio: Mapping[str, float] = AUDIO_SILENT) -> tuple[dict[str, Value], dict[str, str]]:
+                    audio: Mapping[str, float] = AUDIO_SILENT, memory: dict | None = None) -> tuple[dict[str, Value], dict[str, str]]:
     """An input's local variables at input time `time`: (values by name, errors by name)."""
     if not inp.locals:
         return {}, {}
     ordered, errors = local_order(inp.locals)
-    scope = Scope({}, globals_, time, audio, f"{inp.id}/locals")
+    scope = Scope({}, globals_, time, audio, f"{inp.id}/locals", memory)
     with use_scope(scope):
         for item in ordered:
             name = item["name"]
@@ -251,7 +252,8 @@ def evaluate_locals(inp: Input, time: float, globals_: Mapping[str, Value] = NO_
 
 
 def scope_for(inp: Input, time: float, globals_: Mapping[str, Value] = NO_VALUES,
-              audio: Mapping[str, float] = AUDIO_SILENT) -> Scope:
-    """The scope for drawing an input at input time `time` (its locals worked out)."""
-    values, _errors = evaluate_locals(inp, time, globals_, audio)
-    return Scope(values, globals_, time, audio)
+              audio: Mapping[str, float] = AUDIO_SILENT, memory: dict | None = None) -> Scope:
+    """The scope for drawing an input at input time `time` (its locals worked out). memory: the running
+    input's (Instance.memory), so its wave() and friends keep their place when a rate changes."""
+    values, _errors = evaluate_locals(inp, time, globals_, audio, memory)
+    return Scope(values, globals_, time, audio, memory=memory)

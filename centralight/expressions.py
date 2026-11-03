@@ -18,6 +18,11 @@ passed to eval().
 Names are looked up in this order: the input's local variables, global variables, then
 t (element time), time (input time) and value (the setting's own value before the
 expression). audio.level / bass / mid / treble / beat / pitch are 0-1 (0 until audio is set up).
+
+The cycle functions (wave, pulse, saw, tri, square) take a rate in cycles per second. While an
+input runs they remember where they are in their cycle, so changing the rate (dragging a "speed"
+global, say) changes the pace smoothly instead of jumping to another point in the cycle. With a
+steady rate the result is exactly fract(t * rate), as you'd expect.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ Colour = tuple[float, float, float]
 Value = Union[float, Colour]
 
 MAX_LENGTH = 400
+MEMORY_LIMIT = 2000  # remembered cycle positions per running input (only grows if formulas keep being edited)
 SPECIALS = ("t", "time", "value")
 AUDIO_NAMES = ("level", "bass", "mid", "treble", "beat", "pitch")
 CONSTANTS = {"pi": math.pi}
@@ -181,6 +187,33 @@ def _wave(t: Value, rate: Value = 1.0) -> float:
     return 0.5 - 0.5 * math.cos(2.0 * math.pi * _phase(t, rate))
 
 
+# Each cycle function as a shape of its phase (0-1), for the smooth-rate version in compiled formulas
+SHAPES: dict[str, Callable[..., float]] = {
+    "pulse": lambda phase, width=0.5: 1.0 if phase < _number(width, "pulse's width") else 0.0,
+    "saw": lambda phase: phase,
+    "tri": lambda phase: 1.0 - abs(2.0 * phase - 1.0),
+    "square": lambda phase: 1.0 if phase < 0.5 else 0.0,
+    "wave": lambda phase: 0.5 - 0.5 * math.cos(2.0 * math.pi * phase),
+}
+
+
+def continuous_phase(memory: dict | None, key: Any, t: float, rate: float) -> float:
+    """Where a cycle is (0-1) at t. With a memory (one per running input), it carries on from where it was the
+    last time, at the new rate, so a rate change doesn't make it jump; t going backwards (a restart) starts it
+    again from fract(t * rate)."""
+    if memory is None:
+        return _fract(t * rate)
+    last = memory.get(key)
+    if last is None or t < last[0]:
+        phase = _fract(t * rate)
+    else:
+        phase = _fract(last[1] + (t - last[0]) * rate)
+    if len(memory) >= MEMORY_LIMIT and key not in memory:
+        memory.clear()
+    memory[key] = (t, phase)
+    return phase
+
+
 def _hash01(*parts: Any) -> float:
     """A stable number from 0 to 1 for these parts (the same every run)."""
     return zlib.crc32("|".join(str(p) for p in parts).encode("utf-8")) / 4294967296.0
@@ -253,8 +286,10 @@ FUNCTIONS: dict[str, Function] = {
     "saw": Function(_saw, 1, 2, "saw(t, rate=1): ramps 0 → 1, then jumps back"),
     "tri": Function(_tri, 1, 2, "tri(t, rate=1): 0 → 1 → 0, in straight lines"),
     "square": Function(_square, 1, 2, "square(t, rate=1): 1 for half of each cycle, then 0"),
-    "wave": Function(_wave, 1, 2, "wave(t, rate=1): a smooth 0 → 1 → 0, starting at 0"),
-    "noise": Function(_noise, 1, 2, "noise(t, seed=0): smooth random wandering between 0 and 1"),
+    "wave": Function(_wave, 1, 2, "wave(t, rate=1): a smooth 0 → 1 → 0, starting at 0. rate = cycles per second "
+                                  "(0.25: one every 4 s); a changing rate (e.g. a speed global) changes the pace smoothly"),
+    "noise": Function(_noise, 1, 2, "noise(t, seed=0): smooth random wandering between 0 and 1, to a new value each "
+                                    "time t passes a whole number"),
     "random": Function(lambda *_: 0.0, 0, 1, "random(seed=0): a random 0-1 that stays the same for this element"),
     "rgb": Function(_rgb, 3, 3, "rgb(r, g, b): a colour from three 0-1 values"),
     "hsv": Function(_hsv, 1, 3, "hsv(hue, saturation=1, brightness=1): a colour; hue 0-1 goes round the rainbow"),
@@ -274,7 +309,7 @@ def reserved_names() -> set[str]:
 class Env:
     """Everything one evaluation can see."""
 
-    __slots__ = ("lookup", "value", "t", "time", "audio", "element")
+    __slots__ = ("lookup", "value", "t", "time", "audio", "element", "memory")
 
     def __init__(
         self,
@@ -284,6 +319,7 @@ class Env:
         time: float | None = None,
         audio: Mapping[str, float] | None = None,
         element: str = "",
+        memory: dict | None = None,
     ) -> None:
         self.lookup = lookup
         self.value = value
@@ -291,6 +327,7 @@ class Env:
         self.time = t if time is None else time
         self.audio = audio or {}
         self.element = element
+        self.memory = memory  # the running input's cycle positions (see continuous_phase), or None
 
     def name(self, name: str) -> Value:
         if self.lookup is not None:
@@ -483,6 +520,8 @@ class _Builder:
         if name == "random":
             seed = args[0] if args else (lambda env: 0.0)
             return lambda env: _hash01("random", env.element, _number(seed(env), "random's seed"))
+        if name in SHAPES and count >= 2 and not isinstance(node.args[1], ast.Constant):
+            return self._cycle(SHAPES[name], args)
         run = function.run
         if count == 1:
             a = args[0]
@@ -494,6 +533,21 @@ class _Builder:
             a, b, c = args
             return lambda env: run(a(env), b(env), c(env))
         return lambda env: run(*[f(env) for f in args])
+
+
+    @staticmethod
+    def _cycle(shape: Callable[..., float], args: list):
+        """A cycle function whose rate can change while it runs: it keeps its place in the cycle."""
+        slot = object()  # this call in this formula (with the element, the key to its remembered position)
+        time_of, rate_of, extra = args[0], args[1], args[2:]
+
+        def run_cycle(env: Env) -> float:
+            t = _number(time_of(env), "the time")
+            rate = _number(rate_of(env), "the rate")
+            phase = continuous_phase(env.memory, (env.element, slot), t, rate)
+            return shape(phase, *[f(env) for f in extra])
+
+        return run_cycle
 
 
 def _not_allowed(node: Any) -> str:

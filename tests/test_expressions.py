@@ -9,10 +9,12 @@ import unittest
 
 from centralight.expressions import (
     FUNCTIONS,
+    MEMORY_LIMIT,
     Env,
     ExpressionError,
     check,
     compile_expression,
+    continuous_phase,
     describe_value,
     evaluate_text,
     reserved_names,
@@ -310,6 +312,55 @@ class GlobalTests(unittest.TestCase):
             self.assertNotEqual(check_variable_name(bad), "", bad)
         self.assertIn("already", check_variable_name("speed", {"speed"}))
         self.assertIn("value", reserved_names())
+
+
+
+class SmoothRateTests(unittest.TestCase):
+    """wave() and friends keep their place in the cycle when their rate changes (dragging a speed global),
+    instead of jumping to wherever time * new rate happens to be."""
+
+    def at(self, compiled, t: float, rate: float, memory, element: str = "in/E1") -> float:
+        return compiled.run(Env({"speed": rate}.get, 0.0, t, t, None, element, memory))
+
+    def test_a_steady_rate_gives_the_usual_values(self) -> None:
+        for name, extra in (("wave", ""), ("saw", ""), ("tri", ""), ("square", ""), ("pulse", ", 0.3")):
+            smooth = compile_expression(f"{name}(time, speed{extra})")
+            fixed = compile_expression(f"{name}(time, 0.7{extra})")
+            memory: dict = {}
+            for i in range(200):
+                t = 3.0123 + i * 0.025  # never exactly on an edge of square() or pulse()
+                self.assertAlmostEqual(self.at(smooth, t, 0.7, memory), self.at(fixed, t, 0.7, None), places=6, msg=name)
+
+    def test_a_rate_change_carries_on_from_where_it_was(self) -> None:
+        compiled, memory = compile_expression("saw(time, speed)"), {}
+        self.assertAlmostEqual(self.at(compiled, 101.3, 1.0, memory), 0.3)
+        self.assertAlmostEqual(self.at(compiled, 101.325, 1.25, memory), 0.33125)  # on from 0.3, at the new pace
+        self.assertAlmostEqual(self.at(compiled, 101.325, 1.25, None), 0.65625)  # without a memory it would jump
+        self.assertAlmostEqual(self.at(compiled, 101.35, 1.25, memory), 0.3625)
+
+    def test_time_going_back_starts_it_again(self) -> None:
+        compiled, memory = compile_expression("saw(time, speed)"), {}
+        self.at(compiled, 10.3, 1.0, memory)
+        self.assertAlmostEqual(self.at(compiled, 10.4, 2.0, memory), 0.5)
+        self.assertAlmostEqual(self.at(compiled, 0.2, 2.0, memory), 0.4)  # sent again: fract(0.2 * 2)
+
+    def test_each_element_keeps_its_own_place(self) -> None:
+        compiled, memory = compile_expression("saw(time, speed)"), {}
+        self.at(compiled, 5.25, 1.0, memory, "in/E1")
+        self.at(compiled, 5.25, 1.0, memory, "in/E2")
+        self.assertAlmostEqual(self.at(compiled, 5.5, 2.0, memory, "in/E1"), 0.75)
+        self.assertAlmostEqual(self.at(compiled, 5.5, 1.0, memory, "in/E2"), 0.5)
+
+    def test_fixed_rates_need_no_memory(self) -> None:
+        memory: dict = {}
+        compile_expression("wave(time, 0.5) + saw(time)").run(Env(None, 0.0, 1.0, 1.0, None, "x", memory))
+        self.assertEqual(memory, {})
+
+    def test_the_memory_stays_small(self) -> None:
+        memory: dict = {}
+        for i in range(MEMORY_LIMIT + 5):
+            continuous_phase(memory, ("x", i), 1.0, 1.0)
+        self.assertLessEqual(len(memory), MEMORY_LIMIT)
 
 
 if __name__ == "__main__":

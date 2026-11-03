@@ -271,6 +271,7 @@ class Engine:
         self._overlays = [OverlaySlot(n) for n in range(1, OVERLAY_SLOTS + 1)]
         self._overlay_opacity = [Ramp(1.0) for _ in range(OVERLAY_SLOTS)]
         self._solo: Instance | None = None
+        self._solo_fixed = False  # the solo input came with its command (not from the show)
         self._restore_buses(live, initial_base, now)
         self._last_canvas = transparent(CANVAS_H, CANVAS_W)
         self._identify = False
@@ -496,11 +497,13 @@ class Engine:
             if 1 <= command.slot <= OVERLAY_SLOTS:
                 self._overlay_opacity[command.slot - 1].set(clamp01(command.level), command.fade, now)
         elif isinstance(command, SetSolo):
-            inp = self._input(command.input_id) if command.input_id else None
+            inp = command.input if command.input is not None else (self._input(command.input_id) if command.input_id else None)
             if inp is None:
                 self._solo = None
-            elif self._solo is None or self._solo.input.id != inp.id:
+                self._solo_fixed = False
+            elif self._solo is None or self._solo.input.id != inp.id or command.input is not None:
                 self._solo = Instance(inp, now)
+                self._solo_fixed = command.input is not None  # a trial input: show changes don't replace it
         elif isinstance(command, SwapShow):
             self._swap_show(command.show)
         elif isinstance(command, SetVariable):
@@ -627,7 +630,8 @@ class Engine:
             house = self._house.get(fixture_id)
             if house is None:
                 continue
-            with use_scope(scope_for(inp, 0.0, self._ctx.globals, self._ctx.audio)):
+            with use_scope(scope_for(inp, 0.0, self._ctx.globals, self._ctx.audio)) as scope:
+                scope.element = f"{inp.id}/house/{fixture_id}"
                 level = evaluate(setting, 0.0, 0.0)
             house.level.set(clamp01(level), fade, now)
             if not house.on:
@@ -648,7 +652,8 @@ class Engine:
             house = self._house.get(fixture_id)
             if house is not None and setting is not None and is_dynamic(setting) and not house.level.moving(now):
                 t = current.time(now)
-                with use_scope(scope_for(current.input, t, self._ctx.globals, self._ctx.audio)):
+                with use_scope(scope_for(current.input, t, self._ctx.globals, self._ctx.audio, current.memory)) as scope:
+                    scope.element = f"{current.input.id}/house/{fixture_id}"
                     level = evaluate(setting, t, 0.0)
                 house.level.set(clamp01(level), 0.0, now)
 
@@ -681,7 +686,7 @@ class Engine:
         self._base.update_inputs(show.inputs)
         for slot in self._overlays:
             slot.update_inputs(show.inputs)
-        if self._solo is not None and self._solo.input.id in show.inputs:
+        if self._solo is not None and self._solo.input.id in show.inputs and not self._solo_fixed:
             self._solo.input = show.inputs[self._solo.input.id]
         self.sources.set_keep(self._ndi_names(show))
         self._refresh_identify()

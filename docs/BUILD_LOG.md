@@ -16,8 +16,8 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M2 Editor v1 (infinite mode) | **done** (3 Nov, 00:10) |
 | M3 Variables, expressions, Stream Deck | **done** (3 Nov, 00:35) — 277 tests pass |
 | M4 Automations + always running (tray, start with Windows) | **done** (3 Nov, 01:00) |
-| M5 AI inputs | next |
-| M6 Timed mode + keyframes (+ video) | not started |
+| M5 AI inputs | **done** (3 Nov, 01:55) |
+| M6 Timed mode + keyframes (+ video) | next |
 | M7 Painting and masks | not started |
 | M8 Audio variables | not started |
 | M9 Polish (launcher .exe, Diagnostics) | not started |
@@ -42,6 +42,71 @@ Run all the tests (about a minute) from the CentraLight folder:
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## M5 AI inputs — done
+
+What's there:
+
+- **Create with AI** (the **+ New input** tile) and **Edit with AI** (the sparkle at the bottom right of every
+  tile, the Editor's strip, or right-click on a tile): one window, no API keys, works with any AI chat website.
+  1. Describe the look (or what should change) and click **Copy prompt**: a complete request goes on the
+     clipboard (what CentraLight is, the condensed guide, your lights and globals, examples, "reply with one JSON
+     block", and your words; for an edit, the input itself too).
+  2. Paste it into ChatGPT, Claude, Gemini or Copilot, and paste the whole reply back.
+  3. It's checked as you paste. If it's fine you get a **live preview** of the lights (using the current values
+     of your globals), **Try it on the lights** (shows only that input on the real lights until you close the
+     window; nothing is added), and for an edit a plain list of what changes ("Name: … → …", "Transition: fade 1 s →
+     fade 2 s", "Paint E1: fill changed"). If not, the problems are listed in plain words, and **Copy error for the
+     AI** puts a ready-made "please fix these" message on the clipboard.
+  4. **Add** (or **Replace**): one undo step. AI-made inputs get a small sparkle badge.
+  - Replies are read the way chat AIs actually write them: words around a ```json block, `//` comments and
+    trailing commas are all fine. An AI that changes the input's id in an edit is ignored (the id stays).
+  - If the reply uses a picture from elsewhere on this PC (e.g. `C:\Users\…\Pictures\sunrise.jpg`), the window
+    shows it and offers **Copy into the show**; clicking that is the OK (inputs only ever read files inside the
+    show folder).
+- **Ctrl+V on the Dashboard**: if the clipboard holds an input (an AI's reply), the same window opens with it checked.
+- **AI tools in the show folder** (Claude Code, Cursor): the show folder now holds `AI_GUIDE.md` (also as
+  `AGENTS.md`, the name such tools look for) and `input.schema.json`. They're generated from the app's own
+  settings lists, your lights (ids, names, groups, where they are), the house lights and your globals, and
+  rewritten about 2 s after any of those change. Settings → **AI** has **Open show folder**, **Open the AI guide**
+  and **Export Claude skill…** (a `centralight-inputs` folder for Claude Code's `.claude\skills`, or to upload
+  to Claude).
+- **Files changed outside CentraLight** (by those tools or by hand) are picked up within a second (Windows'
+  change notices, plus a check every second in case one is missed):
+  - a new or changed input or automation is used straight away, as an undo step ("Changed outside CentraLight:
+    Pillars pulse"); Ctrl+Z puts the old version back and saves it over the file;
+  - a file that can't be used keeps the last good version, and its tile gets a red warning badge (the tooltip
+    says what's wrong); fixing the file clears it;
+  - a deleted file removes the input (undoable);
+  - CentraLight's own saves are recognised and ignored;
+  - if you're editing that same input in the Editor and your latest change isn't saved yet, it asks which to keep.
+
+Checked with real AI agents: two Claude agents (Haiku and Sonnet), each acting as Claude Code in a scratch copy of
+a show folder, were asked for looks in plain words and followed `AI_GUIDE.md` on their own. Both wrote inputs that
+CentraLight accepted first time and that do what was asked: the pillars pulsing between deep purple and the accent
+colour at the `speed` global, and a sunset gradient drifting across the room with a white glow over the top lights,
+key lights at 60 % and a 4-second fade (plus an edit to Follow screen's transition). What they found unclear went
+into the guide: which settings each fill type uses, how to move a gradient (with a new example), what a rate means,
+how house levels fade, which optional settings there are, and that a new input needs nothing else.
+
+Problems the tests (and those agents) found and that are fixed:
+- **Dragging a speed made the lights flicker.** `wave(time, speed)` worked out its place in the cycle from the
+  whole time × speed, so any change of speed jumped to somewhere else in the cycle (dragging the slider in
+  Wednesday's step 11 would have flickered). `wave`, `pulse`, `saw`, `tri` and `square` now keep their place when
+  their rate changes, so the pace changes smoothly; with a steady rate they give exactly the same values as before.
+  This works on the lights, in the Editor and in the previews.
+- Undoing an outside change didn't write the old version back to the file (CentraLight still thought the file
+  held the old version), and a file added from outside then deleted wasn't noticed. Fixed: CentraLight now notes
+  what's on disk when it takes in an outside change.
+- Two saves close together could have made CentraLight take its own first save for an outside change. It now
+  remembers what it wrote for a few seconds.
+- The tile's new sparkle didn't fit next to the overlay buttons at 1280×720, which squashed buttons 1–4 (and the
+  narrowest possible tile was already a little too narrow before). The overlay buttons are slimmer and tiles are
+  at least 200 px wide; a test now checks the narrowest tile.
+- Disabled blue buttons (e.g. **Add** before there's a usable reply) still looked clickable. They're dimmed now.
+- Under a narrow light preview (the AI window at 200 % scaling), the second house light showed its bulb but no
+  name or level. The house lights now share the width, long names are shortened with "…", and the levels
+  always show.
 
 ## M4 Automations and always running — done
 
@@ -97,8 +162,7 @@ What's there:
 - **Local variables** (Input tab): an input's own numbers or colours, which can use each other (in any order);
   two that use each other in a circle are marked.
 - **Time**: `time` (seconds since the input started), `t`, and `audio.*` (0 until M8 adds audio).
-- **Stream Deck / phone remote** (`centralight
-emote.py`): `http://127.0.0.1:8746/` lists every URL with big
+- **Stream Deck / phone remote** (`centralight/remote.py`): `http://127.0.0.1:8746/` lists every URL with big
   buttons; each action is a plain GET (`/api/input/<id>`, `/cut`, `/overlay/1`, `/api/var/<name>?value=…`,
   `/api/house/key-lights?level=0.6`, `/api/master`, `/api/blackout/toggle`, `/api/state`…). It runs on its own
   thread, so it works while the window is minimised or a dialog is open (tested). A **Remote :8746** chip in the
@@ -315,6 +379,16 @@ Problems the tests found and that are fixed:
   `festoon` / `key-lights` or their fixture ids.
 - **Inputs switch on house lights they mention** when they go on Base (otherwise a keyframed level on a light
   that was switched off would never show).
+- **AI without API keys**: CentraLight never talks to an AI service itself. You copy the prompt out and the reply
+  back (the plan's route 1), or an AI tool edits the show folder (route 2). Nothing to pay for or sign up to, and
+  nothing leaves the PC except what you paste.
+- **The AI guide** is only rewritten when its text would change, so tools watching the folder aren't disturbed.
+  It also covers automations, so Claude Code can write those too.
+- **A clash with the Editor** (a file changes outside while you're editing that input) only asks when your
+  latest change there hasn't been saved yet. Changes are saved a second and a half after you make them, so in
+  practice it rarely asks; otherwise the file's version is taken, as one undo step.
+- **Try it on the lights** shows only the AI's input (like the Editor's "Show on lights") and stops when the AI
+  window closes, whichever way it closes.
 
 ## Problems
 
@@ -325,5 +399,5 @@ Problems the tests found and that are fixed:
 
 ## Next
 
-- M5: AI inputs (an AI guide kept in the show folder, "Create with AI" / "Edit with AI" by copy and paste, and
-  inputs files edited by Claude Code or Cursor appearing live, with Ctrl+Z to undo them).
+- M6: timed mode and keyframes (inputs that play for a set length, with elements placed along a timeline,
+  settings that change over time, and the Video element).

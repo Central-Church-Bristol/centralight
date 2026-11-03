@@ -75,6 +75,8 @@ class EditorRenderer:
         self._running = False
         self._thread: threading.Thread | None = None
         self._seq = 0
+        self._memory_key: tuple | None = None  # (input id, started): one memory per playback, like the engine's
+        self._memory: dict = {}
 
     def start(self) -> None:
         if self._running:
@@ -104,7 +106,9 @@ class EditorRenderer:
             ctx.sampler = sampler_for(show.fixtures, ctx.sampler, ctx.width, ctx.height)
             ctx.globals = request.globals
         now = time.monotonic()
-        instance = Instance(inp, request.started)
+        if self._memory_key != (inp.id, request.started):
+            self._memory_key, self._memory = (inp.id, request.started), {}
+        instance = Instance(inp, request.started, self._memory)
         result = render_input(instance, now, self._big)
         small = render_input(instance, now, self._small)
         colours = self._small.sampler.colours(small)
@@ -114,7 +118,7 @@ class EditorRenderer:
             element = found[2]
             t = instance.time(now)
             self._big.time = t
-            scope = scope_for(inp, t, request.globals, self._big.audio)
+            scope = scope_for(inp, t, request.globals, self._big.audio, self._memory)
             scope.element = f"{inp.id}/{element.get('id', '?')}"
             with use_scope(scope):
                 layer = render_element(element, self._big, use_mask=False)
