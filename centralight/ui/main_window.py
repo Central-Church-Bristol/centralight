@@ -325,6 +325,7 @@ class MainWindow(QWidget):
             return  # hidden in the tray: nothing to draw
         self.header.set_frame(frame)
         self._update_ndi_chip(frame)
+        self._update_audio_chip(frame)
         self.dashboard.set_frame(frame)
         self.editor_page.set_frame(frame)
         self.automation_page.set_frame(frame)
@@ -342,6 +343,27 @@ class MainWindow(QWidget):
                 self._pending_live = frame.live
                 if not self._live_timer.isActive():
                     self._live_timer.start(LIVE_SAVE_DELAY_MS)
+
+    def _update_audio_chip(self, frame: EngineFrame) -> None:
+        if frame.audio_state == "listening":
+            level = round(float(frame.audio.get("level", 0.0)) * 100)
+            self.header.set_chip("audio", STATE_OK, "Audio", f"Listening to {frame.audio_detail}\nLoudness now {level} %")
+        elif frame.audio_state == "error":
+            self.header.set_chip("audio", STATE_ERROR, "Audio problem", frame.audio_detail)
+        else:
+            self.header.set_chip("audio", None)
+
+    def restart_audio(self) -> None:
+        """Settings changed what to listen to (or how smoothly): listen again."""
+        from ..audio import AudioCapture
+
+        old = getattr(self.engine, "audio", None)
+        if old is not None:
+            old.stop()
+        s = self.settings
+        capture = AudioCapture(s.audio_source, s.audio_attack, s.audio_release)
+        capture.start()
+        self.engine.audio = capture
 
     def _update_ndi_chip(self, frame: EngineFrame) -> None:
         statuses = list(frame.ndi.values())
@@ -384,7 +406,10 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------ settings
 
     def open_settings(self) -> None:
-        dialog = SettingsDialog(self.settings, self.show_data.folder, self, show=self.show_data)
+        from ..audio import list_sources
+
+        dialog = SettingsDialog(self.settings, self.show_data.folder, self, show=self.show_data, audio_sources=list_sources(),
+                                audio_values=lambda: dict(self.last_frame.audio) if self.last_frame is not None else {})
         result = dialog.exec()
         if dialog.preview_requested:
             self.open_preview()
@@ -394,7 +419,11 @@ class MainWindow(QWidget):
         before = self._output_key()
         remote_before = self._remote_key()
         startup_before = self.settings.start_with_windows
+        audio_before = (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release)
         dialog.apply_to(self.settings)
+        if (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release) != audio_before:
+            log_info(f"Audio source: {self.settings.audio_source or 'off'}")
+            self.restart_audio()
         if self._output_key() != before:
             log_info(f"Output changed to {self.settings.output}")
             self.output.set_spec(device_spec(self.settings, universe_size(self.show_data.fixtures)))
@@ -704,6 +733,9 @@ class MainWindow(QWidget):
         if close_sources is not None:
             close_sources()
         videos.close()  # stop the video readers
+        audio = getattr(self.engine, "audio", None)
+        if audio is not None:
+            audio.stop()
         self.document.close()
         log_info(f"CentraLight closed ({'lights off' if lights_off else 'lights left as they were'})")
         if self._save_files:

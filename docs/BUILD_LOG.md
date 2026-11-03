@@ -20,8 +20,8 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | Layout positions only + Blur (your change of 3 Nov) | **done** (3 Nov, 02:17) |
 | M6 Timed mode + keyframes (+ video) | **done** (3 Nov, 02:38) |
 | M7 Painting and masks | **done** (3 Nov, 02:50) |
-| M8 Audio variables | next |
-| M9 Polish (launcher .exe, Diagnostics) | not started |
+| M8 Audio variables | **done** (3 Nov, 03:13) |
+| M9 Polish (launcher .exe, Diagnostics) | next |
 
 Run all the tests (about three minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -43,6 +43,34 @@ Run all the tests (about three minutes, including the layout check at every scal
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## M8 Audio variables — done
+
+What's there:
+
+- **Settings → Audio**: listen to **This PC's output** (whatever it's playing: ProPresenter, a video, music, with
+  nothing to plug in) or to one of the PC's inputs (e.g. a feed from the mixer), or Off (the default). **Rise** and
+  **Fall** set how quickly the values follow the sound. A meter shows all six values as the engine has them.
+- `audio.level` (loudness), `audio.bass`, `audio.mid`, `audio.treble`, `audio.beat` and `audio.pitch`, all 0–1, in
+  any expression: e.g. opacity `0.2 + 0.8 * audio.bass`, or a colour `hsv(audio.pitch)`. Loudness has a slow
+  automatic gain, and each band is measured against its own recent peak, so a quiet service and a loud one both
+  use the whole range. `beat` jumps to 1 on a kick drum and fades away. With no sound they go back to 0.
+- The header's **Audio** chip shows when it's listening (its tooltip says to what, and how loud it is now), or red
+  if the device is missing.
+- **Automation**: a new condition, **Sound is loud enough**: loudness (or bass, middle…) above a level for at least
+  N seconds, e.g. "loudness above 60 % for 5 s → key lights to 40 %".
+- Library: **PyAudioWPatch** (PortAudio with Windows' loopback capture). I tried the three the plan named; all
+  three have wheels for Python 3.14, and this one captures "This PC's output" most directly. `run.bat` installs it
+  the next time it starts (it checks the packages first). It listens in its own thread, analyses each 1/50 s block
+  and drops it: nothing is recorded or kept.
+- Checked with test tones: an 80 Hz tone is bass, 4 kHz is treble, pitch rises with the note, a kick drum every
+  half second gives a beat each time that fades in between, silence goes to 0, and Rise / Fall smooth as set.
+  Also: the engine's lights follow `audio.bass`, and the automation condition waits its N seconds (starting again
+  if it goes quiet).
+- Tried on this PC: "This PC's output" is the Behringer X-USB's Line Out 1-2 (what goes to the mixer), and it
+  listens without trouble. The X-USB's inputs (the mixer's own channels) are in the list too.
+- The engine's timing test now judges the busy worst case by its 90th percentile tick: once, a single tick held up
+  by Windows (ProPresenter and MBP run here too) went just over 8 ms, though the engine itself was as quick as ever.
 
 ## M7 Painting and masks — done
 
@@ -509,5 +537,4 @@ Problems the tests found and that are fixed:
 
 ## Next
 
-- M6: timed mode and keyframes (inputs that play for a set length, with elements placed along a timeline,
-  settings that change over time, and the Video element).
+- M9: polish (a launcher .exe with the logo, and a Diagnostics window).

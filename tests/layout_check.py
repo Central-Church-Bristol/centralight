@@ -101,9 +101,17 @@ def main() -> int:
                     window.editor_page.open_input("stage-shapes")
                     states = ["editor-element", "editor-brush", "editor-ndi", "editor-mask", "editor-input", "editor-globals",
                               "editor-timed", "editor-timed-input"]
+                if key == "automation":  # both sample automations: the second has every kind of condition (sound too)
+                    states = ["automation", "automation-evening"]
                 for state in states:
                     window.show_page(key)
-                    if state == "editor-timed":
+                    if state == "automation-evening":
+                        page = window.automation_page
+                        page.selected = "evening"
+                        page._build_editor(page.show_data)
+                        page._list_key = ()
+                        page._fill_list(page.show_data)
+                    elif state == "editor-timed":
                         window.editor_page.open_input("christmas")
                         window.editor_page.set_playing(False)
                         window.editor_page.seek(5.0)

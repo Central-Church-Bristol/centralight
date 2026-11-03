@@ -98,7 +98,11 @@ def main(argv: list[str] | None = None) -> int:
     sources = SourceManager()
     output = DmxOutputThread(device_spec(settings, universe_size(show.fixtures)))
     output.start()
-    engine = Engine(show, output, live, sources=sources, initial_base=FOLLOW_SCREEN_ID)
+    from .audio import AudioCapture
+
+    audio = AudioCapture(settings.audio_source, settings.audio_attack, settings.audio_release)
+    audio.start()  # off unless Settings → Audio says what to listen to
+    engine = Engine(show, output, live, sources=sources, audio=audio, initial_base=FOLLOW_SCREEN_ID)
     engine.start()
     log_info(f"CentraLight started: show {show.folder}, output {settings.output}")
 

@@ -53,6 +53,7 @@ CONDITIONS: dict[str, str] = {
     "variable": "A global variable",
     "ndi": "An NDI feed is there",
     "blackout": "Blackout is on",
+    "audio": "Sound is loud enough",
     "app_started": "CentraLight starts",
     "pc_startup": "The PC starts",
     "pc_woke": "The PC wakes from sleep",
@@ -74,6 +75,7 @@ DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 WHERE = ("base", "overlay1", "overlay2", "overlay3", "overlay4", "anywhere")
 COMPARES = ("=", "!=", "<", ">", "on", "off")
+AUDIO_BANDS = ("level", "bass", "mid", "treble", "beat", "pitch")
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 LOOP_RUNS = 5  # more than this many runs...
@@ -144,6 +146,15 @@ def check_condition(cond: Mapping[str, Any]) -> list[str]:
     elif kind == "ndi":
         if not isinstance(cond.get("source"), str) or not cond.get("source"):
             problems.append('"source" must be an NDI feed name')
+    elif kind == "audio":
+        if cond.get("band", "level") not in AUDIO_BANDS:
+            problems.append(f'"band" must be one of {", ".join(AUDIO_BANDS)}')
+        above = cond.get("above", 0.5)
+        if not isinstance(above, (int, float)) or isinstance(above, bool) or not 0.0 <= above <= 1.0:
+            problems.append('"above" must be a number from 0 to 1')
+        seconds = cond.get("for", 0)
+        if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or not 0 <= seconds <= 3600:
+            problems.append('"for" must be a number of seconds')
     return problems
 
 
@@ -220,6 +231,11 @@ def describe_condition(cond: Mapping[str, Any], show: Show | None = None) -> str
         text = f"{name} is {compare}" if compare in ("on", "off") else f"{name} {compare} {cond.get('value')}"
     elif kind == "ndi":
         text = f"{cond.get('source', '?')} is sending"
+    elif kind == "audio":
+        band = cond.get("band", "level")
+        seconds = cond.get("for", 0)
+        text = (f"sound ({band}) above {round(float(cond.get('above', 0.5)) * 100)} %"
+                + (f" for {seconds:g} s" if isinstance(seconds, (int, float)) and seconds > 0 else ""))
     return f"not ({text})" if cond.get("invert") else text
 
 
@@ -293,6 +309,7 @@ class Situation:
     variables: Mapping[str, Any] = field(default_factory=dict)
     ndi: Mapping[str, bool] = field(default_factory=dict)  # feed name (lower case) -> sending now
     blackout: bool = False
+    audio: Mapping[str, float] = field(default_factory=dict)  # audio.level and friends, now
     events: frozenset[str] = frozenset()  # app_started, pc_startup, pc_woke happening now
     previous_local: datetime | None = None  # local time at the last check (to spot clock changes)
 
@@ -422,6 +439,7 @@ class AutomationRunner:
         self.pending: list[tuple[float, int, str, dict]] = []  # (due engine time, order, automation id, action)
         self._order = 0
         self._last_check = -1e9
+        self._audio_since: dict[tuple[str, int], float] = {}  # (automation, condition) -> when the sound went above
         self._last_local: datetime | None = None
 
     # --- saving and restoring (live.json)
@@ -518,9 +536,21 @@ class AutomationRunner:
             result = bool(situation.ndi.get(str(cond.get("source", "")).lower()))
         elif kind == "blackout":
             result = situation.blackout
+        elif kind == "audio":
+            result = self._audio_true(automation, index, cond, situation)
         else:
             result = False
         return result != bool(cond.get("invert", False))
+
+    def _audio_true(self, automation: Automation, index: int, cond: Mapping[str, Any], situation: Situation) -> bool:
+        """Sound above a level, for at least N seconds (so a single loud moment doesn't count)."""
+        key = (automation.id, index)
+        value = float(situation.audio.get(str(cond.get("band", "level")), 0.0) or 0.0)
+        if value <= float(cond.get("above", 0.5)):
+            self._audio_since.pop(key, None)
+            return False
+        since = self._audio_since.setdefault(key, situation.now)
+        return situation.now - since >= float(cond.get("for", 0) or 0)
 
     def _time_true(self, automation: Automation, index: int, cond: Mapping[str, Any], situation: Situation) -> bool:
         start, end = parse_time(cond.get("from")), parse_time(cond.get("to"))
@@ -730,6 +760,8 @@ def default_condition(kind: str, show: Show) -> dict[str, Any]:
         return {"type": "variable", "name": first, "compare": "=", "value": 1}
     if kind == "ndi":
         return {"type": "ndi", "source": "Media Background Pane"}
+    if kind == "audio":
+        return {"type": "audio", "band": "level", "above": 0.6, "for": 5}
     return {"type": kind}
 
 

@@ -73,6 +73,7 @@ EVENT_HINTS = {
     "pc_woke": "When the PC wakes from sleep.",
     "blackout": "While Blackout is on.",
 }
+AUDIO_BAND_LABELS = (("level", "loudness"), ("bass", "bass"), ("mid", "middle"), ("treble", "treble"), ("beat", "beat"), ("pitch", "pitch"))
 WHERE_LABELS = (("anywhere", "anywhere"), ("base", "on Base")) + tuple((f"overlay{n}", f"in Overlay {n}") for n in range(1, 5))
 COMPARE_LABELS = (("=", "is"), ("!=", "is not"), ("<", "is below"), (">", "is above"), ("on", "is on"), ("off", "is off"))
 TRANSITION_LABELS = (("", "its own transition"), ("cut", "a cut")) + tuple((k, k.title()) for k in TRANSITION_KINDS if k != "cut")
@@ -284,6 +285,16 @@ class RuleRow(QFrame):
                 source.setCurrentText(str(d.get("source", "Media Background Pane")))
                 source.currentTextChanged.connect(lambda text: self._set("source", text.strip()))
                 self._add(source, self._text("is sending pictures"))
+            elif kind == "audio":
+                band = _combo(AUDIO_BAND_LABELS, d.get("band", "level"))
+                band.currentIndexChanged.connect(lambda _i: self._set("band", band.currentData()))
+                above = _spin(0.0, 100.0, float(d.get("above", 0.6)) * 100, " %", 0)
+                above.valueChanged.connect(lambda v: self._set("above", round(v / 100, 3)))
+                hold = _spin(0.0, 600.0, float(d.get("for", 5)), " s", 0)
+                hold.setToolTip("How long it has to stay that loud first (so one loud moment doesn't count)")
+                hold.valueChanged.connect(lambda v: self._set("for", v))
+                self._add(band, self._text("above"), above, self._text("for"), hold)
+                self._note("Needs sound: Settings → Audio.")
             else:
                 self._note(EVENT_HINTS.get(kind, ""))
             return

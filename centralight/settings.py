@@ -44,6 +44,9 @@ class Settings:
     remote_lan: bool = False
     remote_key: str = ""
     start_with_windows: bool = False  # in the tray at sign-in; switched on by hand (WEDNESDAY_TESTS.md) once it has been tried
+    audio_source: str = ""  # "" off, "output" this PC's output, or an input's name (audio.AUDIO sources)
+    audio_attack: float = 0.05  # seconds for audio values to rise
+    audio_release: float = 0.3  # ... and to fall
     geometry: list[int] | None = None
     maximized: bool = False
     splitters: dict[str, list[int]] = field(default_factory=dict)
@@ -77,6 +80,11 @@ class Settings:
         self.remote_lan = bool(self.remote_lan)
         self.remote_key = str(self.remote_key or "")
         self.start_with_windows = bool(self.start_with_windows)
+        self.audio_source = str(self.audio_source or "")
+        for name, default in (("audio_attack", defaults.audio_attack), ("audio_release", defaults.audio_release)):
+            value = getattr(self, name)
+            ok = isinstance(value, (int, float)) and not isinstance(value, bool) and 0.0 <= value <= 3.0
+            setattr(self, name, float(value) if ok else default)
         self.maximized = bool(self.maximized)
         geometry = self.geometry
         if not (isinstance(geometry, list) and len(geometry) == 4 and all(isinstance(v, int) for v in geometry)):

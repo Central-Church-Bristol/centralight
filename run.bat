@@ -4,7 +4,7 @@ cd /d "%~dp0"
 if not exist ".venv\Scripts\pythonw.exe" (
   py -3 -m venv .venv
 )
-".venv\Scripts\python.exe" -c "import PySide6, cv2, numpy, NDIlib, serial, stupidArtnet" 2>nul || ".venv\Scripts\python.exe" -m pip install -r requirements.txt
+".venv\Scripts\python.exe" -c "import PySide6, cv2, numpy, NDIlib, serial, stupidArtnet, pyaudiowpatch" 2>nul || ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if not exist "fonts\FuturaCyrillicBook.ttf" call :copyfonts
 start "" ".venv\Scripts\pythonw.exe" main.py %*
 exit /b

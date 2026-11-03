@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -75,6 +77,8 @@ class SettingsDialog(QDialog):
         show_folder: str,
         parent: QWidget | None = None,
         ports: list[tuple[str, str]] | None = None,
+        audio_sources: list[tuple[str, str]] | None = None,
+        audio_values=None,
         show=None,
     ) -> None:
         super().__init__(parent)
@@ -180,6 +184,46 @@ class SettingsDialog(QDialog):
         self.start_with_windows.setToolTip("Then the lights and automations look after themselves after a restart")
 
         # --- quitting
+        # --- audio: what audio.level and friends listen to
+        audio_box = QGroupBox("Audio: sound for audio.* in expressions")
+        audio_form = QFormLayout(audio_box)
+        self.audio_source = QComboBox()
+        for value, label in (audio_sources or [("", "Off"), ("output", "This PC's output (what it's playing)")]):
+            self.audio_source.addItem(label, value)
+        index = self.audio_source.findData(settings.audio_source)
+        if index < 0 and settings.audio_source:  # a device that isn't plugged in now: keep it
+            self.audio_source.addItem(f"{settings.audio_source} (not found)", settings.audio_source)
+            index = self.audio_source.count() - 1
+        self.audio_source.setCurrentIndex(max(0, index))
+        self.audio_source.setToolTip("This PC's output follows whatever it plays (nothing to plug in); or pick an input, such as a mixer feed")
+        audio_form.addRow("Listen to", self.audio_source)
+        self.audio_attack = QDoubleSpinBox()
+        self.audio_attack.setRange(0.0, 2.0)
+        self.audio_attack.setSingleStep(0.05)
+        self.audio_attack.setSuffix(" s")
+        self.audio_attack.setValue(settings.audio_attack)
+        self.audio_attack.setToolTip("How quickly the values rise")
+        self.audio_release = QDoubleSpinBox()
+        self.audio_release.setRange(0.0, 3.0)
+        self.audio_release.setSingleStep(0.05)
+        self.audio_release.setSuffix(" s")
+        self.audio_release.setValue(settings.audio_release)
+        self.audio_release.setToolTip("How slowly they fall back")
+        smoothing = QHBoxLayout()
+        smoothing.addWidget(QLabel("Rise"))
+        smoothing.addWidget(self.audio_attack)
+        smoothing.addWidget(QLabel("Fall"))
+        smoothing.addWidget(self.audio_release)
+        smoothing.addStretch(1)
+        audio_form.addRow("Smoothing", smoothing)
+        self.audio_meter = AudioMeter()
+        audio_form.addRow("Now", self.audio_meter)
+        self._audio_values = audio_values or (lambda: {})
+        self._meter_timer = QTimer(self)
+        self._meter_timer.setInterval(100)
+        self._meter_timer.timeout.connect(lambda: self.audio_meter.set_values(self._audio_values()))
+        self._meter_timer.start()
+
         quit_box = QGroupBox("Starting and quitting")
         self.quit_action = QComboBox()
         for value, label in QUIT_LABELS:
@@ -246,6 +290,7 @@ class SettingsDialog(QDialog):
         content_layout.setContentsMargins(0, 0, 6, 0)
         content_layout.addWidget(output_box)
         content_layout.addWidget(remote_box)
+        content_layout.addWidget(audio_box)
         content_layout.addWidget(quit_box)
         content_layout.addWidget(files_box)
         content_layout.addWidget(ai_box)
@@ -310,3 +355,53 @@ class SettingsDialog(QDialog):
         settings.remote_port = self.remote_port.value()
         settings.remote_lan = self.remote_lan.isChecked()
         settings.remote_key = self.remote_key.text().strip() or new_key()
+        settings.audio_source = str(self.audio_source.currentData() or "")
+        settings.audio_attack = self.audio_attack.value()
+        settings.audio_release = self.audio_release.value()
+
+
+class AudioMeter(QWidget):
+    """Six small bars: loudness, bass, middle, treble, beat and pitch, as the engine has them now."""
+
+    NAMES = (("level", "Loud"), ("bass", "Bass"), ("mid", "Mid"), ("treble", "Treble"), ("beat", "Beat"), ("pitch", "Pitch"))
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._values: dict = {}
+        self.setMinimumHeight(self.fontMetrics().height() * 2 + 30)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setToolTip("What audio.level, audio.bass… are right now (0 when nothing is playing)")
+
+    def set_values(self, values) -> None:
+        values = dict(values or {})
+        if values != self._values:
+            self._values = values
+            self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QPainter
+
+        from . import theme
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        fm = self.fontMetrics()
+        count = len(self.NAMES)
+        gap = 8
+        width = (self.width() - gap * (count - 1)) / count
+        bar_h = self.height() - fm.height() - 6
+        for i, (key, label) in enumerate(self.NAMES):
+            x = i * (width + gap)
+            box = QRectF(x, 0, width, bar_h)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(theme.CARD))
+            painter.drawRoundedRect(box, 3, 3)
+            value = min(1.0, max(0.0, float(self._values.get(key, 0.0) or 0.0)))
+            painter.setBrush(QColor(theme.ACCENT))
+            painter.drawRoundedRect(QRectF(x, bar_h * (1 - value), width, bar_h * value), 3, 3)
+            painter.setPen(QColor(theme.TEXT_2))
+            painter.drawText(QRectF(x, bar_h + 4, width, fm.height()), Qt.AlignmentFlag.AlignHCenter,
+                             fm.elidedText(label, Qt.TextElideMode.ElideRight, int(width)))
+        painter.end()
+

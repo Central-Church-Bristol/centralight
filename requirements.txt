@@ -4,3 +4,4 @@ ndi-python>=6.0
 stupidArtnet>=1.6
 pyserial>=3.5
 PySide6-Essentials==6.11.*
+PyAudioWPatch>=0.2.12

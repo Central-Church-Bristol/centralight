@@ -220,6 +220,16 @@ Worship blue.
 - [ ] Click Follow screen's NDI element → **Select**: drag the picture, drag a corner to make it smaller, drag the
       knob to turn it. The lights follow. Ctrl+Z puts it back.
 
+## 14e. Sound
+
+- [ ] Settings (gear) → **Audio** → Listen to **This PC's output** → OK. The header shows **Audio**. Play some music
+      (or a video in ProPresenter): Settings → Audio's meter moves.
+- [ ] Editor → New input → Paint element → **=** next to **Opacity** → `0.15 + 0.85 * audio.bass` → **Use it**. Send
+      it to Base: the lights pulse with the bass. Try `hsv(audio.pitch)` on the colour, and `audio.beat` on opacity.
+- [ ] If it's too twitchy or too slow, change **Rise** / **Fall** in Settings → Audio and note what you prefer.
+- [ ] (Optional) If there's a feed from the mixer into the PC, pick it in Settings → Audio instead and try again.
+- [ ] Note the CPU in Task Manager while it listens.
+
 ## 15. Always running: the tray, a second launch, sleep
 
 - [ ] Close the window (✕): CentraLight keeps running in the tray by the clock (a message says so the first time);

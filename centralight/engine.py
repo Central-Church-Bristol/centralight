@@ -23,6 +23,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from types import MappingProxyType
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -85,6 +86,7 @@ from .slot import LatestSlot
 from .timing import sleep_until
 
 TICK_RATE = 40
+AUDIO_OFF = MappingProxyType({"level": 0.0, "bass": 0.0, "mid": 0.0, "treble": 0.0, "beat": 0.0, "pitch": 0.0})
 PUBLISH_INTERVAL = 0.1  # seconds between EngineFrames for the screen
 PREVIEW_INTERVAL = 0.2  # seconds between preview pictures for the screen
 TIDY_INTERVAL = 1.0
@@ -181,6 +183,9 @@ class EngineFrame:
     base_id: str = ""  # its input id ("" = nothing)
     base_progress: float | None = None  # 0-1 while Base is transitioning
     playing: Mapping[str, float] = EMPTY  # timed inputs on Base or in an overlay -> how far through (0-1)
+    audio: Mapping[str, float] = EMPTY  # audio.level and friends, now
+    audio_state: str = "off"  # off, listening, error
+    audio_detail: str = ""  # what it's listening to, or what's wrong
     overlays: tuple[OverlayView, ...] = ()
     solo: str = ""  # input shown alone on the lights ("" = none)
     live_inputs: frozenset[str] = frozenset()  # inputs on Base or in an overlay right now
@@ -223,6 +228,7 @@ class Engine:
         live: LiveState | None = None,
         *,
         sources: Any | None = None,
+        audio: Any | None = None,
         initial_base: str | None = None,
         clock: Callable[[], float] = time.perf_counter,
         rate: int = TICK_RATE,
@@ -232,12 +238,14 @@ class Engine:
     ) -> None:
         """output: a DmxOutputThread (anything with submit(bytes) and status()).
         sources: a SourceManager (NDI feeds), or None for no video.
+        audio: an audio.AudioCapture (anything with latest() -> {"level": ..., ...}, state and detail), or None.
         initial_base: an input to put on Base when there's no live state (the very first run).
         wall / local_time / uptime: the real clock, local time (with the clock changes) and how long
         Windows has been running, for automations (tests pass fakes)."""
         self.show = show
         self.output = output
         self.sources = sources if sources is not None else _NoSources()
+        self.audio = audio  # replaced when Settings change the audio source (read once per tick)
         self.frames: LatestSlot[EngineFrame] = LatestSlot(EngineFrame())
         self._clock = clock
         self._rate = rate
@@ -380,6 +388,8 @@ class Engine:
         applied = self._drain(now)
         if self._fault_hook is not None:
             self._fault_hook()
+        audio = self.audio
+        self._ctx.audio = MappingProxyType(audio.latest()) if audio is not None else AUDIO_OFF
         applied = self._automations(now) or applied
         applied = self._finish_timed(now) or applied
         self._update_driven_house(now)
@@ -594,7 +604,7 @@ class Engine:
             self._auto_key = key
             situation = Situation(
                 now=wall, local=self._local_time(wall), base=base, overlays=overlays, variables=self._ctx.globals,
-                ndi=dict(self._ndi_sending), blackout=self._blackout, events=frozenset(events),
+                ndi=dict(self._ndi_sending), blackout=self._blackout, audio=dict(self._ctx.audio), events=frozenset(events),
             )
             self._first_check = False
             self._woke = False
@@ -805,6 +815,9 @@ class Engine:
             base_id=current.input.id if current is not None else "",
             base_progress=self._base.progress(now),
             playing=frozen_map(playing),
+            audio=self._ctx.audio,
+            audio_state=getattr(self.audio, "state", "off") if self.audio is not None else "off",
+            audio_detail=getattr(self.audio, "detail", "") if self.audio is not None else "",
             overlays=tuple(overlays),
             solo=self._solo.input.id if self._solo is not None else "",
             live_inputs=frozenset(live_inputs),
