@@ -419,12 +419,23 @@ class ShowDocument(QObject):
             self._save_timer.start()
 
     def pause_saving(self, paused: bool) -> None:
-        """While a question about a changed file is on screen, nothing is saved over it."""
+        """While a question about a changed file is on screen, nothing is saved over it (retries included)."""
         self._saving_paused = paused
         if paused:
             self._save_timer.stop()
-        elif self._autosaver is not None and self._show is not self._saved:
+            self._retry_timer.stop()
+        elif self._autosaver is not None and (self._show is not self._saved or self._pending_retries()):
             self._save_timer.start()
+
+    def has_unsaved(self, kind: str, item_id: str) -> bool:
+        """Is this input (or automation, layout) changed in CentraLight and not on disk yet, or did its save fail?"""
+        if item_id in self._retry.get(kind, ()):
+            return True
+        if kind == "input":
+            return self._show.inputs.get(item_id) != self._saved.inputs.get(item_id)
+        if kind == "automation":
+            return self._show.automations.get(item_id) != self._saved.automations.get(item_id)
+        return False
 
     def _pending_retries(self) -> bool:
         return self._retry_show or any(self._retry.values())
@@ -476,6 +487,8 @@ class ShowDocument(QObject):
     def flush(self) -> None:
         """Save whatever changed since the last save (normally 1.5 s after the last change)."""
         self._save_timer.stop()
+        if self._saving_paused:
+            return  # (a question about a changed file is on screen: after it)
         if self._autosaver is None or (self._show is self._saved and not self._pending_retries()):
             return
         self._retry_timer.stop()

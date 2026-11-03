@@ -1435,5 +1435,171 @@ class SecondReviewWindowTests(unittest.TestCase):
         self.assertIn("off", document.show.inputs)
 
 
+# ---------------------------------------------------------------- the third review
+
+class ThirdReviewAutomationTests(AutomationEngineTestCase):
+    restart = AutomationReviewTests.restart
+    saved = AutomationReviewTests.saved
+
+    def quit_lights_off(self) -> LiveState:
+        live = self.engine.stop(lights_off=True, fade=False)
+        live.saved_at = self.clocks.wall
+        return LiveState.from_dict(json.loads(json.dumps(live.to_dict())))
+
+    def test_a_grace_period_on_a_state_condition_is_cancelled_when_it_comes_back(self) -> None:
+        lost = automation("lost", [{"type": "variable", "name": "mood", "compare": ">", "value": 0.5}],
+                          [{"do": "base", "input": "warm-welcome", "transition": "cut", "delay": 10}])
+        self.make(_dt(2026, 11, 9, 15, 0), [lost])
+        from centralight.commands import SetVariable
+
+        self.engine.submit(SendToBase("evening", cut=True))
+        self.engine.submit(SetVariable("mood", 0.8))  # e.g. "feed lost": the 10 s grace period starts...
+        self.run_until(_dt(2026, 11, 9, 15, 0, 2), step=0.5)
+        self.engine.submit(SetVariable("mood", 0.0))  # ...and it comes back after 2 s
+        self.run_until(_dt(2026, 11, 9, 15, 0, 20), step=0.5)
+        self.assertEqual(self.base(), "evening")  # the waiting step was cancelled
+
+    def test_a_feed_coming_back_at_night_doesnt_lift_a_quit_blackout(self) -> None:
+        follow = automation("follow", [{"type": "variable", "name": "mood", "compare": ">", "value": 0.5}],
+                            [{"do": "base", "input": "ping", "transition": "cut"}])  # (a state condition, like a feed)
+        both = automation("both", [{"type": "app_started"}, {"type": "days", "days": ["mon"]}],
+                          [{"do": "base", "input": "pong", "transition": "cut"}])
+        self.make(_dt(2026, 11, 8, 20, 0), [follow, both])
+        self.run_until(_dt(2026, 11, 8, 20, 1))
+        live = self.quit_lights_off()
+        self.clocks.advance(7 * 3600)  # Monday 03:00
+        engine = self.restart(live)
+        from centralight.commands import SetVariable
+
+        engine.submit(SetVariable("mood", 0.9))
+        self.clocks.advance(5)
+        engine.tick()
+        self.clocks.advance(5)
+        engine.tick()
+        self.assertEqual([h.automation for h in engine._runner.history if h.what == "ran"][-2:], ["both", "follow"])
+        self.assertTrue(engine._blackout)  # neither the start event nor the state condition lifted it
+
+    def test_a_clicked_blackout_stays_clicked_through_a_lights_off_quit(self) -> None:
+        self.make(_dt(2026, 11, 8, 20, 0), [])
+        self.engine.submit(SetBlackout(on=True))  # clicked after the evening service
+        self.run_until(_dt(2026, 11, 8, 20, 1))
+        live = self.quit_lights_off()  # then Windows shuts down with "Turn the lights off" remembered
+        self.assertTrue(live.blackout)
+        self.assertFalse(live.blackout_by_quit)
+
+    def test_a_start_event_with_a_feed_condition_still_runs(self) -> None:
+        fallback = automation("fallback", [{"type": "app_started"}, {"type": "ndi", "source": "Media Background Pane", "invert": True}],
+                              [{"do": "base", "input": "warm-welcome", "transition": "cut"}], logic="any")
+        self.make(_dt(2026, 11, 9, 15, 0), [fallback])
+        self.run_until(_dt(2026, 11, 9, 15, 0, 10), step=1.0)
+        self.assertEqual(len(self.runs("fallback")), 1)
+        self.assertEqual(self.base(), "warm-welcome")
+
+    def test_an_any_automation_with_a_start_event_still_catches_up_next_week(self) -> None:
+        service = automation("service", [{"type": "app_started"}, {"type": "days", "days": ["sun"]}], [{"do": "base", "input": "ping", "transition": "cut"}],
+                             logic="any")
+        self.make(_dt(2026, 11, 8, 10, 0), [service])
+        self.run_until(_dt(2026, 11, 8, 11, 0))
+        live = self.saved()
+        self.clocks.advance(7 * 86400 - 3600)  # quit mid-service; started again next Sunday at 10:00
+        engine = self.restart(live)
+        self.clocks.advance(1.0)
+        engine.tick()
+        self.assertEqual([h.what for h in engine._runner.history].count("ran"), 2)
+
+    def test_a_crash_shortly_before_the_end_still_runs_when_it_stops(self) -> None:
+        service = automation("service", SUNDAY_MORNING, [{"do": "base", "input": "warm-welcome", "transition": "cut"}],
+                             on_end=[{"do": "base", "input": "evening", "transition": "cut"}])
+        self.make(_dt(2026, 11, 8, 8, 59), [service])
+        self.run_until(_dt(2026, 11, 8, 12, 29))
+        live = self.saved()
+        live.saved_at = self.clocks.wall  # (the minute heartbeat: CentraLight was alive at 12:29)
+        self.clocks.advance(120)  # a crash at 12:29, restarted at 12:31
+        engine = self.restart(live)
+        self.clocks.advance(1.0)
+        engine.tick()
+        self.assertEqual(self.base(), "evening")  # "when it stops" ran: the range ended 1 minute after the crash
+
+
+class ThirdReviewFilesTests(unittest.TestCase):
+    setUpClass = SecondReviewFilesTests.__dict__["setUpClass"]
+    setUp = SecondReviewFilesTests.setUp
+    tearDown = SecondReviewFilesTests.tearDown
+
+    def test_a_retry_waits_for_the_reload_question_and_a_failed_save_counts_as_unsaved(self) -> None:
+        from centralight.input_edit import update_input
+
+        path = self.folder / "inputs" / "follow-screen.json"
+        os.chmod(path, stat.S_IREAD)  # held: saves fail
+        self.doc.apply(update_input(self.doc.show, "follow-screen", name="Mine"), "Rename")
+        self.doc.flush()
+        self.assertTrue(self.doc.wait_saved(10))
+        self.doc._check_saves()
+        self.assertTrue(self.doc.has_unsaved("input", "follow-screen"))  # its save failed: still unsaved
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+        asked = []
+
+        def ask(name: str) -> bool:
+            asked.append(name)
+            self.assertFalse(self.doc._retry_timer.isActive())  # no retry writes over the file meanwhile
+            self.doc.flush()  # (even if one tried)
+            self.assertIn("Theirs", path.read_text(encoding="utf-8"))
+            return True  # load theirs
+
+        watcher = FolderWatcher(self.doc, ask_reload=ask, editing=lambda: "follow-screen")
+        try:
+            theirs = input_to_dict(self.doc.show.inputs["follow-screen"])
+            theirs["name"] = "Theirs"
+            path.write_text(json.dumps(theirs), encoding="utf-8")
+            touch(path, 5)
+            watcher.check()
+            self.assertEqual(asked, ["Mine"])  # it asked (the failed save made it unsaved)
+            self.assertEqual(self.doc.show.inputs["follow-screen"].name, "Theirs")
+        finally:
+            watcher.stop()
+
+    def test_a_deleted_file_put_back_counts(self) -> None:
+        watcher = FolderWatcher(self.doc, ask_reload=lambda _name: True, editing=lambda: "")
+        try:
+            path = self.folder / "inputs" / "follow-screen.json"
+            data = path.read_bytes()
+            path.unlink()  # deleted in Explorer...
+            watcher.check()
+            self.assertNotIn("follow-screen", self.doc.show.inputs)
+            path.write_bytes(data)  # ...and restored from the Recycle Bin
+            touch(path, 5)
+            watcher.check()
+            self.assertIn("follow-screen", self.doc.show.inputs)
+        finally:
+            watcher.stop()
+
+
+class LiveStateSavingTests(unittest.TestCase):
+    setUpClass = WindowReviewTests.__dict__["setUpClass"]
+    setUp = WindowReviewTests.setUp
+    tearDown = WindowReviewTests.tearDown
+
+    def test_an_overlays_clock_alone_doesnt_rewrite_live_json_and_a_heartbeat_does(self) -> None:
+        from dataclasses import replace as _replace
+
+        window = self.window
+        window._save_files = True
+        window._live_path = Path(self._tmp.name) / "live.json"
+        frame = self.engine.frames.get()
+        a = LiveState(show="x", overlays=[{"input": "pillars-purple", "time": 1.0}, None, None, None])
+        b = LiveState(show="x", overlays=[{"input": "pillars-purple", "time": 2.5}, None, None, None])
+        window._pending_live = a
+        window._save_live()
+        window._pending_live = None
+        window._save_live_soon(_replace(frame, live=b))
+        self.assertIsNone(window._pending_live)  # only the overlay's clock moved: nothing to save
+        window.last_frame = _replace(frame, live=b)
+        before = LiveState.load(window._live_path).saved_at
+        time.sleep(0.01)
+        window._save_live_heartbeat()  # once a minute: saved anyway, so a restart knows when it last ran
+        self.assertGreater(LiveState.load(window._live_path).saved_at, before)
+        window._save_files = False
+
+
 if __name__ == "__main__":
     unittest.main()

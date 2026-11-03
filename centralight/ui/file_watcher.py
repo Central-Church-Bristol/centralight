@@ -163,7 +163,7 @@ class FolderWatcher(QObject):
         current = document.show.inputs.get(input_id)
         if inp == saved or inp == current or document.wrote_recently("input", input_id, inp):
             return  # CentraLight's own save, or nothing new
-        if current is not None and current != saved and self._editing() == input_id:
+        if current is not None and document.has_unsaved("input", input_id) and self._editing() == input_id:
             self._asking = True
             document.pause_saving(True)  # nothing is saved over the file while the question is up
             try:
@@ -199,6 +199,9 @@ class FolderWatcher(QObject):
         show = document.show
         name = show.inputs[input_id].name
         inputs = {k: v for k, v in show.inputs.items() if k != input_id}
+        if self.folder is not None:
+            forget_written(self.folder / INPUTS_DIR / f"{input_id}.json")  # (put back later = a change)
+        document.forget_wrote("input", input_id)
         document.note_on_disk(inputs={input_id: None})
         document.apply(show.with_inputs(inputs, tuple(i for i in show.input_order if i != input_id)), f"Deleted outside CentraLight: {name}")
 
@@ -236,6 +239,9 @@ class FolderWatcher(QObject):
         show = document.show
         name = show.automations[automation_id].name
         remaining = {k: v for k, v in show.automations.items() if k != automation_id}
+        if self.folder is not None:
+            forget_written(self.folder / AUTOMATIONS_DIR / f"{automation_id}.json")
+        document.forget_wrote("automation", automation_id)
         document.note_on_disk(automations={automation_id: None})
         document.apply(show.with_automations(remaining, tuple(i for i in show.automation_order if i != automation_id)),
                        f"Deleted outside CentraLight: {name}")

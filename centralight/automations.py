@@ -422,13 +422,34 @@ def timed_continuous(automation: Automation, start: datetime, end: datetime) -> 
     def true_at(moment: datetime) -> bool:
         return AutomationRunner().matches(probe, Situation(now=0.0, local=moment))[0]  # fresh: no memory
 
-    if automation.logic == "any" and not true_at(start):
-        return True  # it matched through its other conditions, not the clock: the clock says nothing about it
     first_day = start.replace(hour=0, minute=0, second=0, microsecond=0)
     for moment in change_moments(timed, first_day, (end - first_day).days + 1):
         if start < moment <= end and not true_at(moment):
             return False
     return true_at(end)
+
+
+STATE_KINDS = ("input_live", "variable", "ndi", "blackout", "audio")  # conditions about how things are right now
+
+
+def _stop_cancels_waiting(automation: Automation) -> bool:
+    """Does a stop cancel the waiting "after N s" steps of its run? Yes if it depends on how things are (a feed, sound,
+    a variable, an input on Base, Blackout: the delay is a grace period, e.g. "feed lost for 10 s") or has a "when it
+    stops" to do instead. No for clock-only ones ("at 10:30 do this, then 2 minutes later that"), and never for an
+    event such as "CentraLight starts", which only lasts a moment."""
+    kinds = {c.get("type") for c in automation.conditions}
+    if kinds & set(EVENTS):
+        return False
+    return bool(kinds & set(STATE_KINDS)) or bool(automation.on_end)
+
+
+def lifts_restored_blackout(automation: Automation | None, results: list[bool] | None) -> bool:
+    """May this automation's run lift a Blackout left from a "Turn lights off" quit? Only a run made by a clock
+    condition that's true now (e.g. Sunday 09:00), never by a start event or by a feed coming back at 03:00."""
+    if automation is None or any(c.get("type") in EVENTS for c in automation.conditions):
+        return False
+    results = results or []
+    return any(r for c, r in zip(automation.conditions, results) if c.get("type") in TIMED_KINDS)
 
 
 def _ndi_true(source: Any, ndi: Mapping[str, bool]) -> bool:
@@ -562,6 +583,7 @@ class AutomationRunner:
         self._removed: dict[str, tuple[AutomationState, float, Automation | None]] = {}  # deleted ones (for Undo)
         self._definitions: dict[str, Automation] = {}  # each automation as last checked
         self._results: dict[str, list[bool]] = {}  # each automation's conditions at the last check
+        self._held_events: dict[str, frozenset[str]] = {}  # start events kept for automations waiting for the feeds
         self._stopped_at: float | None = None  # when the last CentraLight saved its state (from live.json)
 
     # --- saving and restoring (live.json)
@@ -767,8 +789,16 @@ class AutomationRunner:
                 self._forget_sound(automation.id)
                 continue
             if not situation.ndi_known and any(c.get("type") == "ndi" for c in automation.conditions):
-                continue  # just started: the feeds are still connecting, so "feed lost" isn't true (nor false) yet
-            matched, true = self.matches(automation, situation)
+                # just started: the feeds are still connecting, so "feed lost" isn't true (nor false) yet. A start
+                # event happening now is kept for its first real check.
+                self._held_events[automation.id] = self._held_events.get(automation.id, frozenset()) | situation.events
+                continue
+            held = self._held_events.pop(automation.id, None)
+            if held:
+                situation_now = replace(situation, events=situation.events | held)
+                matched, true = self.matches(automation, situation_now)
+            else:
+                matched, true = self.matches(automation, situation)
             restored, state.restored = state.restored, False
             start = state.since if restored else away_since
             if matched and state.matched and start is not None and not self._kept_by_untimed(automation):
@@ -784,11 +814,8 @@ class AutomationRunner:
                 continue
             state.matched = matched
             state.since = situation.now
-            if matched or (automation.on_end and not any(c.get("type") in EVENTS for c in automation.conditions)):
-                # A new run replaces whatever was waiting. A stop cancels the run's waiting actions only when there's
-                # a "when it stops" to do instead: without one, "at 10:30 do this, then later that" carries on. (An
-                # event such as "CentraLight starts" only lasts a moment: its stop never cancels anything.)
-                self._drop_pending(automation.id)
+            if matched or _stop_cancels_waiting(automation):
+                self._drop_pending(automation.id)  # (a new run replaces whatever was waiting)
             if self.paused:
                 continue  # paused: keep track quietly, run nothing
             if matched:
@@ -798,13 +825,17 @@ class AutomationRunner:
                                          count=False, phase="end")
         return now_actions
 
+    def results(self, automation_id: str) -> list[bool] | None:
+        """Each condition of an automation, true or not, at its last check."""
+        return self._results.get(automation_id)
+
     def _kept_by_untimed(self, automation: Automation) -> bool:
         """An "any" automation that's true through something other than the clock right now (a variable, an input
         on Base...): a sleep or a restart doesn't make it a new occurrence."""
         if automation.logic != "any":
             return False
         results = self._results.get(automation.id) or []
-        return any(r for c, r in zip(automation.conditions, results) if c.get("type") not in TIMED_KINDS)
+        return any(r for c, r in zip(automation.conditions, results) if c.get("type") not in TIMED_KINDS + EVENTS)
 
     def _forget_sound(self, automation_id: str) -> None:
         """A sound condition starts afresh when its automation is turned on again (not from how loud it was then)."""

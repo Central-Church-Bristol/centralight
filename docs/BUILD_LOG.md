@@ -47,6 +47,26 @@ Run all the tests (about five minutes, including the layout check at every scali
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
 
+## A third look (3 Nov, morning)
+
+A third reviewer checked that second round, and found its rules for automations around restarts too blunt in places.
+Fixed, each with a test:
+- A waiting "after N s" step is cancelled when the automation stops if the automation depends on how things are (a
+  feed, sound, a variable, an input on Base, Blackout), so "feed lost for 10 s → …" is a real grace period, or if
+  it has a "when it stops" step. Clock-only ones without one ("at 10:30 do this, then 2 minutes later that") carry on.
+- A Blackout from a "Turn lights off" quit gives way only to a run made by a clock condition that's true then (e.g.
+  Sunday 09:00), not to a feed coming back at 03:00 after a Windows restart. And a Blackout someone clicked stays
+  theirs even if CentraLight then quits with "Turn the lights off".
+- "CentraLight starts" combined with a feed condition works again (such automations wait for the feeds at startup,
+  and now keep the start event), and an "Any" automation with "CentraLight starts" in it catches up at its next
+  occurrence again.
+- A failed save counts as unsaved when "Load the changed file?" decides whether to ask, and retries wait while that
+  question is on screen.
+- live.json is saved at least once a minute, so after a crash or power cut CentraLight knows when it last ran (a
+  range that ended a minute after a crash still runs its "when it stops" at the restart). And it really does stop
+  rewriting live.json every 1.5 s while an overlay is on: half of that earlier fix was missing.
+- A deleted input or automation file that's put back (from the Recycle Bin, say) counts as a change.
+
 ## A second look at the fixes (3 Nov, morning)
 
 Two more reviewers then checked the fixes themselves, looking for anything they broke. They found more, mostly in

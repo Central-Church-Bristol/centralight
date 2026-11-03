@@ -34,7 +34,6 @@ import numpy as np
 
 from .automations import (
     EVALUATE_EVERY,
-    EVENTS,
     GUI_ACTIONS,
     STARTUP_WINDOW,
     AutomationRunner,
@@ -43,6 +42,7 @@ from .automations import (
     Situation,
     action_command,
     describe_action,
+    lifts_restored_blackout,
     system_uptime,
 )
 from .bus import Bus, Instance, OverlaySlot, composite, render_input
@@ -359,6 +359,7 @@ class Engine:
 
     def stop(self, lights_off: bool = False, fade: bool = True) -> LiveState:
         """Stop ticking. lights_off fades to black first (0.5 s). Returns the state to save."""
+        was_dark, was_by_quit = self._blackout, self._blackout_by_quit  # (a Blackout someone clicked stays theirs)
         if lights_off and fade and self._running:
             self.submit(SetBlackout(on=True))
             deadline = time.perf_counter() + BLACKOUT_FADE + 0.5
@@ -381,7 +382,8 @@ class Engine:
                 log_exception("engine final tick", exc)
         if lights_off:
             self._blackout = True
-            self._blackout_by_quit = True  # (an automation after the restart may lift this one, not a clicked one)
+            # an automation after the restart may lift a quit's Blackout, never one someone had clicked before
+            self._blackout_by_quit = was_by_quit if was_dark else True
         return self.live_state()
 
     @property
@@ -677,9 +679,8 @@ class Engine:
         if command is None:
             log_info(f"Automation {who}: couldn't {describe_action(action, self.show)} (is it still there?)", key=f"automation-skip-{who}")
             return
-        automation = self.show.automations.get(who)
-        timed = automation is not None and any(c.get("type") not in EVENTS for c in automation.conditions)
-        if self._blackout and self._blackout_restored and phase == "run" and timed and _brings_lights_up(command):
+        lifts = lifts_restored_blackout(self.show.automations.get(who), self._runner.results(who))
+        if self._blackout and self._blackout_restored and phase == "run" and lifts and _brings_lights_up(command):
             # a lights-off quit's Blackout gives way to a real run of an automation (e.g. Sunday 09:00), not to
             # "CentraLight starts" or a "when it stops" step
             log_info(f"Automation {who}: lifting the Blackout left from before CentraLight restarted")

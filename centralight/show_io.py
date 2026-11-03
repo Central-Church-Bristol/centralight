@@ -25,7 +25,7 @@ from typing import Any, Mapping
 
 from fixtures import PROFILES
 
-from .files import json_text, loads_json_bytes, read_json, write_atomic, write_json_atomic
+from .files import forget_written, json_text, loads_json_bytes, read_json, write_atomic, write_json_atomic
 from .layouts import ensure_layouts
 from .model import (
     COLOUR_PATTERN,
@@ -323,6 +323,7 @@ def delete_input_file(folder: Path, input_id: str) -> None:
     path = input_file(folder, input_id)
     if path.exists():
         path.unlink()
+    forget_written(path)  # (put back later, even exactly as it was, it's a change)
 
 
 # ---------------------------------------------------------------- layouts\<id>.json
@@ -552,6 +553,7 @@ def delete_automation_file(folder: Path, automation_id: str) -> None:
     path = automation_file(folder, automation_id)
     if path.exists():
         path.unlink()
+    forget_written(path)
 
 
 def save_layout(folder: Path, layout: Layout) -> None:

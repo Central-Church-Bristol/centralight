@@ -60,6 +60,20 @@ from .quit_dialog import QuitDialog
 from .settings_dialog import SettingsDialog
 from .widgets import STATE_ERROR, STATE_INFO, STATE_OK, STATE_WARN, install_wheel_guard
 
+LIVE_HEARTBEAT_MS = 60_000  # live.json is saved at least this often, so a restart knows when CentraLight last ran
+
+
+def _live_key(state) -> dict:
+    """What decides whether live.json needs saving again: everything except the clocks, which move every frame."""
+    data = state.to_dict()
+    data.pop("saved_at", None)
+    if data.get("base") is not None:
+        data["base"] = {"input": data["base"].get("input")}
+    data["overlays"] = [{k: v for k, v in o.items() if k != "time"} if isinstance(o, dict) else o
+                        for o in data.get("overlays") or ()]
+    return data
+
+
 ENGINE_STUCK_S = 3.0  # no new frame for this long: the engine is stuck (the lights are frozen)
 MIN_WIDTH = 1280
 MIN_HEIGHT = 720
@@ -201,6 +215,11 @@ class MainWindow(QWidget):
         self._live_timer = QTimer(self)
         self._live_timer.setSingleShot(True)
         self._live_timer.timeout.connect(self._save_live)
+        self._live_heartbeat = QTimer(self)  # (a crash or power cut is then known to the minute at the next start)
+        self._live_heartbeat.setInterval(LIVE_HEARTBEAT_MS)
+        self._live_heartbeat.timeout.connect(self._save_live_heartbeat)
+        if save_files:
+            self._live_heartbeat.start()
         self._backup_timer = QTimer(self)
         self._backup_timer.setInterval(BACKUP_INTERVAL_MS)
         self._backup_timer.timeout.connect(self._backup)
@@ -398,12 +417,7 @@ class MainWindow(QWidget):
 
     def _save_live_soon(self, frame: EngineFrame) -> None:
         if frame.live is not None and self._save_files:
-            data = frame.live.to_dict()
-            data.pop("saved_at", None)
-            if data.get("base") is not None:
-                data["base"] = {"input": data["base"].get("input")}  # the clock moves every frame: don't save for that
-            data["overlays"] = [{k: v for k, v in o.items() if k != "time"} if isinstance(o, dict) else o
-                                for o in data.get("overlays") or ()]  # (the overlays' clocks too)
+            data = _live_key(frame.live)
             if data != self._saved_live:
                 self._pending_live = frame.live
                 if not self._live_timer.isActive():
@@ -448,17 +462,18 @@ class MainWindow(QWidget):
         else:
             self.header.set_chip("ndi", STATE_ERROR, "NDI error", worst.message)
 
+    def _save_live_heartbeat(self) -> None:
+        if self.last_frame is not None and self.last_frame.live is not None and self._save_files:
+            self._pending_live = self.last_frame.live
+            self._save_live()
+
     def _save_live(self) -> None:
         state = self._pending_live
         if state is None:
             return
         try:
             state.save(self._live_path)
-            data = state.to_dict()
-            data.pop("saved_at", None)
-            if data.get("base") is not None:
-                data["base"] = {"input": data["base"].get("input")}
-            self._saved_live = data
+            self._saved_live = _live_key(state)
         except OSError as exc:
             log_exception("saving live.json", exc)
 
