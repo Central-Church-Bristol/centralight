@@ -101,7 +101,7 @@ class AutomationPageTests(unittest.TestCase):
                          {"type": "sun", "when": "before", "event": "sunrise", "minutes": -20})
         self.assertTrue(any("Today in Bristol: sunrise" in label.text() for label in row.findChildren(QLabel)))
         self.assertIn("before sunrise − 20 min", self.page.list.currentItem().text())
-        self.page._fill_upcoming(self.window.document.show, force=True)
+        self.page._fill_upcoming(force=True)
         lines = [self.page.upcoming.item(i).text() for i in range(self.page.upcoming.count())]
         # "Evening worship" is an Any automation with a sunset condition and others
         self.assertTrue(any("Evening worship (unless its other conditions are already true)" in line for line in lines), lines)

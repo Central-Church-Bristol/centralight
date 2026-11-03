@@ -313,7 +313,8 @@ class AutomationReviewTests(AutomationEngineTestCase):
 
     def test_the_pc_starts_when_windows_starts_it(self) -> None:
         self.assertGreaterEqual(system_uptime(), 0.0)  # a 64-bit number (it used to go negative after 25 days)
-        startup = automation("startup", [{"type": "pc_startup"}], [{"do": "base", "input": "ping", "transition": "cut"}])
+        # (a show's "The PC starts" is "When this show loads" now, and the show loads when the PC starts)
+        startup = automation("startup", [{"type": "show_loads"}], [{"do": "base", "input": "ping", "transition": "cut"}])
         self.make(_dt(2026, 11, 8, 8, 0), [startup])
         self.engine.tick()
         self.assertEqual(self.runs("startup"), [])  # Windows has been up an hour: not within 10 minutes
@@ -328,7 +329,7 @@ class AutomationReviewTests(AutomationEngineTestCase):
         self.assertFalse(_ndi_true("ProPresenter", {"media background pane": True}))
         feed = automation("feed", [{"type": "ndi", "source": "ProPresenter"}], [])
         self.make(_dt(2026, 11, 8, 8, 0), [feed])
-        self.assertIn("ProPresenter", Engine._ndi_names(self.show))  # kept connected, so it can be seen
+        self.assertIn("ProPresenter", self.engine._ndi_names())  # kept connected, so it can be seen
 
     def test_a_lights_off_restart_lets_automations_light_the_room(self) -> None:
         old = LiveState.from_dict({"blackout": True, "blackout_by_quit": True})  # (a live.json from before M11)
@@ -588,7 +589,7 @@ class WindowReviewTests2(unittest.TestCase):
         self.window.show_page("automation")
         page = self.window.automation_page
         page.selected = "sunday-welcome"
-        page._build_editor(self.window.document.show, force=True)
+        page._build_editor(force=True)
         process(self.app)
         row = page.rows["conditions"][1]  # 09:00-12:30
         row._set("to", "13:00")
@@ -613,7 +614,7 @@ class WindowReviewTests2(unittest.TestCase):
         show = update_automation(self.window.document.show, new_id, conditions=[{"type": "dates", "from": "03-31", "to": "04-02"}])
         self.window.document.apply(show, "dates")
         page.selected = new_id
-        page._build_editor(self.window.document.show, force=True)
+        page._build_editor(force=True)
         process(self.app)
         from PySide6.QtWidgets import QComboBox, QSpinBox
 
@@ -625,7 +626,7 @@ class WindowReviewTests2(unittest.TestCase):
         self.assertEqual(self.window.document.show.automations[new_id].conditions[0]["from"], "04-30")  # never 04-31
         show = update_automation(self.window.document.show, new_id, conditions=[{"type": "days", "days": ["sun"]}])
         self.window.document.apply(show, "days")
-        page._build_editor(self.window.document.show, force=True)
+        page._build_editor(force=True)
         process(self.app)
         row = page.rows["conditions"][0]
         self.assertFalse(row._no_days_note.isVisibleTo(row))
@@ -1110,32 +1111,33 @@ class SecondReviewAutomationTests(AutomationEngineTestCase):
         return LiveState.from_dict(json.loads(json.dumps(live.to_dict())))
 
     def test_cut_to_black_is_a_one_off_the_next_input_lights_things(self) -> None:
-        starts = automation("starts", [{"type": "app_started"}], [{"do": "base", "input": "ping", "transition": "cut"}])
-        self.make(_dt(2026, 11, 8, 20, 0), [starts])
-        self.engine.tick()  # ("CentraLight starts" ran)
+        starts = automation("starts", [{"type": "show_loads"}], [{"do": "base", "input": "ping", "transition": "cut"}])
+        self.make(_dt(2026, 11, 8, 20, 0), [starts], uptime=120.0)
+        self.engine.tick()  # ("When this show loads" ran: the PC had just started)
         self.engine.submit(ToBlack(0.0, everything=True))  # pressed by hand after the evening service
         self.run_until(_dt(2026, 11, 8, 20, 1))
         live = self.saved()
         self.assertFalse(live.quit_dark)  # (not a quit: nothing is held back)
         self.assertIsNone(live.base)
-        self.clocks.advance(7 * 3600)  # CentraLight restarts (not quit with "Turn lights off")
-        engine = self.restart(live)
+        self.clocks.advance(7 * 3600)  # the PC restarts (CentraLight wasn't quit with "Turn lights off")
+        engine = self.restart(live, started_by_windows=True)
         engine.tick()
         self.assertEqual(self.base(), "ping")  # no latch: the next input lights things again
 
     def test_a_lights_off_quit_gives_way_only_to_a_real_timed_run(self) -> None:
         service = automation("service", SUNDAY_MORNING, [{"do": "base", "input": "warm-welcome"}],
                              on_end=[{"do": "base", "input": "evening", "transition": "cut"}])
-        starts = automation("starts", [{"type": "app_started"}], [{"do": "base", "input": "ping", "transition": "cut"}])
+        starts = automation("starts", [{"type": "show_loads"}], [{"do": "base", "input": "ping", "transition": "cut"}])
         self.make(_dt(2026, 11, 8, 8, 59), [service, starts])
         self.run_until(_dt(2026, 11, 8, 12, 0))
         live = self.quit_lights_off()  # "Turn lights off" at 12:00, inside 09:00-12:30
         self.assertTrue(live.quit_dark)
-        self.clocks.advance(15 * 3600)  # Monday 03:00
-        engine = self.restart(live)
+        self.clocks.advance(15 * 3600)  # Monday 03:00: Windows Update restarts the PC
+        engine = self.restart(live, started_by_windows=True)
         self.clocks.advance(1.0)
         engine.tick()
-        self.assertTrue(engine._quit_dark)  # "CentraLight starts" was held back...
+        self.assertEqual(len(self.runs("starts")), 1)
+        self.assertTrue(engine._quit_dark)  # "When this show loads" (at the PC start) was held back...
         self.assertEqual(self.base(), "")
         self.assertNotIn("stopped matching", [h.what for h in engine._runner.history if h.automation == "service"][-1:])
         self.clocks.advance(6 * 86400 - 3 * 3600)  # ...nor a "when it stops" at startup; next Sunday 09:00 does
@@ -1334,7 +1336,7 @@ class SecondReviewWindowTests(unittest.TestCase):
         self.window.show_page("automation")
         page = self.window.automation_page
         page.selected = "sunday-welcome"
-        page._build_editor(self.window.document.show, force=True)
+        page._build_editor(force=True)
         process(self.app, 3)
         self.activate()
         self.window.header.tabs["automation"].setFocus()
@@ -1467,13 +1469,13 @@ class ThirdReviewAutomationTests(AutomationEngineTestCase):
     def test_a_feed_coming_back_at_night_doesnt_light_things_after_a_lights_off_quit(self) -> None:
         follow = automation("follow", [{"type": "variable", "name": "mood", "compare": ">", "value": 0.5}],
                             [{"do": "base", "input": "ping", "transition": "cut"}])  # (a state condition, like a feed)
-        both = automation("both", [{"type": "app_started"}, {"type": "days", "days": ["mon"]}],
+        both = automation("both", [{"type": "show_loads"}, {"type": "days", "days": ["mon"]}],
                           [{"do": "base", "input": "pong", "transition": "cut"}])
         self.make(_dt(2026, 11, 8, 20, 0), [follow, both])
         self.run_until(_dt(2026, 11, 8, 20, 1))
         live = self.quit_lights_off()
-        self.clocks.advance(7 * 3600)  # Monday 03:00
-        engine = self.restart(live)
+        self.clocks.advance(7 * 3600)  # Monday 03:00: the PC restarts (the show loads)
+        engine = self.restart(live, started_by_windows=True)
         from centralight.commands import SetVariable
 
         engine.submit(SetVariable("mood", 0.9))
@@ -1495,15 +1497,15 @@ class ThirdReviewAutomationTests(AutomationEngineTestCase):
         self.assertIsNone(live.base)
 
     def test_a_start_event_with_a_feed_condition_still_runs(self) -> None:
-        fallback = automation("fallback", [{"type": "app_started"}, {"type": "ndi", "source": "Media Background Pane", "invert": True}],
+        fallback = automation("fallback", [{"type": "show_loads"}, {"type": "ndi", "source": "Media Background Pane", "invert": True}],
                               [{"do": "base", "input": "warm-welcome", "transition": "cut"}], logic="any")
-        self.make(_dt(2026, 11, 9, 15, 0), [fallback])
+        self.make(_dt(2026, 11, 9, 15, 0), [fallback], uptime=120.0)  # (the PC has just started: the show loads)
         self.run_until(_dt(2026, 11, 9, 15, 0, 10), step=1.0)
         self.assertEqual(len(self.runs("fallback")), 1)
         self.assertEqual(self.base(), "warm-welcome")
 
     def test_an_any_automation_with_a_start_event_still_catches_up_next_week(self) -> None:
-        service = automation("service", [{"type": "app_started"}, {"type": "days", "days": ["sun"]}], [{"do": "base", "input": "ping", "transition": "cut"}],
+        service = automation("service", [{"type": "show_loads"}, {"type": "days", "days": ["sun"]}], [{"do": "base", "input": "ping", "transition": "cut"}],
                              logic="any")
         self.make(_dt(2026, 11, 8, 10, 0), [service])
         self.run_until(_dt(2026, 11, 8, 11, 0))
@@ -1638,8 +1640,8 @@ class FeedSources:
 class FourthReviewAutomationTests(AutomationEngineTestCase):
     quit_lights_off = ThirdReviewAutomationTests.quit_lights_off
 
-    def make_fed(self, start, automations, live: LiveState | None = None) -> Engine:
-        self.make(start, automations, live)
+    def make_fed(self, start, automations, live: LiveState | None = None, uptime: float = 3600.0) -> Engine:
+        self.make(start, automations, live, uptime=uptime)
         self.feeds = FeedSources()
         self.engine = Engine(self.show, self.output, live, sources=self.feeds, clock=lambda: self.clocks.mono,
                              wall=lambda: self.clocks.wall, local_time=uk_local, uptime=lambda: self.clocks.uptime_value)
@@ -1705,11 +1707,11 @@ class FourthReviewAutomationTests(AutomationEngineTestCase):
         self.assertEqual(self.base(), "pong")  # the range ended at 10:31, but "after 120 s" still came
 
     def test_a_feed_blip_cancels_the_waiting_step_of_an_any_automation(self) -> None:
-        fallback = automation("fallback", [{"type": "app_started"}, {**FEED, "invert": True}],
+        fallback = automation("fallback", [{"type": "show_loads"}, {**FEED, "invert": True}],
                               [{"do": "base", "input": "warm-welcome", "transition": "cut", "delay": 10}], logic="any")
-        self.make_fed(_dt(2026, 11, 8, 10, 0), [fallback])
+        self.make_fed(_dt(2026, 11, 8, 10, 0), [fallback], uptime=120.0)
         self.feeds.sending[MBP] = True
-        self.run_until(_dt(2026, 11, 8, 10, 0, 20), step=1.0)  # ("CentraLight starts" ran it once)
+        self.run_until(_dt(2026, 11, 8, 10, 0, 20), step=1.0)  # ("When this show loads", at the PC start, ran it once)
         self.engine.submit(SendToBase("evening", cut=True))
         self.run_until(_dt(2026, 11, 8, 10, 30), step=1.0)
         self.feeds.sending[MBP] = False  # the feed drops for 2 s

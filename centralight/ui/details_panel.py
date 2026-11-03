@@ -408,7 +408,7 @@ class DetailsPanel(QScrollArea):
         globals_layout.addWidget(self.globals_panel)
 
         tabs.addTab(input_page, "Input")
-        tabs.addTab(globals_page, "Globals")
+        tabs.addTab(globals_page, "Show variables")
         tabs.setCurrentIndex(self._tab)
         tabs.currentChanged.connect(self._tab_switched)
         return tabs
@@ -418,7 +418,7 @@ class DetailsPanel(QScrollArea):
         self.tab_changed.emit(index)
 
     def globals_open(self) -> bool:
-        """True while the Globals tab is showing (the Editor's undo then uses the show's history)."""
+        """True while the Show variables tab is showing (the Editor's undo then uses the show's history)."""
         return self._tab == 1 and self.current_input() is not None and self.current_element() is None
 
     def _transition_visible(self, spec: Spec, inp: Input) -> bool:

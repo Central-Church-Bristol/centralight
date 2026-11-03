@@ -10,6 +10,9 @@ Code or Cursor following AI_GUIDE.md, or by hand in a text editor).
   you're asked whether to load the file or keep yours.
 
 It uses Windows' change notifications plus a check every second, in case one is missed.
+
+The global automations' folder is watched the same way, by a watcher of its own (for the global
+automations' document): there every .json file but global.json is an automation.
 """
 
 from __future__ import annotations
@@ -20,10 +23,11 @@ from pathlib import Path
 from PySide6.QtCore import QFileSystemWatcher, QObject, QTimer, Signal
 
 from ..files import forget_written, loads_json_bytes, written_by_us
+from ..global_automations import GLOBAL_DIR, ORDER_FILE
 from ..log import log_exception, log_info
 from ..model import Show
 from ..show_io import AUTOMATIONS_DIR, INPUTS_DIR, MAX_INPUT_BYTES, InputFileError, automation_from_dict, parse_input_bytes
-from .document import ShowDocument
+from .document import KIND_GLOBAL, ShowDocument
 
 POLL_MS = 1000
 SETTLE_MS = 300  # wait for an editor to finish writing
@@ -54,22 +58,30 @@ class FolderWatcher(QObject):
         self._poll.timeout.connect(self.check)
         self.folder: Path | None = None
         self._asking = False  # "Load the changed file?" is on screen
+        self.is_global = document.kind == KIND_GLOBAL  # watching the global automations' folder
+        self._subdirs = ("",) if self.is_global else (INPUTS_DIR, AUTOMATIONS_DIR)
+        self._scope = "global" if self.is_global else "show"
         self.start(document.show)
 
     def start(self, show: Show) -> None:
+        """Watch this show's folder (another show loaded: its folder instead)."""
         folder = Path(show.folder) if show.folder and not show.read_only else None
         if folder == self.folder:
             return
         self.stop()
         self.folder = folder
+        self.problems = {}
+        self.problems_changed.emit({})
         if folder is None:
             return
-        for sub in (INPUTS_DIR, AUTOMATIONS_DIR):
-            (folder / sub).mkdir(exist_ok=True)
+        for sub in self._subdirs:
+            (folder / sub).mkdir(parents=True, exist_ok=True)
             self._watcher.addPath(str(folder / sub))
         self._stamps = self._scan()  # what's there now is what was loaded
         for input_id, error in show.input_errors.items():  # files that couldn't be read when the show opened
             self.problems[input_id] = f"{input_id}.json: {error}"
+        if self.problems:
+            self.problems_changed.emit(dict(self.problems))
         self._poll.start()
 
     def stop(self) -> None:
@@ -84,11 +96,13 @@ class FolderWatcher(QObject):
         found: dict[Path, tuple[int, int]] = {}
         if self.folder is None:
             return found
-        for sub in (INPUTS_DIR, AUTOMATIONS_DIR):
+        for sub in self._subdirs:
             directory = self.folder / sub
             if not directory.is_dir():
                 continue
             for path in directory.glob("*.json"):
+                if self.is_global and path.name.casefold() == ORDER_FILE.casefold():
+                    continue  # (the global automations' order, not an automation)
                 try:
                     info = path.stat()
                 except OSError:
@@ -108,20 +122,24 @@ class FolderWatcher(QObject):
         self._stamps = now
         for path in sorted(changed):  # each file on its own: one odd file mustn't stop the others being picked up
             try:
-                if path.parent.name == INPUTS_DIR:
+                if not self.is_global and path.parent.name == INPUTS_DIR:
                     self._input_file(path)
                 else:
                     self._automation_file(path)
             except Exception as exc:
-                log_exception(f"reading {path.parent.name}\\{path.name}", exc)
+                log_exception(f"reading {self._where(path)}", exc)
         for path in deleted:
             try:
-                if path.parent.name == INPUTS_DIR:
+                if not self.is_global and path.parent.name == INPUTS_DIR:
                     self._input_gone(path.stem)
                 else:
                     self._automation_gone(path.stem)
             except Exception as exc:
-                log_exception(f"{path.parent.name}\\{path.name} deleted", exc)
+                log_exception(f"{self._where(path)} deleted", exc)
+
+    def _where(self, path: Path) -> str:
+        """automations\\x.json, or _Global automations\\x.json, for the log."""
+        return f"{GLOBAL_DIR if self.is_global else path.parent.name}\\{path.name}"
 
     def _read(self, path: Path) -> bytes | None:
         """The file's bytes, or None if it can't be read just now (it's checked again next time)."""
@@ -213,9 +231,9 @@ class FolderWatcher(QObject):
         try:
             if len(raw) > MAX_INPUT_BYTES:
                 raise InputFileError("the file is too big")
-            automation, warnings = automation_from_dict(loads_json_bytes(raw), expected_id=path.stem)
+            automation, warnings = automation_from_dict(loads_json_bytes(raw), expected_id=path.stem, scope=self._scope)
         except (InputFileError, ValueError) as exc:
-            log_info(f"automations\\{path.name} couldn't be used: {exc}", key=f"bad-automation-{path.stem}")
+            log_info(f"{self._where(path)} couldn't be used: {exc}", key=f"bad-automation-{self._scope}-{path.stem}")
             return
         document = self.document
         saved = document.saved.automations.get(automation.id)
@@ -229,7 +247,7 @@ class FolderWatcher(QObject):
         document.note_on_disk(automations={automation.id: automation})
         if document.apply(show.with_automations({**show.automations, automation.id: automation}, order),
                           f"{verb} outside CentraLight: {automation.name}"):
-            log_info(f"automations\\{path.name} {verb.lower()} outside CentraLight" + (f" ({'; '.join(warnings)})" if warnings else ""))
+            log_info(f"{self._where(path)} {verb.lower()} outside CentraLight" + (f" ({'; '.join(warnings)})" if warnings else ""))
 
     def _automation_gone(self, automation_id: str) -> None:
         document = self.document
@@ -240,7 +258,7 @@ class FolderWatcher(QObject):
         name = show.automations[automation_id].name
         remaining = {k: v for k, v in show.automations.items() if k != automation_id}
         if self.folder is not None:
-            forget_written(self.folder / AUTOMATIONS_DIR / f"{automation_id}.json")
+            forget_written(self.folder / ("" if self.is_global else AUTOMATIONS_DIR) / f"{automation_id}.json")
         document.forget_wrote("automation", automation_id)
         document.note_on_disk(automations={automation_id: None})
         document.apply(show.with_automations(remaining, tuple(i for i in show.automation_order if i != automation_id)),

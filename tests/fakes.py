@@ -295,10 +295,13 @@ class FakeEngine(Engine):
     without an engine thread.
     """
 
-    def __init__(self, show: Show | None = None, live: LiveState | None = None, output: FakeOutput | None = None) -> None:
+    def __init__(self, show: Show | None = None, live: LiveState | None = None, output: FakeOutput | None = None,
+                 global_automations: Show | None = None, pc_start: bool = False) -> None:
+        """pc_start: the PC has just started (the lights start black). Otherwise Windows has been up a day."""
         self.clock = FakeClock()
         self.fake_output = output or FakeOutput()
-        super().__init__(show or show_from_patch(), self.fake_output, live, clock=self.clock)
+        super().__init__(show or show_from_patch(), self.fake_output, live, clock=self.clock,
+                         uptime=(lambda: 60.0) if pc_start else (lambda: 86400.0), global_automations=global_automations)
         self.tick()
 
     def submit(self, command) -> None:  # type: ignore[override]

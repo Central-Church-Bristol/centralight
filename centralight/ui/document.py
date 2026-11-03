@@ -14,6 +14,12 @@ Undo has separate histories, so undo only affects what you're looking at:
 - one for the show itself (inputs added, duplicated or deleted, global variables)
 Each step stores only the part of the show it changed, so undoing it never touches
 another input or the layout.
+
+Loading another show (load()) saves the old one's changes first. Each show keeps its own
+histories while CentraLight runs, so going back to a show brings its undo back too.
+
+The global automations have a document of their own (kind "global"): one history, saved to
+_Global automations\\<id>.json and global.json, and sent to the engine as SetGlobalAutomations.
 """
 
 from __future__ import annotations
@@ -30,11 +36,13 @@ from typing import Any
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QUndoCommand, QUndoGroup, QUndoStack
 
-from ..commands import SwapShow
+from ..commands import LoadShow, SetGlobalAutomations, SwapShow
 from ..files import write_json_atomic
+from ..global_automations import ORDER_FILE, order_data
 from ..log import log_exception, log_info
 from ..model import Show, frozen_map
 from ..show_io import (
+    AUTOMATIONS_DIR,
     SHOW_FILE,
     delete_automation_file,
     delete_input_file,
@@ -191,6 +199,8 @@ class SaveJob:
     deleted_layouts: tuple[str, ...] = ()
     automations: tuple = ()  # Automation objects to write
     deleted_automations: tuple[str, ...] = ()
+    automations_dir: str = AUTOMATIONS_DIR  # ("" for the global automations: straight in their folder)
+    show_file: str = SHOW_FILE  # where show_data goes (global.json for the global automations)
 
 
 class Autosaver:
@@ -224,14 +234,15 @@ class Autosaver:
                 self._idle.set()
                 return
             folder = Path(job.folder)
+            where = job.automations_dir
             steps = [("input", inp.id, lambda inp=inp: save_input(folder, inp)) for inp in job.inputs]
             steps += [("layout", lay.id, lambda lay=lay: save_layout(folder, lay)) for lay in job.layouts]
             steps += [("delete-input", i, lambda i=i: delete_input_file(folder, i)) for i in job.deleted]
             steps += [("delete-layout", i, lambda i=i: delete_layout_file(folder, i)) for i in job.deleted_layouts]
-            steps += [("automation", a.id, lambda a=a: save_automation(folder, a)) for a in job.automations]
-            steps += [("delete-automation", i, lambda i=i: delete_automation_file(folder, i)) for i in job.deleted_automations]
+            steps += [("automation", a.id, lambda a=a: save_automation(folder, a, where)) for a in job.automations]
+            steps += [("delete-automation", i, lambda i=i: delete_automation_file(folder, i, where)) for i in job.deleted_automations]
             if job.show_data is not None:
-                steps.append(("show", SHOW_FILE, lambda data=job.show_data: write_json_atomic(folder / SHOW_FILE, data)))
+                steps.append(("show", job.show_file, lambda data=job.show_data, name=job.show_file: write_json_atomic(folder / name, data)))
             failed = False
             for kind, item_id, step in steps:  # each file on its own: one that can't be written doesn't stop the rest
                 try:
@@ -253,20 +264,41 @@ class Autosaver:
 # ---------------------------------------------------------------- the document
 
 
+KIND_SHOW = "show"
+KIND_GLOBAL = "global"  # the global automations' document
+
+
+def folder_key(folder: str) -> str:
+    """A folder written one way (case and slashes as Windows sees them), for comparing and looking up."""
+    import os
+
+    return os.path.normcase(os.path.abspath(folder)) if folder else ""
+
+
 class ShowDocument(QObject):
     changed = Signal(object)  # the new Show
+    loaded = Signal(object)  # another show was loaded (after changed): the new Show
     save_problem = Signal(str)  # what couldn't be saved, and why ("" = everything is saved)
 
-    def __init__(self, show: Show, engine: Any, *, save_files: bool = True, save_delay_ms: int = SAVE_DELAY_MS) -> None:
+    def __init__(self, show: Show, engine: Any, *, save_files: bool = True, save_delay_ms: int = SAVE_DELAY_MS,
+                 kind: str = KIND_SHOW, undo_group: QUndoGroup | None = None) -> None:
+        """kind: a show, or KIND_GLOBAL for the global automations (a Show holding just them). undo_group: share the
+        window's, so Undo works on whichever history is on screen."""
         super().__init__()
+        self.kind = kind
         self._show = show
         self._saved = show
         self._engine = engine
+        self._save_files = save_files
         self._drag_start: Show | None = None
-        self.undo_group = QUndoGroup(self)
+        self.undo_group = undo_group if undo_group is not None else QUndoGroup(self)
         self._stacks: dict[str, QUndoStack] = {}
-        self._scope = SCOPE_SHOW
-        self.undo_group.setActiveStack(self.stack(SCOPE_SHOW))
+        self._other_stacks: dict[str, dict[str, QUndoStack]] = {}  # other shows' histories (while CentraLight runs)
+        self._scope = SCOPE_AUTOMATIONS if kind == KIND_GLOBAL else SCOPE_SHOW
+        if undo_group is None:
+            self.undo_group.setActiveStack(self.stack(self._scope))
+        else:
+            self.stack(self._scope)
         self._autosaver = Autosaver() if save_files and show.folder and not show.read_only else None
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -389,9 +421,17 @@ class ShowDocument(QObject):
 
     # ------------------------------------------------------------ changes
 
+    def _other_show(self, show: Show, text: str) -> bool:
+        """A change worked out from another show than the loaded one (a question that was on screen while another show
+        loaded, say): it's not made, so it can't land in the wrong show."""
+        if folder_key(show.folder) == folder_key(self._show.folder):
+            return False
+        log_info(f"“{text}” wasn't made: it was for the show in {show.folder or '(none)'}, and another show is loaded now")
+        return True
+
     def apply(self, show: Show, text: str, merge_key: str | None = None) -> bool:
         """Make a change (one undo step). Returns False if nothing changed or it's read-only."""
-        if self.read_only or show == self._show:
+        if self.read_only or show == self._show or self._other_show(show, text):
             return False
         self._push(self._show, show, text, merge_key, applied=False)
         return True
@@ -401,7 +441,7 @@ class ShowDocument(QObject):
 
     def preview(self, show: Show) -> None:
         """Show a change live (while dragging) without an undo step yet."""
-        if self.read_only:
+        if self.read_only or self._other_show(show, "a drag"):
             return
         if self._drag_start is None:
             self._drag_start = self._show
@@ -409,15 +449,46 @@ class ShowDocument(QObject):
 
     def end_drag(self, text: str) -> None:
         start, self._drag_start = self._drag_start, None
-        if start is not None and start != self._show:
+        if start is not None and start != self._show and folder_key(start.folder) == folder_key(self._show.folder):
             self._push(start, self._show, text or "Change", None, applied=True)
 
     def _set(self, show: Show) -> None:
         self._show = show
-        self._engine.submit(SwapShow(show))
+        self._engine.submit(SetGlobalAutomations(show) if self.kind == KIND_GLOBAL else SwapShow(show))
         self.changed.emit(show)
         if self._autosaver is not None and not self._saving_paused:
             self._save_timer.start()
+
+    def load(self, show: Show, automation: bool = False) -> None:
+        """Another show: the old one's changes are saved first, and its histories kept for when it's loaded again
+        (while CentraLight runs). The engine loads it (the lights freeze on what they show), then the window follows.
+        automation: a global automation asked for it (not a person)."""
+        self.flush()
+        if self._autosaver is not None and self._pending_retries():
+            log_info(f"Some changes to {self._show.folder} couldn't be saved before another show loaded "
+                     "(they're in the session log; the show's backups have earlier copies)")
+        self._drag_start = None
+        self._save_timer.stop()
+        self._retry_timer.stop()
+        old_key, new_key = folder_key(self._show.folder), folder_key(show.folder)
+        if old_key:
+            self._other_stacks[old_key] = self._stacks
+        self._stacks = self._other_stacks.pop(new_key, {}) if new_key else {}
+        self._newest_undone.clear()
+        self._show = self._saved = show
+        self._retry_show = False
+        self._retry = {"input": set(), "layout": set(), "automation": set()}
+        self._recent_writes.clear()
+        self._saving_paused = False
+        self._asked_input = None
+        if self._autosaver is None and self._save_files and show.folder and not show.read_only:
+            self._autosaver = Autosaver()
+            self._results.start()
+        self.set_scope(self._scope)
+        self._set_problem("")
+        self._engine.submit(LoadShow(show, automation))
+        self.changed.emit(show)
+        self.loaded.emit(show)
 
     def pause_saving(self, paused: bool, asking_about: str | None = None) -> None:
         """While a question about a changed file is on screen, nothing is saved over it (retries included)."""
@@ -460,6 +531,8 @@ class ShowDocument(QObject):
         if failures:
             self._mark_unsaved(failures)
             names = {"show": "show.json", "input": "inputs\\{}.json", "layout": "layouts\\{}.json", "automation": "automations\\{}.json"}
+            if self.kind == KIND_GLOBAL:
+                names = {"show": f"_Global automations\\{ORDER_FILE}", "automation": "_Global automations\\{}.json"}
             kind, item_id, why = failures[0]
             what = names.get(kind.replace("delete-", ""), "{}").format(item_id)
             verb = "remove" if kind.startswith("delete-") else "save"
@@ -495,8 +568,9 @@ class ShowDocument(QObject):
             return
         self._retry_timer.stop()
         old, new = self._saved, self._show
-        show_data = show_to_dict(new)
-        changed_show = show_to_dict(old) != show_data or self._retry_show
+        to_dict = order_data if self.kind == KIND_GLOBAL else show_to_dict
+        show_data = to_dict(new)
+        changed_show = to_dict(old) != show_data or self._retry_show
         retry = {kind: set(ids) for kind, ids in self._retry.items()}
         self._retry_show = False
         self._retry = {"input": set(), "layout": set(), "automation": set()}
@@ -524,8 +598,9 @@ class ShowDocument(QObject):
         for automation_id in deleted_automations:
             self._wrote("automation", automation_id, None)
         if changed_show or inputs or deleted or layouts or deleted_layouts or automations or deleted_automations:
+            where = {"automations_dir": "", "show_file": ORDER_FILE} if self.kind == KIND_GLOBAL else {}
             self._autosaver.save(SaveJob(new.folder, show_data if changed_show else None, inputs, deleted, layouts,
-                                         deleted_layouts, automations, deleted_automations))
+                                         deleted_layouts, automations, deleted_automations, **where))
 
     def close(self, timeout: float = 5.0) -> None:
         """Save anything outstanding and stop the autosave thread. If Windows closes CentraLight while "Load the

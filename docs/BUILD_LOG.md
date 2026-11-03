@@ -26,7 +26,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | Reviews of those fixes (four more rounds, each checking the one before) | **done** (3 Nov, 09:50; 563 tests pass) |
 | M10 Per-light colours (your change of 3 Nov) | **done** (3 Nov, 10:31; 570 tests pass; engine 0.16 ms a tick) |
 | M11 Cut to black / Fade to black (your change of 3 Nov), and a look at M10 (five fixes) | **done** (3 Nov, 11:20; 587 tests pass) |
-| M12 Shows + global automations (your change of 3 Nov) | being built |
+| M12 Shows + global automations (your change of 3 Nov) | **done** (3 Nov, 12:25; 620 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -50,6 +50,64 @@ Run all the tests (about five minutes, including the layout check at every scali
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## M12 Shows and global automations — done (3 Nov)
+
+Your change of 3 Nov: shows you can make, copy and load (a morning and an evening one, say), and automations that
+belong to the app rather than a show.
+- **A show is everything in the app today:** its inputs, show variables, show automations, lights (the patch),
+  layouts (with their room photos), media, the Dashboard's order and its AI guide, in its own folder in
+  `Documents\CentraLight Shows`. Changes still save by themselves: there's no Save.
+- **The show picker**, after the tabs: **Show: Central Church ▾**. It lists the shows (the loaded one ticked) and has
+  **New show…** (this show's lights and layouts, "Follow screen", nothing else), **Duplicate…** (the whole folder,
+  media included; every id stays, so Stream Deck keys work in both), **Rename…** and **Delete a show** (asks, then
+  the folder goes to the Recycle Bin; the loaded show can't be deleted). A new or copied show opens straight away.
+  Lock stops the picker too.
+- **Loading a show never sends an input**, whoever loads it. The lights freeze on what they show: Base and the
+  overlays become one still look on Base (the overlays are cleared), held until one of the new show's inputs is sent,
+  which comes in from it with its own transition. The Dashboard says **Base: frozen (from Morning)**. The old show
+  stops: its videos and feeds are let go (a feed the new show uses too stays connected). The Festoon, Key lights
+  and Master keep their levels. A light in both shows keeps its colour; one that's only in the new show is unlit
+  until something's sent. The new show's variables come back as they were when it was last loaded.
+- **Starting up:** when the PC has just started (Windows started CentraLight at sign-in, or within 10 minutes of the
+  PC starting), the last loaded show opens with every light black, house lights too (their levels kept), and
+  nothing playing. When CentraLight is reopened without a restart (after Quit, or a crash), it carries on exactly
+  as it was, a held look included. Then the automations run: the global ones first (one can load another show),
+  then the show's. Automations win over both rules.
+- **Global automations** (Automation tab, the top list; files in `CentraLight Shows\_Global automations`): app-wide,
+  for what isn't about one show. Conditions: The PC starts, CentraLight starts, The PC wakes, time, days, dates,
+  sunrise / sunset, an NDI feed, sound, The colour lights are black, and **This show is loaded**. Actions: **Load a
+  show**, Cut to black, Fade to black, Master, the Festoon and Key lights (found by name in whichever show is
+  loaded; skipped with a note in the log if it has none), and turning another global automation on or off. They
+  can't touch a show's inputs, overlays, variables or layouts. The same rules as a show's automations (All / Any,
+  Not, "when it stops matching", catch-up, the loop guard, Run now); each second they're checked first. When one
+  loads a show, the old show's automations wait for it (at most 5 s) and the new show's run as soon as it's loaded.
+- **A show's automations** lose The PC starts, CentraLight starts and The PC wakes, and gain **When this show
+  loads**: when you, the Stream Deck or a global automation load it, and when the PC starts with it, but not when
+  CentraLight reopens (so a crash restart doesn't change the lights). Old automations that used the moved
+  conditions are changed to "When this show loads", with a note in the log; they stay switched on.
+- **The Automation tab** has the two lists, **Global automations** and **This show (Morning)**. Coming up and
+  History show both (the global ones marked "Global:"). Pause pauses both. Undo works on the list you're in: each
+  show keeps its own undo histories while CentraLight runs, and the global automations have their own.
+- **Layout tab → Layout ▾ → Import from another show…:** pick a show and one of its saved layouts. It brings that
+  show's lights (names, types, addresses and groups, and the house lights), their positions in that layout and its
+  room photo here, as a new saved layout in use. A summary of what changes (lights added or removed, addresses
+  changed) comes first, with Import and Cancel. One Ctrl+Z on the Layout tab undoes it.
+- **"Global variables" are "show variables"** everywhere you see them (the Editor's tab is **Show variables**), in
+  the docs and the AI guide. The files keep their old field names.
+- **Stream Deck and the phone page:** `/api/show/<id or name>` loads a show (its id is its folder's name, e.g.
+  `central-church`), `/api/shows` lists them, `/api/global-automation/<id>/run` (`/enable`, `/disable`) works a global
+  automation. The input, variable, house-light, automation and layout URLs act on the loaded show; anything that
+  isn't in it gets 404 "not in this show (Morning)". The phone page has a list of shows next to the show's name, and
+  reloads itself with the new show's inputs when another show loads.
+- **live.json is app-wide:** it says which show was loaded last (that one opens next time), what was playing in it
+  or the look it held, Master and the house lights, the other shows' variables, and both lists' automation states.
+- The global automations' folder gets its own AI_GUIDE.md (the conditions, actions and every show's id), so an AI
+  can write them too. Files changed there outside CentraLight are picked up straight away, as a show's are.
+- Not built, as agreed: a countdown before an automatic show switch, a schedule view, Copy to show…, export /
+  import of shows, show notes, and a shared media folder.
+- One empty test folder, "CentraLight Recycle Bin check (safe to delete)", went to the Recycle Bin when I checked
+  that Delete really uses it: it's safe to empty.
 
 ## M11 Cut to black and Fade to black — done (3 Nov)
 
@@ -818,6 +876,19 @@ Problems the tests found and that are fixed:
 
 ## Decisions (made without you, as agreed — easy to change)
 
+- **M12 choices** (all easy to change):
+  - **Renaming a show** changes the name you see, not its folder: its Stream Deck id (from the folder's name) keeps
+    working. New and copied shows get a folder named after them.
+  - **A new or copied show opens straight away** (it's what you'd do next), with the usual freeze.
+  - **Loading a show's automations:** like CentraLight starting, they're checked straight away with catch-up, so at
+    10:00 on a Sunday a show whose automation says "Sunday 09:00–12:30 → Warm welcome" sends Warm welcome when it
+    loads. Loading the show itself never sends anything.
+  - **After a "Turn lights off" quit,** loading a show by hand takes charge (its "When this show loads" automations
+    can light things); a global automation loading one does too if its own time range began after the quit
+    (e.g. Sunday 08:30), and otherwise doesn't (e.g. "CentraLight starts").
+  - **A show's variables** come back as they were when it was last loaded (kept in live.json); a show loaded for the
+    first time starts with their starting values.
+  - **Duplicate** doesn't copy the backups folder (they're the old show's history).
 - **M10's numbers** (all easy to change):
   - **Area** grows as its square: a patch's half-width is Area² screen widths, so 25 % is 0.0625 (matching the old
     patch), 50 % a quarter of the screen and 100 % the whole screen from anywhere. The patch is a square: it matched
@@ -837,9 +908,10 @@ Problems the tests found and that are fixed:
   everything black and nothing on Base; automations leave it so until one of their time ranges begins after the
   quit (anything a person sends lights things at once). "Leave lights as they are" restarts exactly where it left
   off. The choice can be remembered (Settings → When you quit).
-- **Live state** lives in `%LOCALAPPDATA%\CentraLight\live.json` (it's about this PC, not the show), and is
-  ignored if it belongs to a different show.
-- **Lock** blocks the lights controls (faders, switches, Blackout; later the dashboard buttons) but not the tabs.
+- **Live state** lives in `%LOCALAPPDATA%\CentraLight\live.json` (it's about this PC, not a show). Since M12 it's
+  app-wide and names the show that was loaded last; if that show has gone, only what's app-wide is used.
+- **Lock** blocks the lights controls (faders, switches, Cut / Fade to black, the show picker; the dashboard
+  buttons) but not the tabs.
 - **Settings** is the gear button next to Lock (the plan didn't say where it goes).
 - **USB sends 76 channels** (up to the last SlimPAR's channel), as planned. If the real Eurolite doesn't like
   short packets, Settings → "Send all 512 channels" goes back to full packets (on the Wednesday checklist).

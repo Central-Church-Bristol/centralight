@@ -448,6 +448,25 @@ QToolButton#MenuButton::menu-indicator {
     width: 0;
 }
 
+QToolButton#ShowPicker {
+    background: transparent;
+    color: @text;
+    border: 1px solid @border;
+    border-radius: 15px;
+    padding: 4px 14px;
+    font-size: 14px;
+    font-weight: 500;
+    min-height: 22px;
+}
+QToolButton#ShowPicker:hover {
+    background: @card_hover;
+    border-color: @border_strong;
+}
+QToolButton#ShowPicker::menu-indicator {
+    image: none;
+    width: 0;
+}
+
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {
     background: @window;
     color: @text;

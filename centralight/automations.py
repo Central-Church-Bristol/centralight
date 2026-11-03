@@ -54,28 +54,42 @@ CONDITIONS: dict[str, str] = {
     "dates": "Dates",
     "sun": "Sunrise / sunset",
     "input_live": "An input is live",
-    "variable": "A global variable",
+    "variable": "A show variable",
     "ndi": "An NDI feed is there",
     "colour_black": "The colour lights are black",
     "audio": "Sound is loud enough",
+    "show_loads": "When this show loads",
+    "loaded_show": "This show is loaded",
     "app_started": "CentraLight starts",
     "pc_startup": "The PC starts",
     "pc_woke": "The PC wakes from sleep",
 }
-EVENTS = ("pc_startup", "app_started", "pc_woke")
+EVENTS = ("pc_startup", "app_started", "pc_woke", "show_loads")
+MOVED_EVENTS = ("pc_startup", "app_started", "pc_woke")  # global automations' (a show's old ones: "When this show loads")
 ACTIONS: dict[str, str] = {
     "base": "Send an input to Base",
     "overlay": "An input in an overlay",
     "overlay_off": "Clear an overlay",
+    "load_show": "Load a show",
     "house": "Festoon or key lights",
     "master": "Master",
     "cut_black": "Cut to black",
     "fade_black": "Fade to black",
-    "variable": "Set a global variable",
+    "variable": "Set a show variable",
     "layout": "Switch layout",
     "automation": "Turn an automation on or off",
 }
-GUI_ACTIONS = ("layout", "automation")  # these change the show, so the window does them
+# A show's automations, and the global ones (app-wide: they can load a show, but can't touch a show's inputs,
+# overlays, variables or layouts)
+SHOW = "show"
+GLOBAL = "global"
+SHOW_CONDITIONS = ("time", "days", "dates", "sun", "input_live", "variable", "ndi", "colour_black", "audio", "show_loads")
+GLOBAL_CONDITIONS = ("time", "days", "dates", "sun", "ndi", "audio", "colour_black", "loaded_show", "app_started",
+                     "pc_startup", "pc_woke")
+SHOW_ACTIONS = ("base", "overlay", "overlay_off", "house", "master", "cut_black", "fade_black", "variable", "layout",
+                "automation")
+GLOBAL_ACTIONS = ("load_show", "cut_black", "fade_black", "master", "house", "automation")
+GUI_ACTIONS = ("layout", "automation", "load_show")  # these change the show (or load another), so the window does them
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 WHERE = ("base", "overlay1", "overlay2", "overlay3", "overlay4", "anywhere")
@@ -126,14 +140,29 @@ def parse_day_month(text: Any) -> tuple[int, int] | None:
     return month, day
 
 
+def conditions_for(scope: str = SHOW) -> dict[str, str]:
+    """The conditions a show's automations (or the global ones) can have, with their names."""
+    return {kind: CONDITIONS[kind] for kind in (GLOBAL_CONDITIONS if scope == GLOBAL else SHOW_CONDITIONS)}
+
+
+def actions_for(scope: str = SHOW) -> dict[str, str]:
+    """The actions a show's automations (or the global ones) can do, with their names."""
+    names = {kind: ACTIONS[kind] for kind in (GLOBAL_ACTIONS if scope == GLOBAL else SHOW_ACTIONS)}
+    if scope == GLOBAL:
+        names["automation"] = "Turn a global automation on or off"
+    return names
+
+
 # ---------------------------------------------------------------- checking the data
 
 
-def check_condition(cond: Mapping[str, Any]) -> list[str]:
+def check_condition(cond: Mapping[str, Any], scope: str = SHOW) -> list[str]:
     """What's wrong with a condition, in plain words ([] = nothing)."""
     kind = cond.get("type")
-    if not isinstance(kind, str) or kind not in CONDITIONS:
-        return [f"unknown condition {kind!r} (use one of: {', '.join(CONDITIONS)})"]
+    kinds = conditions_for(scope)
+    if not isinstance(kind, str) or kind not in kinds:
+        where = "a global automation" if scope == GLOBAL else "a show's automation"
+        return [f"unknown condition {kind!r} for {where} (use one of: {', '.join(kinds)})"]
     problems = []
     if not isinstance(cond.get("invert", False), bool):
         problems.append('"invert" must be true or false')
@@ -167,7 +196,7 @@ def check_condition(cond: Mapping[str, Any]) -> list[str]:
             problems.append(f'"where" must be one of {", ".join(WHERE)}')
     elif kind == "variable":
         if not isinstance(cond.get("name"), str) or not cond.get("name"):
-            problems.append('"name" must be a global variable')
+            problems.append('"name" must be a show variable')
         if cond.get("compare", "=") not in COMPARES:
             problems.append(f'"compare" must be one of {" ".join(COMPARES)}')
     elif kind == "ndi":
@@ -182,13 +211,18 @@ def check_condition(cond: Mapping[str, Any]) -> list[str]:
         seconds = cond.get("for", 0)
         if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or not 0 <= seconds <= 3600:
             problems.append('"for" must be a number of seconds')
+    elif kind == "loaded_show":
+        if not isinstance(cond.get("show"), str) or not cond.get("show"):
+            problems.append('"show" must be a show\'s id (its folder\'s name, e.g. "sunday-morning")')
     return problems
 
 
-def check_action(action: Mapping[str, Any]) -> list[str]:
+def check_action(action: Mapping[str, Any], scope: str = SHOW) -> list[str]:
     kind = action.get("do")
-    if not isinstance(kind, str) or kind not in ACTIONS:
-        return [f"unknown action {kind!r} (use one of: {', '.join(ACTIONS)})"]
+    kinds = actions_for(scope)
+    if not isinstance(kind, str) or kind not in kinds:
+        where = "a global automation" if scope == GLOBAL else "a show's automation"
+        return [f"unknown action {kind!r} for {where} (use one of: {', '.join(kinds)})"]
     problems = []
     delay = action.get("delay", 0)
     if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not 0 <= delay <= 86400:
@@ -206,8 +240,13 @@ def check_action(action: Mapping[str, Any]) -> list[str]:
         problems.append('"slot" must be 1, 2, 3 or 4')
     if kind == "overlay" and action.get("state", "toggle") not in ("on", "off", "toggle"):
         problems.append('"state" must be on, off or toggle')
-    if kind == "house" and (not isinstance(action.get("light"), str) or not action.get("light")):
+    if kind == "house" and scope == GLOBAL:
+        if not isinstance(action.get("label"), str) or not action.get("label", "").strip():
+            problems.append('"label" must be a house light\'s name (e.g. "Festoon" or "Key lights")')
+    elif kind == "house" and (not isinstance(action.get("light"), str) or not action.get("light")):
         problems.append('"light" must be a house light id (e.g. dimmer-4)')
+    if kind == "load_show" and (not isinstance(action.get("show"), str) or not action.get("show", "").strip()):
+        problems.append('"show" must be a show\'s id (its folder\'s name, e.g. "sunday-morning")')
     for key in ("level", "fade"):
         value = action.get(key)
         if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
@@ -232,7 +271,8 @@ def _hhmm(minutes: int) -> str:
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
-def describe_condition(cond: Mapping[str, Any], show: Show | None = None) -> str:
+def describe_condition(cond: Mapping[str, Any], show: Show | None = None, shows: Mapping[str, str] | None = None) -> str:
+    """shows: show id -> name (for "This show is loaded")."""
     kind = cond.get("type")
     text = CONDITIONS.get(str(kind), str(kind))
     if kind == "time":
@@ -271,6 +311,11 @@ def describe_condition(cond: Mapping[str, Any], show: Show | None = None) -> str
         seconds = cond.get("for", 0)
         text = (f"sound ({band}) above {round(_num(cond.get('above'), 0.5) * 100)} %"
                 + (f" for {seconds:g} s" if isinstance(seconds, (int, float)) and seconds > 0 else ""))
+    elif kind == "loaded_show":
+        wanted = str(cond.get("show", "?"))
+        text = f"{(shows or {}).get(wanted, wanted)} is loaded"
+    elif kind == "show_loads":
+        text = "this show loads"
     return f"not ({text})" if cond.get("invert") else text
 
 
@@ -282,14 +327,27 @@ def _transition_text(transition: Any) -> str:
     return ""
 
 
-def describe_action(action: Mapping[str, Any], show: Show | None = None) -> str:
+def describe_action(action: Mapping[str, Any], show: Show | None = None, scope: str = SHOW,
+                    shows: Mapping[str, str] | None = None) -> str:
+    """show: the show (or, for a global automation, the global automations: "turn on" names one of them).
+    shows: show id -> name (for "Load a show")."""
     kind = action.get("do")
 
     def input_name(input_id: Any) -> str:
         inp = show.inputs.get(input_id) if show and isinstance(input_id, str) else None
         return inp.name if inp else str(input_id)
 
-    if kind == "base":
+    if kind == "load_show":
+        wanted = str(action.get("show", "?"))
+        text = f"load the show {(shows or {}).get(wanted, wanted)}"
+    elif kind == "house" and scope == GLOBAL:
+        parts = []
+        if action.get("level") is not None:
+            parts.append(f"{round(_num(action['level'], 0.0) * 100)} %")
+        if action.get("on") is not None:
+            parts.append("on" if action["on"] else "off")
+        text = f"{action.get('label', '?')} {' '.join(parts) or 'unchanged'}"
+    elif kind == "base":
         text = f"{input_name(action.get('input'))} to Base{_transition_text(action.get('transition'))}"
     elif kind == "overlay":
         state = action.get("state", "toggle")
@@ -325,11 +383,11 @@ def describe_action(action: Mapping[str, Any], show: Show | None = None) -> str:
     return f"after {delay:g} s: {text}" if delay else text
 
 
-def summary(automation: Automation, show: Show | None = None) -> str:
+def summary(automation: Automation, show: Show | None = None, scope: str = SHOW, shows: Mapping[str, str] | None = None) -> str:
     """One line for the list: 'Sun, 09:00–12:30 → Warm welcome to Base, Key lights 70 %'."""
     joiner = " and " if automation.logic == "all" else " or "
-    when = joiner.join(describe_condition(c, show) for c in automation.conditions) or "only when run by hand"
-    actions = ", ".join(describe_action(a, show) for a in automation.actions) or "nothing yet"
+    when = joiner.join(describe_condition(c, show, shows) for c in automation.conditions) or "only when run by hand"
+    actions = ", ".join(describe_action(a, show, scope, shows) for a in automation.actions) or "nothing yet"
     return f"{when} → {actions}"
 
 
@@ -353,6 +411,7 @@ class Situation:
     previous_now: float | None = None  # wall clock at the last check (a clock change moves local time, not this)
     ndi_known: bool = True  # False just after starting: a feed that isn't sending yet may still be connecting
     quit_dark_since: float | None = None  # wall time of a "Turn lights off" quit whose hold is still on, else None
+    show: str = ""  # the loaded show's id (for the global automations' "This show is loaded")
 
 
 def _in_range(start: int, end: int, minutes: int) -> bool:
@@ -434,7 +493,7 @@ def timed_continuous(automation: Automation, start: datetime, end: datetime) -> 
     return true_at(end)
 
 
-STATE_KINDS = ("input_live", "variable", "ndi", "colour_black", "audio")  # conditions about how things are right now
+STATE_KINDS = ("input_live", "variable", "ndi", "colour_black", "audio", "loaded_show")  # how things are right now
 
 
 def _stop_cancels_waiting(automation: Automation, before: list[bool] | None, after: list[bool] | None) -> bool:
@@ -718,6 +777,8 @@ class AutomationRunner:
             result = situation.colour_black
         elif kind == "audio":
             result = self._audio_true(automation, index, cond, situation)
+        elif kind == "loaded_show":
+            result = bool(situation.show) and situation.show == cond.get("show")
         else:
             result = False
         return result != bool(cond.get("invert", False))
@@ -935,11 +996,31 @@ class AutomationRunner:
 # ---------------------------------------------------------------- doing the actions
 
 
-def action_command(action: Mapping[str, Any], show: Show) -> Any | None:
-    """The engine command for an action (None for actions the window does, or bad ones)."""
+def house_by_label(show: Show, label: Any) -> str | None:
+    """A house light of the show by its name, as a global automation names it ("Festoon", "Key lights")."""
+    from .model import slugify
+
+    if not isinstance(label, str) or not label.strip():
+        return None
+    for item in show.house:
+        if item.label.casefold() == label.strip().casefold() or slugify(item.label) == slugify(label):
+            return item.fixture
+    return None
+
+
+def action_command(action: Mapping[str, Any], show: Show, scope: str = SHOW) -> Any | None:
+    """The engine command for an action (None for actions the window does, or bad ones). show: the loaded show.
+    A global automation's house lights are found by their names; one the loaded show doesn't have is skipped."""
     kind = action.get("do")
+    if kind not in actions_for(scope):
+        return None
     fade = action.get("fade")
     fade = float(fade) if isinstance(fade, (int, float)) and not isinstance(fade, bool) else None
+    if kind == "house" and scope == GLOBAL:
+        light = house_by_label(show, action.get("label"))
+        if light is None:
+            return None
+        action = {**dict(action), "light": light}
     if kind == "base":
         input_id = action.get("input")
         if input_id not in show.inputs:
@@ -1024,8 +1105,11 @@ def system_uptime() -> float:
 # ---------------------------------------------------------------- editing (each returns a new Show)
 
 
-def default_condition(kind: str, show: Show) -> dict[str, Any]:
-    """A sensible starting condition of each kind."""
+def default_condition(kind: str, show: Show, shows: Iterable[tuple[str, str]] = ()) -> dict[str, Any]:
+    """A sensible starting condition of each kind. shows: (id, name) of each show (for "This show is loaded")."""
+    if kind == "loaded_show":
+        first = next(iter(shows), None)
+        return {"type": "loaded_show", "show": first[0] if first else ""}
     if kind == "time":
         return {"type": "time", "from": "09:00", "to": "12:00"}
     if kind == "days":
@@ -1047,10 +1131,18 @@ def default_condition(kind: str, show: Show) -> dict[str, Any]:
     return {"type": kind}
 
 
-def default_action(kind: str, show: Show) -> dict[str, Any]:
-    """A sensible starting action of each kind."""
+def default_action(kind: str, show: Show, scope: str = SHOW, loaded: Show | None = None,
+                   shows: Iterable[tuple[str, str]] = ()) -> dict[str, Any]:
+    """A sensible starting action of each kind. show: the show (or the global automations); loaded: the loaded show
+    (a global automation's house lights are named after its); shows: (id, name) of each show (for "Load a show")."""
     first_input = next(iter(show.ordered_inputs()), None)
     input_id = first_input.id if first_input else ""
+    if kind == "load_show":
+        first = next(iter(shows), None)
+        return {"do": "load_show", "show": first[0] if first else ""}
+    if kind == "house" and scope == GLOBAL:
+        source = loaded if loaded is not None else show
+        return {"do": "house", "label": source.house[-1].label if source.house else "Key lights", "level": 0.7, "fade": 2}
     if kind == "base":
         return {"do": "base", "input": input_id}
     if kind == "overlay":

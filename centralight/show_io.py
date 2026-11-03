@@ -1,7 +1,7 @@
 """Reading and writing a show folder.
 
 A show folder holds:
-- show.json: the lights, house lights, global variables and the dashboard order
+- show.json: the lights, house lights, show variables and the dashboard order
 - inputs\\<id>.json: one file per input (people and AI tools can edit these)
 - layouts\\<id>.json: one file per saved map layout
 - automations\\<id>.json: one file per automation
@@ -459,11 +459,19 @@ def automation_to_dict(automation: Automation) -> dict[str, Any]:
     return data
 
 
-def _updated_condition(cond: dict, warnings: list[str]) -> dict:
-    """A condition from before Cut / Fade to black: "Blackout is on" is now "The colour lights are black"."""
+def _updated_condition(cond: dict, warnings: list[str], scope: str = "show") -> dict:
+    """A condition from an older CentraLight: "Blackout is on" is now "The colour lights are black"; and in a show's
+    automation, The PC starts, CentraLight starts and The PC wakes are now "When this show loads" (they're the global
+    automations' now)."""
+    from .automations import CONDITIONS, MOVED_EVENTS
+
     if cond.get("type") == "blackout":
         warnings.append('the condition "Blackout is on" is now "The colour lights are black"')
         return {**cond, "type": "colour_black"}
+    if scope == "show" and cond.get("type") in MOVED_EVENTS:
+        warnings.append(f'the condition "{CONDITIONS[cond["type"]]}" is now "When this show loads" (the PC starting, '
+                        "CentraLight starting and the PC waking are for global automations now)")
+        return {k: v for k, v in cond.items() if k != "type"} | {"type": "show_loads"}
     return cond
 
 
@@ -482,10 +490,10 @@ def _updated_action(action: Any, warnings: list[str]) -> Any:
     return None
 
 
-def automation_from_dict(data: Any, expected_id: str | None = None) -> tuple[Automation, list[str]]:
-    """Check and convert an automation file's data. Raises InputFileError for a file that can't be
-    used at all. A broken condition switches the automation off (dropping it could make the
-    automation run when it shouldn't); a broken action is left out."""
+def automation_from_dict(data: Any, expected_id: str | None = None, scope: str = "show") -> tuple[Automation, list[str]]:
+    """Check and convert an automation file's data (scope: a show's automation, or a "global" one). Raises
+    InputFileError for a file that can't be used at all. A broken condition switches the automation off (dropping it
+    could make the automation run when it shouldn't); a broken action is left out."""
     from .automations import check_action, check_condition
 
     if not isinstance(data, dict):
@@ -513,9 +521,9 @@ def automation_from_dict(data: Any, expected_id: str | None = None) -> tuple[Aut
     if not isinstance(conditions, list) or not all(isinstance(c, dict) for c in conditions):
         raise InputFileError('"conditions" must be a list of objects')
     updated: list[str] = []  # notes about bringing an older file up to date (not problems: it stays switched on)
-    conditions = [_updated_condition(cond, updated) for cond in conditions]
+    conditions = [_updated_condition(cond, updated, scope) for cond in conditions]
     for index, cond in enumerate(conditions, start=1):
-        for problem in check_condition(cond):
+        for problem in check_condition(cond, scope):
             warnings.append(f"condition {index}: {problem}")
     if warnings and enabled:
         enabled = False
@@ -528,7 +536,7 @@ def automation_from_dict(data: Any, expected_id: str | None = None) -> tuple[Aut
         kept[key] = []
         actions = [new for action in actions if (new := _updated_action(action, updated)) is not None]
         for index, action in enumerate(actions, start=1):
-            problems = check_action(action) if isinstance(action, dict) else ["it must be an object"]
+            problems = check_action(action, scope) if isinstance(action, dict) else ["it must be an object"]
             if problems:
                 warnings.append(f"{key.replace('_', ' ')} {index} was left out: {'; '.join(problems)}")
             else:
@@ -540,23 +548,28 @@ def automation_from_dict(data: Any, expected_id: str | None = None) -> tuple[Aut
     return automation, updated + warnings
 
 
-def automation_file(folder: Path, automation_id: str) -> Path:
-    return Path(folder) / AUTOMATIONS_DIR / f"{automation_id}.json"
+def automation_file(folder: Path, automation_id: str, subdir: str = AUTOMATIONS_DIR) -> Path:
+    """A show's automations are in its automations folder; the global ones straight in theirs (subdir "")."""
+    return Path(folder) / subdir / f"{automation_id}.json"
 
 
-def load_automations(folder: Path) -> tuple[dict[str, Automation], list[str]]:
-    """All automations\\*.json files: (automations, warnings). A broken file is left out with a warning."""
+def load_automations(folder: Path, subdir: str = AUTOMATIONS_DIR, scope: str = "show",
+                     skip: tuple[str, ...] = ()) -> tuple[dict[str, Automation], list[str]]:
+    """All automations\\*.json files: (automations, warnings). A broken file is left out with a warning.
+    subdir "" and scope "global": the global automations' folder (skip: its other files, e.g. global.json)."""
     automations: dict[str, Automation] = {}
     warnings: list[str] = []
-    directory = Path(folder) / AUTOMATIONS_DIR
+    directory = Path(folder) / subdir
     if not directory.is_dir():
         return automations, warnings
     for path in sorted(directory.glob("*.json")):
-        where = f"{AUTOMATIONS_DIR}\\{path.name}"
+        if path.name.casefold() in {name.casefold() for name in skip}:
+            continue
+        where = f"{subdir}\\{path.name}" if subdir else path.name
         try:
             if path.stat().st_size > MAX_INPUT_BYTES:
                 raise InputFileError("the file is too big")
-            automation, problems = automation_from_dict(read_json(path), expected_id=path.stem)
+            automation, problems = automation_from_dict(read_json(path), expected_id=path.stem, scope=scope)
         except InputFileError as exc:
             warnings.append(f"{where} was left out: {exc}")
             continue
@@ -574,12 +587,12 @@ def load_automations(folder: Path) -> tuple[dict[str, Automation], list[str]]:
     return automations, warnings
 
 
-def save_automation(folder: Path, automation: Automation) -> None:
-    write_json_atomic(automation_file(folder, automation.id), automation_to_dict(automation))
+def save_automation(folder: Path, automation: Automation, subdir: str = AUTOMATIONS_DIR) -> None:
+    write_json_atomic(automation_file(folder, automation.id, subdir), automation_to_dict(automation))
 
 
-def delete_automation_file(folder: Path, automation_id: str) -> None:
-    path = automation_file(folder, automation_id)
+def delete_automation_file(folder: Path, automation_id: str, subdir: str = AUTOMATIONS_DIR) -> None:
+    path = automation_file(folder, automation_id, subdir)
     if path.exists():
         path.unlink()
     forget_written(path)
@@ -677,7 +690,7 @@ def show_from_dict(data: Any) -> tuple[Show, list[str]]:
     globals_: list[GlobalVar] = []
     globals_data = data.get("globals", [])
     if not isinstance(globals_data, list):
-        warnings.append('show.json "globals" isn\'t a list, so the global variables were left out')
+        warnings.append('show.json "globals" isn\'t a list, so the show variables were left out')
         globals_data = []
     for item in globals_data:
         try:

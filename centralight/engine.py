@@ -26,7 +26,7 @@ import time
 from types import MappingProxyType
 from collections import deque
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
@@ -44,7 +44,7 @@ from .automations import (
     describe_action,
     system_uptime,
 )
-from .bus import Bus, Frozen, Instance, OverlaySlot, composite, layer_kind, render_input
+from .bus import Bus, Frozen, Instance, OverlaySlot, composite, frozen_for_lights, frozen_mix, layer_kind, render_input
 from .commands import (
     HOUSE_SLEW,
     HOUSE_SWITCH_FADE,
@@ -52,14 +52,17 @@ from .commands import (
     ClearBase,
     Command,
     FlashLights,
+    LoadShow,
     OverlayOff,
     PowerEvent,
+    RequestShow,
     ResetAutomation,
     RunAutomation,
     SendToBase,
     SendToOverlay,
     SetAutomationEnabled,
     SetAutomationsPaused,
+    SetGlobalAutomations,
     SetHouse,
     SetIdentify,
     SetMaster,
@@ -67,6 +70,7 @@ from .commands import (
     SetSolo,
     SetTestColour,
     SetVariable,
+    ShowLoadFailed,
     SwapShow,
     SwitchLayout,
     ToBlack,
@@ -75,7 +79,7 @@ from .compositor import to_rgb8
 from .elements import RenderContext, ndi_sources_used
 from .live_state import HouseSetting, LiveState
 from .log import log_exception, log_info
-from .model import EMPTY, Input, Show, Transition, frozen_map, has_finished, input_progress
+from .model import EMPTY, Input, Show, Transition, frozen_map, has_finished, input_progress, slugify
 from .video_source import videos
 from .ndi_source import SourceStatus
 from .output import RGB, OutputStatus, encode_dmx
@@ -105,6 +109,7 @@ WAKE_GAP = 60.0  # seconds: a jump this big in the clocks means the PC slept (or
 WAKE_DEBOUNCE = 60.0  # seconds: wake signals this close together are the same wake
 STARTUP_HOLD = 3.0  # seconds: at most this long at startup, nothing is sent while the screen feed's first picture comes
 FEED_WAIT = 10.0  # seconds: at startup, an automation about a feed waits at most this long for it to start sending
+LOAD_WAIT = 5.0  # seconds: a show a global automation loads; the loaded show's automations wait this long for it at most
 BLACK: RGB = (0.0, 0.0, 0.0)
 WHITE: RGB = (1.0, 1.0, 1.0)
 
@@ -119,6 +124,19 @@ def _brings_lights_up(command: Any) -> bool:
         level_up = command.level is None or command.level > 0.0
         return (command.on is True and level_up) or (command.on is None and (command.level or 0.0) > 0.0)
     return False
+
+
+def show_id(folder: str) -> str:
+    """A show's id, from its folder's name ('...\\Sunday Morning' -> 'sunday-morning'), as shows.show_id."""
+    name = str(folder or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return slugify(name, "show") if name else ""
+
+
+def _folder_key(folder: str) -> str:
+    """A folder written one way, for looking things up (case and slashes as Windows sees them)."""
+    import os
+
+    return os.path.normcase(os.path.abspath(folder)) if folder else ""
 
 
 def clamp01(value: float) -> float:
@@ -223,8 +241,11 @@ class EngineFrame:
     preview: np.ndarray | None = field(default=None, compare=False)  # (90, 160, 3) uint8: the picture
     preview_seq: int = 0
     element_faults: Mapping[str, str] = EMPTY  # "input/element" -> what went wrong
-    variables: Mapping[str, Any] = EMPTY  # global variables' current values (number or (r, g, b))
-    automations: AutomationsView = AutomationsView()
+    variables: Mapping[str, Any] = EMPTY  # show variables' current values (number or (r, g, b))
+    automations: AutomationsView = AutomationsView()  # the loaded show's
+    global_automations: AutomationsView = AutomationsView()
+    show_folder: str = ""  # the loaded show
+    frozen_from: str = ""  # Base holds another show's look, frozen when this one loaded (that show's name)
     tick_ms: float = 0.0  # average work per tick
     tick_max_ms: float = 0.0
     tick_rate: float = 0.0  # ticks in the last second
@@ -263,6 +284,7 @@ class Engine:
         local_time: Callable[[float], datetime] = datetime.fromtimestamp,
         uptime: Callable[[], float] = system_uptime,
         started_by_windows: bool = False,
+        global_automations: Show | None = None,
     ) -> None:
         """output: a DmxOutputThread (anything with submit(bytes) and status()).
         sources: a SourceManager (NDI feeds), or None for no video.
@@ -271,7 +293,12 @@ class Engine:
         wall / local_time / uptime: the real clock, local time (with the clock changes) and how long
         Windows has been running, for automations (tests pass fakes).
         started_by_windows: Windows started CentraLight at sign-in, which counts as "The PC starts" (with Fast
-        Startup, a shut-down PC doesn't really restart, so Windows' running time doesn't go back to 0)."""
+        Startup, a shut-down PC doesn't really restart, so Windows' running time doesn't go back to 0).
+        global_automations: a Show holding just the global automations (they're app-wide, not the show's).
+
+        The PC has just started: every light starts black (house lights off, their levels kept) with nothing
+        playing, and the show's "When this show loads" automations run. CentraLight reopened without a restart
+        (after Quit or a crash): it carries on exactly as it was."""
         self.show = show
         self.output = output
         self.sources = sources if sources is not None else _NoSources()
@@ -290,38 +317,50 @@ class Engine:
         self._quit_dark = bool(live.quit_dark)
         quit_at = live.quit_at if live.quit_at > 0 else live.saved_at if live.saved_at > 0 else wall()
         self._quit_at: float | None = quit_at if self._quit_dark else None
+        self._pc_start = bool(started_by_windows) or uptime() < STARTUP_WINDOW  # (the "The PC starts" test)
         self._house: dict[str, _House] = {}
         self._house_driven: dict[str, str] = {}  # house light id -> the input that set it
-        self._sync_house(live.house)
+        house = live.house
+        if self._pc_start:  # the PC has just started: every light starts black (the house lights' levels are kept)
+            house = {fid: HouseSetting(setting.level, False) for fid, setting in live.house.items()}
+        self._sync_house(house)
         # the lights' colours are worked out at their dots every tick; a picture is drawn only for a window showing one
         self._lights = lights_for(show.fixtures, None)
         self._ctx = RenderContext(0, 0, self.sources, folder=show.folder, lights=self._lights, per_light=True)
         self._picture_ctx = RenderContext(CANVAS_W, CANVAS_H, self.sources, folder=show.folder, lights=self._lights)
         self._globals = initial_globals(show, live.globals)
         self._ctx.globals = frozen_map(self._globals)
-        # automations
+        self._show_globals: dict[str, dict] = {_folder_key(k): dict(v) for k, v in live.show_globals.items()}  # other shows' variables
+        # automations: the loaded show's, and the global ones (app-wide; they're checked first)
         self._wall = wall
         self._local_time = local_time
         self._uptime = uptime
         self._runner = AutomationRunner()
         self._runner.restore(live.automations, wall(), saved_at=live.saved_at)
+        self.global_automations = global_automations if global_automations is not None else Show(name="Global automations")
+        self._global_runner = AutomationRunner()
+        self._global_runner.restore(live.global_automations, wall(), saved_at=live.saved_at)
+        self._global_runner.paused, self._global_runner.paused_since = self._runner.paused, self._runner.paused_since
         self._first_check = True
+        self._show_events: set[str] = {"show_loads"} if self._pc_start else set()  # for the show's automations' next check
+        self._pending_load: tuple[str, float] | None = None  # (show, until when) a global automation is loading
         self._woke = False
         self._last_wake: float | None = None
-        self._started_by_windows = started_by_windows
         self._prev_mono: float | None = None
         self._prev_wall: float | None = None
         self._auto_key: tuple | None = None
         self._ndi_sending: dict[str, bool] = {}
-        self._automation_view = AutomationsView()
-        self._automation_version: tuple | None = None
+        self._views: dict[str, tuple] = {}  # "show" / "global" -> (version, AutomationsView)
         self.gui_requests: queue.SimpleQueue[tuple[str, dict]] = queue.SimpleQueue()  # (who, action) for the window
         self._base = Bus("base")
         self._overlays = [OverlaySlot(n) for n in range(1, OVERLAY_SLOTS + 1)]
         self._overlay_opacity = [Ramp(1.0) for _ in range(OVERLAY_SLOTS)]
         self._solo: Instance | None = None
         self._solo_fixed = False  # the solo input came with its command (not from the show)
-        self._restore_buses(live, initial_base, now)
+        if self._pc_start:
+            log_info("The PC has just started: the lights start black, with nothing playing")
+        else:
+            self._restore_buses(live, initial_base, now)
         self._last_canvas = self._lights.empty()
         # At startup the lights keep showing what they showed (the dongle repeats it) until the feeds Base and the
         # overlays use have their first picture, instead of going black for a second or two meanwhile
@@ -355,7 +394,7 @@ class Engine:
         self._stop_event = threading.Event()
         self._heartbeat = time.perf_counter()
         self._lock = threading.Lock()
-        self.sources.set_keep(self._ndi_names(show))
+        self.sources.set_keep(self._ndi_names())
 
     # ------------------------------------------------------------ used by other threads
 
@@ -414,6 +453,13 @@ class Engine:
                 overlays.append({"input": current.input.id, "time": round(current.time(now), 3), "opacity": ramp.target})
             else:
                 overlays.append(None)
+        frozen = None
+        held = self._base.held
+        if self._base.current is None and held is not None:  # another show's look, held since this one loaded
+            colours = frozen_for_lights(held, self._lights.ids)
+            if colours is not None:
+                frozen = {"from": held.name, "colours": {light_id: [round(float(v), 4) for v in colours[:, i]]
+                                                         for i, light_id in enumerate(self._lights.ids)}}
         return LiveState(
             show=self.show.folder,
             master=self._master.target,
@@ -422,8 +468,11 @@ class Engine:
             house={fid: HouseSetting(h.level.target, h.on) for fid, h in self._house.items()},
             base=base,
             overlays=overlays,
+            frozen=frozen,
             globals=saveable(self._globals),
+            show_globals={k: dict(v) for k, v in self._show_globals.items()},
             automations=self._runner.to_dict(),
+            global_automations=self._global_runner.to_dict(),
         )
 
     # ------------------------------------------------------------ the tick
@@ -515,23 +564,16 @@ class Engine:
         lights' switches go off too, over the same time, keeping their levels; each remembers how, so its next
         plain switch on brings it back the same way."""
         base = self._base
-        showing = base.current is not None or base.transitioning(now) or any(slot.visibility(now) > 0.0 for slot in self._overlays)
         solo, self._solo = self._solo, None  # (the Editor's "Show on lights" ends too: black means black)
-        if seconds > 0.0 and (showing or solo is not None):
-            canvases = {}
-            for ctx in self._contexts():
-                ctx.globals, ctx.audio = self._ctx.globals, self._ctx.audio
-                if solo is not None:
-                    canvases[layer_kind(ctx)] = render_input(solo, now, ctx)  # what the lights were showing
-                else:
-                    canvases[layer_kind(ctx)] = composite(base.render(now, ctx), [slot.render(now, ctx) for slot in self._overlays])
-            base.outgoing = Frozen(canvases)
+        if seconds > 0.0 and (not self._black_now(now) or solo is not None):
+            base.outgoing = self._still_mix(now, solo)
             base.transition = Transition("fade", seconds)
             base.t_start = now
         else:
             base.outgoing = None
             base.transition = Transition("cut", 0.0)
         base.current = None
+        base.held = None
         for slot in self._overlays:
             slot.clear_now()
         self._house_driven.clear()
@@ -546,8 +588,27 @@ class Engine:
         """Nothing on Base or in any overlay, and no fade still going: the colour lights are black."""
         now = self._clock() if now is None else now
         base = self._base
-        return (base.current is None and not base.transitioning(now)
+        return (base.current is None and base.held is None and not base.transitioning(now)
                 and not any(slot.visibility(now) > 0.0 or slot.revealing(now) for slot in self._overlays))
+
+    def _black_now(self, now: float) -> bool:
+        """Nothing shows on the colour lights at this moment (a fade to black may still be ending: not black yet)."""
+        base = self._base
+        return (base.current is None and base.held is None and not base.transitioning(now)
+                and not any(slot.visibility(now) > 0.0 for slot in self._overlays))
+
+    def _still_mix(self, now: float, solo: Instance | None = None) -> Frozen:
+        """What the colour lights show now (Base and the overlays, or the Editor's input), as one still look: for the
+        lights, and for the live picture while one is drawn."""
+        contexts = self._contexts()
+        canvases = {}
+        for ctx in contexts:
+            ctx.globals, ctx.audio = self._ctx.globals, self._ctx.audio
+            if solo is not None:
+                canvases[layer_kind(ctx)] = render_input(solo, now, ctx)  # what the lights were showing
+            else:
+                canvases[layer_kind(ctx)] = composite(self._base.render(now, ctx), [slot.render(now, ctx) for slot in self._overlays])
+        return frozen_mix(canvases, contexts, name=self.show.name)
 
     def _end_quit_dark(self, why: str) -> None:
         if self._quit_dark:
@@ -626,7 +687,8 @@ class Engine:
             except queue.Empty:
                 return applied
             try:
-                if self._quit_dark and isinstance(command, PERSON_TAKES_CHARGE):
+                if self._quit_dark and (isinstance(command, PERSON_TAKES_CHARGE)
+                                        or (isinstance(command, LoadShow) and not command.automation)):
                     self._end_quit_dark("someone took charge")
                 self._apply(command, now)
                 applied = True
@@ -686,20 +748,35 @@ class Engine:
                 self._solo_fixed = command.input is not None  # a trial input: show changes don't replace it
         elif isinstance(command, SwapShow):
             self._swap_show(command.show)
+        elif isinstance(command, LoadShow):
+            self._load_show(command.show, now)
+        elif isinstance(command, RequestShow):
+            self.gui_requests.put((command.who, {"do": "load_show", "folder": command.folder}))
+        elif isinstance(command, ShowLoadFailed):
+            self._pending_load = None
+        elif isinstance(command, SetGlobalAutomations):
+            self.global_automations = command.automations
+            self.sources.set_keep(self._ndi_names())
         elif isinstance(command, SetVariable):
             self._set_variable(command.name, command.value)
         elif isinstance(command, SetAutomationsPaused):
             paused = (not self._runner.paused) if command.paused is None else bool(command.paused)
             self._runner.set_paused(paused, self._wall())
+            self._global_runner.paused, self._global_runner.paused_since = self._runner.paused, self._runner.paused_since
+            if paused:
+                self._global_runner.pending.clear()  # nothing waiting runs while paused
         elif isinstance(command, RunAutomation):
-            automation = self.show.automations.get(command.automation_id)
+            scope = "global" if command.scope == "global" else "show"
+            runner, container = (self._global_runner, self.global_automations) if scope == "global" else (self._runner, self.show)
+            automation = container.automations.get(command.automation_id)
             if automation is not None:
-                for who, action in self._runner.run_now(automation, now, self._wall()):
-                    self._do_action(who, action, now)
+                for who, action in runner.run_now(automation, now, self._wall()):
+                    self._do_action(who, action, now, scope)
         elif isinstance(command, ResetAutomation):
-            self._runner.reset(command.automation_id)
+            (self._global_runner if command.scope == "global" else self._runner).reset(command.automation_id)
         elif isinstance(command, SetAutomationEnabled):
-            self.gui_requests.put(("Stream Deck", {"do": "automation", "automation": command.automation_id, "enabled": command.enabled}))
+            self.gui_requests.put(("Stream Deck", {"do": "automation", "automation": command.automation_id, "enabled": command.enabled,
+                                                   "_scope": "global" if command.scope == "global" else "show"}))
         elif isinstance(command, SwitchLayout):
             self.gui_requests.put(("Stream Deck", {"do": "layout", "layout": command.layout_id}))
         elif isinstance(command, PowerEvent) and command.kind == "woke":
@@ -737,58 +814,91 @@ class Engine:
             if gap > WAKE_GAP or drift > WAKE_GAP:
                 self._on_wake()
         self._prev_mono, self._prev_wall = now, wall
-        runner = self._runner
         overlays = tuple(
             slot.content.current.input.id if slot.on and slot.content.current is not None else ""
             for slot in self._overlays
         )
         base = self._base.current.input.id if self._base.current is not None else ""
         colour_black = self.colour_black(now)
-        key = (base, overlays, colour_black, id(self._ctx.globals), tuple(sorted(self._ndi_sending.items())), id(self.show.automations))
+        key = (base, overlays, colour_black, id(self._ctx.globals), tuple(sorted(self._ndi_sending.items())), id(self.show.automations),
+               id(self.global_automations.automations), self.show.folder)
         events = set()
         if self._first_check:
             events.add("app_started")
-            if self._started_by_windows or self._uptime() < STARTUP_WINDOW:
+            if self._pc_start:
                 events.add("pc_startup")
         if self._woke:
             events.add("pc_woke")
+        show_events = frozenset(self._show_events)
         ran = False
-        if events or key != self._auto_key or runner.wants_check(now):
+        situation = None
+        if events or show_events or key != self._auto_key or self._runner.wants_check(now) or self._global_runner.wants_check(now):
             self._auto_key = key
-            # just after starting, the NDI feeds are still connecting: until one sends (or FEED_WAIT has passed)
-            # "feed lost" isn't true yet, so an automation about it waits
+            # just after starting (or a show loading), the NDI feeds are still connecting: until one sends (or
+            # FEED_WAIT has passed) "feed lost" isn't true yet, so an automation about it waits
             situation = Situation(
                 now=wall, local=self._local_time(wall), base=base, overlays=overlays, variables=self._ctx.globals,
                 ndi=dict(self._ndi_sending), colour_black=colour_black, audio=dict(self._ctx.audio), events=frozenset(events),
                 ndi_known=now >= self._feeds_until,
                 quit_dark_since=self._quit_at if self._quit_dark else None,
+                show=show_id(self.show.folder),
             )
             self._first_check = False
             self._woke = False
-            for who, action in runner.check(self.show, situation, now):
+            # the global automations first (one may load another show)...
+            for who, action in self._global_runner.check(self.global_automations, situation, now):
+                self._do_action(who, action, now, "global")
+                ran = True
+        for who, action in self._global_runner.due(now):
+            self._do_action(who, action, now, "global")
+            ran = True
+        # ...then the show's own, unless a global automation is loading another show: that one's run when it's loaded
+        if self._pending_load is not None:
+            if now < self._pending_load[1]:
+                return ran
+            log_info(f"The show “{self._pending_load[0]}” a global automation asked for didn't load: the loaded show's "
+                     "automations carry on")
+            self._pending_load = None
+            situation = situation or Situation(now=wall, local=self._local_time(wall), base=base, overlays=overlays,
+                                               variables=self._ctx.globals, ndi=dict(self._ndi_sending),
+                                               colour_black=colour_black, audio=dict(self._ctx.audio),
+                                               ndi_known=now >= self._feeds_until, show=show_id(self.show.folder),
+                                               quit_dark_since=self._quit_at if self._quit_dark else None)
+        if situation is not None:
+            self._show_events.difference_update(show_events)
+            for who, action in self._runner.check(self.show, replace(situation, events=show_events), now):
                 self._do_action(who, action, now)
                 ran = True
-        for who, action in runner.due(now):
+        for who, action in self._runner.due(now):
             self._do_action(who, action, now)
             ran = True
         return ran
 
-    def _do_action(self, who: str, action: dict, now: float) -> None:
+    def _do_action(self, who: str, action: dict, now: float, scope: str = "show") -> None:
         action = dict(action)
         lifts = bool(action.pop("_lifts", False))
         try:
-            self._do_action_now(who, action, now, lifts)
+            self._do_action_now(who, action, now, lifts, scope)
         except Exception as exc:  # a wrong value in an automation's file must never stop the engine
             log_exception(f"automation {who}: doing {action.get('do')!r}", exc)
 
-    def _do_action_now(self, who: str, action: dict, now: float, lifts: bool = False) -> None:
+    def _do_action_now(self, who: str, action: dict, now: float, lifts: bool = False, scope: str = "show") -> None:
+        container = self.global_automations if scope == "global" else self.show
         if action.get("do") in GUI_ACTIONS:
-            name = self.show.automations[who].name if who in self.show.automations else who
-            self.gui_requests.put((name, action))
+            name = container.automations[who].name if who in container.automations else who
+            if action.get("do") == "load_show":
+                wanted = str(action.get("show", "")).strip()
+                if not wanted or wanted == show_id(self.show.folder):
+                    return  # (that show is loaded already: nothing to do)
+                self._pending_load = (wanted, now + LOAD_WAIT)
+                if lifts:  # its time range began after a "Turn lights off" quit: the show it loads may light things
+                    self._end_quit_dark(f"global automation {who} began its time")
+            self.gui_requests.put((name, {**action, "_scope": scope}))
             return
-        command = action_command(action, self.show)
+        command = action_command(action, self.show, scope)
         if command is None:
-            log_info(f"Automation {who}: couldn't {describe_action(action, self.show)} (is it still there?)", key=f"automation-skip-{who}")
+            what = describe_action(action, self.show, scope)
+            log_info(f"Automation {who}: couldn't {what} (is it still there?)", key=f"automation-skip-{who}")
             return
         if self._quit_dark and _brings_lights_up(command):
             if not lifts:
@@ -821,13 +931,17 @@ class Engine:
                     log_exception("reconnecting after sleep", exc)
 
     def _automations_view(self) -> AutomationsView:
-        runner = self._runner
-        version = (runner.paused, len(runner.history), runner.history[-1].when if runner.history else 0.0,
+        return self._view_of(self._runner, "show")
+
+    def _view_of(self, runner: AutomationRunner, which: str) -> AutomationsView:
+        """The automations as the screen shows them (made again only when something changed)."""
+        version = (id(runner), runner.paused, len(runner.history), runner.history[-1].when if runner.history else 0.0,
                    tuple((aid, s.matched, s.last_run, s.tripped) for aid, s in runner.states.items()))
-        if version != self._automation_version:
-            self._automation_version = version
-            self._automation_view = AutomationsView(runner.paused, runner.paused_since, frozen_map(runner.statuses()), tuple(runner.history))
-        return self._automation_view
+        cached = self._views.get(which)
+        if cached is None or cached[0] != version:
+            cached = (version, AutomationsView(runner.paused, runner.paused_since, frozen_map(runner.statuses()), tuple(runner.history)))
+            self._views[which] = cached
+        return cached[1]
 
     # ------------------------------------------------------------ house lights set by inputs
 
@@ -866,16 +980,16 @@ class Engine:
                     level = evaluate(setting, t, 0.0)
                 house.level.set(clamp01(level), 0.0, now)
 
-    # ------------------------------------------------------------ global variables
+    # ------------------------------------------------------------ show variables ("globals" in the files)
 
     def _set_variable(self, name: str, raw: Any) -> None:
         var = next((g for g in self.show.globals if g.name == name), None)
         if var is None:
-            log_info(f"There's no global variable called {name!r}", key=f"no-variable-{name}")
+            log_info(f"There's no show variable called {name!r} (in {self.show.name})", key=f"no-variable-{name}")
             return
         value = coerce_global(var, raw, current=self._globals.get(name))
         if value is None:
-            log_info(f"{raw!r} doesn't fit the global variable {name!r} ({var.type})", key=f"bad-variable-{name}")
+            log_info(f"{raw!r} doesn't fit the show variable {name!r} ({var.type})", key=f"bad-variable-{name}")
             return
         if self._globals.get(name) != value:
             self._globals[name] = value
@@ -900,10 +1014,46 @@ class Engine:
             slot.update_inputs(show.inputs)
         if self._solo is not None and self._solo.input.id in show.inputs and not self._solo_fixed:
             self._solo.input = show.inputs[self._solo.input.id]
-        self.sources.set_keep(self._ndi_names(show))
+        self.sources.set_keep(self._ndi_names())
         if show.identify_seed != old.identify_seed:
             self._identify_seed = show.identify_seed  # (Shuffle, and its undo / redo: the lights match the legend)
         self._refresh_identify()
+
+    def _load_show(self, show: Show, now: float) -> None:
+        """Another show: the lights freeze on what they show (Base and the overlays become one still look on Base,
+        held until one of the new show's inputs is sent, which transitions from it). Nothing of the old show plays
+        on (its videos and feeds are let go; a feed the new show uses too stays connected). The house lights and
+        Master keep their levels. The new show's variables come back as they were when it was last loaded, and its
+        automations are checked straight away, "When this show loads" with them."""
+        old = self.show
+        if show.folder and _folder_key(show.folder) == _folder_key(old.folder):
+            self._swap_show(show)  # (the same show again: just its latest version)
+            return
+        solo, self._solo = self._solo, None
+        self._solo_fixed = False
+        base = self._base
+        held = None if self._black_now(now) and solo is None else self._still_mix(now, solo)
+        base.current = None
+        base.outgoing = None
+        base.transition = Transition("cut", 0.0)
+        base.held = held
+        for slot in self._overlays:
+            slot.clear_now()
+        self._house_driven.clear()
+        if old.folder:
+            self._show_globals[_folder_key(old.folder)] = saveable(self._globals)
+        self._swap_show(show)
+        self._globals = initial_globals(show, self._show_globals.pop(_folder_key(show.folder), {}))
+        self._ctx.globals = frozen_map(self._globals)
+        paused, since = self._global_runner.paused, self._global_runner.paused_since
+        self._runner = AutomationRunner()  # the new show's automations start afresh
+        self._runner.paused, self._runner.paused_since = paused, since
+        self._show_events = {"show_loads"}
+        self._pending_load = None
+        self._auto_key = None
+        self._feeds_until = now + FEED_WAIT  # (its feeds are still connecting)
+        log_info(f"Show “{show.name}” loaded ({show.folder}); the lights hold what they showed until one of its inputs is sent"
+                 if held is not None else f"Show “{show.name}” loaded ({show.folder})")
 
     def _refresh_identify(self) -> None:
         colours = identify_colours([fx.id for fx in self.show.colour_fixtures()], self._identify_seed)
@@ -922,6 +1072,8 @@ class Engine:
 
         if live.base:
             self._base.current = instance(live.base)
+        elif live.frozen:  # another show's look, held when this one loaded (no input of this show sent since)
+            self._base.held = self._frozen_from_live(live.frozen)
         elif not live.show and initial_base and initial_base in self.show.inputs:
             self._base.current = Instance(self.show.inputs[initial_base], now)  # the very first run
         for slot, ramp, saved in zip(self._overlays, self._overlay_opacity, live.overlays):
@@ -934,13 +1086,31 @@ class Engine:
                 ramp.set(clamp01(float(opacity)) if isinstance(opacity, (int, float)) else 1.0, 0.0, now)
 
     @staticmethod
-    def _ndi_names(show: Show) -> set[str]:
+    def _frozen_from_live(saved: Any) -> Frozen | None:
+        """A held look from live.json: {"from": show name, "colours": {light id: [r, g, b, a]}}."""
+        colours = saved.get("colours") if isinstance(saved, Mapping) else None
+        if not isinstance(colours, Mapping):
+            return None
+        ids, columns = [], []
+        for light_id, values in colours.items():
+            if isinstance(values, (list, tuple)) and len(values) == 4 and all(
+                    isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
+                ids.append(str(light_id))
+                columns.append([clamp01(float(v)) for v in values])
+        if not ids:
+            return None
+        canvas = np.array(columns, dtype=np.float32).T  # (4, lights)
+        return Frozen({"lights": canvas}, name=str(saved.get("from") or ""), ids=tuple(ids))
+
+    def _ndi_names(self) -> set[str]:
+        """The NDI feeds to keep connected: the show's inputs', and those its automations and the global ones look at."""
+        show = self.show
         names: set[str] = set()
         for inp in show.inputs.values():
             names |= ndi_sources_used(inp.tracks)
         # feeds that automations look at ("An NDI feed is there") and no input uses are kept connected too
         lowered = {n.strip().lower() for n in names}
-        for automation in show.automations.values():
+        for automation in (*show.automations.values(), *self.global_automations.automations.values()):
             for cond in automation.conditions if automation.enabled else ():
                 wanted = str(cond.get("source") or "").strip() if cond.get("type") == "ndi" else ""
                 key = wanted.lower()
@@ -1016,6 +1186,13 @@ class Engine:
                 if key:
                     sending[key] = sending.get(key, False) or on
         self._ndi_sending = sending
+        held = self._base.held if current is None else None
+        if current is not None:
+            base_name = current.input.name
+        elif held is not None:
+            base_name = f"frozen (from {held.name})" if held.name else "frozen"
+        else:
+            base_name = "Black"
         frame = EngineFrame(
             seq=self._seq,
             colours=frozen_map(colours),
@@ -1023,7 +1200,7 @@ class Engine:
             master=self._master.value(now),
             colour_black=self.colour_black(now),
             output=self.output.status(),
-            base=current.input.name if current is not None else "Black",
+            base=base_name,
             base_id=current.input.id if current is not None else "",
             base_progress=self._base.progress(now),
             playing=frozen_map(playing),
@@ -1043,6 +1220,9 @@ class Engine:
             element_faults=frozen_map(dict(self._ctx.faults)),
             variables=self._ctx.globals,
             automations=self._automations_view(),
+            global_automations=self._view_of(self._global_runner, "global"),
+            show_folder=self.show.folder,
+            frozen_from=held.name if held is not None else "",
             tick_ms=1000.0 * sum(times) / len(times) if times else 0.0,
             tick_max_ms=1000.0 * max(times) if times else 0.0,
             tick_rate=float(len(self._tick_stamps)),

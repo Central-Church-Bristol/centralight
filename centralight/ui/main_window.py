@@ -17,13 +17,25 @@ from typing import Any
 
 from PySide6.QtCore import QEvent, QRect, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QShortcut
-from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QMessageBox,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..commands import (
     ClearBase,
     OverlayOff,
     SendToBase,
     SendToOverlay,
+    ShowLoadFailed,
     ToBlack,
     SetHouse,
     SetAutomationsPaused,
@@ -33,6 +45,7 @@ from ..commands import (
 )
 from .. import startup
 from ..automations import update_automation, upcoming
+from ..global_automations import GLOBAL_NAME
 from ..layouts import switch_layout
 from ..engine import EngineFrame
 from ..input_edit import delete_input, duplicate_input, new_input
@@ -41,17 +54,20 @@ from ..log import log_exception, log_info
 from ..model import Show
 from ..ndi_source import CONNECTED, NO_SIGNAL, SEARCHING
 from ..output import device_spec, universe_size
+from ..paths import shows_root as default_shows_root
 from ..settings import QUIT_ASK, QUIT_OFF, Settings
-from ..show_io import backup_show
+from ..show_io import ShowError, backup_show
+from ..show_io import load_show as read_show
+from ..shows import ShowInfo, delete_show, duplicate_show, find_show, list_shows, new_show, same_folder, unique_name
 from . import icons
 from .bridge import EngineBridge
 from .dashboard import DashboardPage
-from ..ai_guide import AIReplyError, parse_reply, write_guide_files
+from ..ai_guide import AIReplyError, parse_reply, write_global_guide, write_guide_files
 from .ai_dialog import AIDialog
 from .automation_page import AutomationPage
 from .file_watcher import FolderWatcher
 from ..video_source import videos
-from .document import SCOPE_AUTOMATIONS, SCOPE_LAYOUT, SCOPE_SHOW, ShowDocument
+from .document import KIND_GLOBAL, SCOPE_AUTOMATIONS, SCOPE_LAYOUT, SCOPE_SHOW, ShowDocument
 from .editor_page import EditorPage
 from .header import PAGES, Header
 from .layout_page import LayoutPage
@@ -95,9 +111,14 @@ class MainWindow(QWidget):
         live_path: Path | None = None,
         notes_path: Path | None = None,
         remote: Any | None = None,
+        global_automations: Show | None = None,
+        shows_root: Path | None = None,
     ) -> None:
+        """global_automations: a Show holding just the global automations (none: an empty one that isn't saved).
+        shows_root: the folder the shows are in (Documents\\CentraLight Shows)."""
         super().__init__()
         self.settings = settings
+        self._shows_root = Path(shows_root) if shows_root is not None else None
         self.engine = engine
         self.output = output
         self.remote = remote  # the Stream Deck remote (remote.RemoteServer), if it's running
@@ -125,7 +146,13 @@ class MainWindow(QWidget):
         self.last_frame: EngineFrame | None = None
         self.document = ShowDocument(show, engine, save_files=save_files)
         self.document.changed.connect(self._show_changed)
+        self.document.loaded.connect(self._show_loaded)
         self.document.save_problem.connect(lambda _text: self._update_files_chip())
+        # the global automations: app-wide, with a history and autosave of their own (in the same undo group)
+        globals_ = global_automations if global_automations is not None else Show(name=GLOBAL_NAME)
+        self.global_document = ShowDocument(globals_, engine, save_files=save_files, kind=KIND_GLOBAL,
+                                            undo_group=self.document.undo_group)
+        self.global_document.save_problem.connect(lambda _text: self._update_files_chip())
         # files that couldn't be read when the show opened, and other warnings (they used to go only to the log)
         self._load_problems = [f"inputs\\{input_id}.json couldn't be read: {error}" for input_id, error in show.input_errors.items()]
         self._load_problems += list(show.warnings)
@@ -157,13 +184,15 @@ class MainWindow(QWidget):
         self.dashboard.delete_requested.connect(self.delete_input)
         self.dashboard.variable_changed.connect(lambda name, value: self.engine.submit(SetVariable(name, value)))
         self.dashboard.ai_requested.connect(self.open_ai_dialog)
-        self.layout_page = LayoutPage(self.document, engine, notes_path=notes_path)
+        self.layout_page = LayoutPage(self.document, engine, notes_path=notes_path, shows_provider=self.list_shows)
         self.editor_page = EditorPage(self.document, engine, settings, sources=sources)
         self.editor_page.done.connect(lambda: self.show_page("dashboard"))
         self.editor_page.new_input_requested.connect(self.new_input)
         self.editor_page.ai_requested.connect(self.open_ai_dialog)
         self.automation_page = AutomationPage(self.document, engine, sources_provider=(
-            (lambda: sources.available()) if sources is not None and hasattr(sources, "available") else None))
+            (lambda: sources.available()) if sources is not None and hasattr(sources, "available") else None),
+            global_document=self.global_document, shows_provider=self.list_shows)
+        self.automation_page.scope_changed.connect(self._update_undo_scope)
         self.pages: dict[str, QWidget] = {
             "dashboard": self.dashboard,
             "editor": self.editor_page,
@@ -183,6 +212,14 @@ class MainWindow(QWidget):
         layout.addWidget(self.stack, 1)
 
         self.header.page_requested.connect(self.show_page)
+        picker = self.header.show_picker
+        picker.set_provider(self.list_shows, same_folder)
+        picker.set_show(show.name, show.folder)
+        picker.load_requested.connect(lambda folder: self.load_show(folder))
+        picker.new_requested.connect(self.ask_new_show)
+        picker.duplicate_requested.connect(self.ask_duplicate_show)
+        picker.rename_requested.connect(self.ask_rename_show)
+        picker.delete_requested.connect(self.ask_delete_show)
         self.header.settings_requested.connect(self.open_settings)
         self.header.house_changed.connect(self._house_changed)
         self.header.master_changed.connect(lambda level: self.engine.submit(SetMaster(level)))
@@ -234,6 +271,10 @@ class MainWindow(QWidget):
                                      parent=self) if save_files else None
         if self.watcher is not None:
             self.watcher.problems_changed.connect(self.dashboard.grid.set_problems)
+            if self.watcher.problems:  # (files that couldn't be read when the show opened)
+                self.dashboard.grid.set_problems(dict(self.watcher.problems))
+        # ...and the global automations' folder, for ones written outside CentraLight
+        self.global_watcher = FolderWatcher(self.global_document, parent=self) if save_files and globals_.folder else None
         self._guide_key = None
         self._guide_timer = QTimer(self)
         self._guide_timer.setSingleShot(True)
@@ -270,11 +311,25 @@ class MainWindow(QWidget):
         self.settings.page = key
         if key == "layout" and self.last_frame is not None:
             self.layout_page.set_frame(self.last_frame)
-        # Undo follows what's on screen: the layout, the input being edited, the automations, or the show
-        scopes = {"layout": SCOPE_LAYOUT, "editor": self.editor_page.undo_scope(), "automation": SCOPE_AUTOMATIONS}
-        self.document.set_scope(scopes.get(key, SCOPE_SHOW))
+        self._update_undo_scope()
         if key == "editor":
             self.editor_page.on_enter()
+
+    def _update_undo_scope(self) -> None:
+        """Undo follows what's on screen: the layout, the input being edited, the show's automations or the global
+        ones, or the show."""
+        if self._page == "automation" and self.automation_page.global_selected():
+            self.global_document.set_scope(SCOPE_AUTOMATIONS)
+            return
+        scopes = {"layout": SCOPE_LAYOUT, "editor": self.editor_page.undo_scope(), "automation": SCOPE_AUTOMATIONS}
+        self.document.set_scope(scopes.get(self._page, SCOPE_SHOW))
+
+    def _active_document(self) -> ShowDocument:
+        """The document whose history is on screen (the global automations' on the Automation tab, when one of them
+        is selected)."""
+        if self._page == "automation" and self.automation_page.global_selected():
+            return self.global_document
+        return self.document
 
     def open_editor(self, input_id: str) -> None:
         self.editor_page.open_input(input_id)
@@ -308,6 +363,168 @@ class MainWindow(QWidget):
         if answer == QMessageBox.StandardButton.Yes:
             self.document.apply(delete_input(self.document.show, input_id), f"Delete {inp.name}")
 
+    # ------------------------------------------------------------ shows
+
+    def shows_root(self) -> Path:
+        """The folder the shows are in (Documents\\CentraLight Shows)."""
+        if self._shows_root is not None:
+            return self._shows_root
+        folder = self.document.show.folder
+        return default_shows_root() if not folder else Path(folder).parent
+
+    def list_shows(self) -> list[ShowInfo]:
+        return list_shows(self.shows_root())
+
+    def load_show(self, folder: str, who: str = "", automation: bool = False) -> bool:
+        """Load another show (from the picker, or who: a global automation or the Stream Deck; automation: it was a
+        global automation). The lights freeze on what they show until one of its inputs is sent; its automations are
+        checked straight away. True if it loaded."""
+        if same_folder(folder, self.document.show.folder):
+            return False
+        if self._locked and not who:
+            return False
+        try:
+            show = read_show(Path(folder))
+        except (ShowError, OSError) as exc:
+            log_info(f"{who or 'Load a show'}: couldn't load the show in {folder} ({exc})")
+            self.engine.submit(ShowLoadFailed())
+            if not who:
+                QMessageBox.warning(self, "Load a show", f"CentraLight couldn't load the show in\n{folder}\n\n{exc}")
+            return False
+        for warning in show.warnings:
+            log_info(f"Show warning: {warning}")
+        if not show.read_only:
+            try:
+                backup_show(Path(folder))
+            except OSError as exc:
+                log_exception("show backup", exc)
+        self._leave_live_modes()  # (Identify, test colours, the Editor's and the AI window's "on the lights" end)
+        dialog = getattr(self, "ai_dialog", None)
+        if dialog is not None:
+            try:
+                dialog.close()  # (it belonged to the other show)
+            except RuntimeError:
+                pass
+            self.ai_dialog = None
+        self.document.load(show, automation)
+        log_info(f"{who + ': ' if who else ''}show “{show.name}” loaded")
+        return True
+
+    def _show_loaded(self, show: Show) -> None:
+        """Another show is loaded: the window follows (its files watched, its problems shown, it opens next time)."""
+        if self.watcher is not None:
+            self.watcher.start(show)
+        self._load_problems = [f"inputs\\{input_id}.json couldn't be read: {error}" for input_id, error in show.input_errors.items()]
+        self._load_problems += list(show.warnings)
+        self._update_files_chip()
+        self.header.set_show_name(show.name, show.folder)
+        if self._page == "editor" and not self.editor_page.input_id:
+            self.show_page("dashboard")  # (the input being edited isn't in this show)
+        else:
+            self._update_undo_scope()
+            if self._page == "editor" and self.isVisible():
+                self.editor_page.on_enter()  # (its viewports draw this show's input now)
+        if show.folder and not show.read_only:
+            self.settings.show_folder = show.folder  # (live.json says it too: it opens next time)
+            self._save_settings()
+        self._guide_key = None
+        if self._save_files:
+            self._guide_timer.start()
+            if show.folder and not show.read_only:
+                self._backup_timer.start()
+
+    def _load_requested(self, who: str, action: Mapping[str, Any]) -> None:
+        """A global automation (a show id) or the Stream Deck (a folder) asks for a show."""
+        wanted = str(action.get("folder") or action.get("show") or "").strip()
+        info = None
+        if action.get("folder"):
+            info = next((s for s in self.list_shows() if same_folder(s.folder, wanted)), None)
+        if info is None:
+            info = find_show(self.shows_root(), wanted)
+        if info is None:
+            log_info(f"{who}: there's no show called {wanted!r} to load")
+            self.engine.submit(ShowLoadFailed())
+            return
+        if same_folder(info.folder, self.document.show.folder):
+            self.engine.submit(ShowLoadFailed())  # (it's loaded already: the loaded show's automations carry on)
+            return
+        self.load_show(info.folder, who=who or "Automation", automation=action.get("_scope") == "global")
+
+    def ask_new_show(self) -> None:
+        if self._locked:
+            return
+        name, ok = QInputDialog.getText(
+            self, "New show", "Name for the new show:\n\n(It has this show's lights and layouts, and “Follow screen”. It "
+            "opens straight away; the lights hold what they show until you send one of its inputs.)",
+            text=unique_name(self.shows_root(), "New show"))
+        if not ok or not name.strip():
+            return
+        self.document.flush()
+        try:
+            folder = new_show(self.document.show, self.shows_root(), name)
+        except (ShowError, OSError) as exc:
+            log_exception("making a new show", exc)
+            QMessageBox.warning(self, "New show", f"CentraLight couldn't make the show:\n{exc}")
+            return
+        self.load_show(str(folder))
+
+    def ask_duplicate_show(self) -> None:
+        if self._locked:
+            return
+        show = self.document.show
+        if not show.folder:
+            return
+        name, ok = QInputDialog.getText(
+            self, "Duplicate show", f"Name for the copy of “{show.name}”:\n\n(Everything in it is copied, media too. Its "
+            "inputs keep their ids, so Stream Deck keys work in both. The copy opens straight away.)",
+            text=unique_name(self.shows_root(), f"{show.name} copy"))
+        if not ok or not name.strip():
+            return
+        self.document.flush()
+        self.document.wait_saved()
+        try:
+            folder = duplicate_show(Path(show.folder), self.shows_root(), name)
+        except (ShowError, OSError) as exc:
+            log_exception("copying the show", exc)
+            QMessageBox.warning(self, "Duplicate show", f"CentraLight couldn't copy the show:\n{exc}")
+            return
+        self.load_show(str(folder))
+
+    def ask_rename_show(self) -> None:
+        if self._locked or self.document.read_only:
+            return
+        show = self.document.show
+        name, ok = QInputDialog.getText(
+            self, "Rename show", "New name for this show:\n\n(Its folder keeps its name, so Stream Deck keys that load it "
+            "keep working.)", text=show.name)
+        if not ok or not name.strip():
+            return
+        from dataclasses import replace
+
+        new_name = unique_name(self.shows_root(), name, ignore=show.folder)
+        if new_name != show.name:
+            self.document.apply(replace(show, name=new_name), f"Rename show {show.name} → {new_name}")
+
+    def ask_delete_show(self, folder: str) -> None:
+        if self._locked:
+            return
+        info = next((s for s in self.list_shows() if same_folder(s.folder, folder)), None)
+        if info is None or same_folder(folder, self.document.show.folder):
+            return
+        answer = QMessageBox.question(
+            self, "Delete show", f"Delete the show “{info.name}”?\n\nIts folder goes to the Recycle Bin, so you can "
+            f"put it back from there.\n\n{info.folder}")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            delete_show(Path(folder), self.document.show.folder)
+        except (ShowError, OSError) as exc:
+            log_exception("deleting a show", exc)
+            QMessageBox.warning(self, "Delete show", f"CentraLight couldn't delete the show:\n{exc}")
+            return
+        if self._save_files:
+            self._guide_timer.start()  # (the global automations' guide lists the shows)
+
     def _overlay_switched(self, slot: int, on: bool) -> None:
         if self._locked:
             return
@@ -329,6 +546,7 @@ class MainWindow(QWidget):
         self.layout_page.setEnabled(not locked)
         self.editor_page.setEnabled(not locked)
         self.automation_page.setEnabled(not locked)
+        self.header.show_picker.setEnabled(not locked)
         self.lock_banner.setVisible(locked)
 
     @property
@@ -341,7 +559,7 @@ class MainWindow(QWidget):
         if self._page == "dashboard":  # no history on screen there: the newest step, whichever history it's in
             self.document.undo_newest()
         else:
-            self.document.undo()
+            self._active_document().undo()
 
     def redo(self) -> None:
         if self._locked:
@@ -349,7 +567,7 @@ class MainWindow(QWidget):
         if self._page == "dashboard":
             self.document.redo_newest()
         else:
-            self.document.redo()
+            self._active_document().redo()
 
     def _update_files_chip(self) -> None:
         problem = self.document.problem
@@ -380,7 +598,7 @@ class MainWindow(QWidget):
             self._guide_timer.start()  # the lights or globals changed: rewrite the AI guide soon
         self.dashboard.set_show(show)
         self.header.set_house([(h.fixture, h.label) for h in show.house])
-        self.header.set_show_name(show.name)
+        self.header.set_show_name(show.name, show.folder)
         self._update_title(show)
 
     def _update_title(self, show: Show) -> None:
@@ -585,6 +803,10 @@ class MainWindow(QWidget):
         self._guide_key = self._guide_inputs(show)
         try:
             written = write_guide_files(show)
+            folder = self.global_document.show.folder
+            if folder and not self.global_document.read_only:  # (and the global automations' own, with the shows' ids)
+                written += write_global_guide(Path(folder), [(s.id, s.name) for s in self.list_shows()],
+                                              [h.label for h in show.house])
         except Exception as exc:
             log_exception("writing the AI guide", exc)
             return
@@ -624,20 +846,24 @@ class MainWindow(QWidget):
 
     def _update_automations_chip(self, frame: EngineFrame) -> None:
         show = self.show_data
-        if not show.automations:
+        globals_ = self.global_document.show
+        if not show.automations and not globals_.automations:
             self.header.set_chip("automations", None)
             return
         view = frame.automations
         if view.paused:
             self.header.set_chip("automations", STATE_WARN, "Automations paused",
-                                 "Nothing runs by itself until you resume.\nClick to resume.")
+                                 "Nothing runs by itself (global automations included) until you resume.\nClick to resume.")
             return
         now = time.monotonic()
         if now - self._next_run_checked > 30:  # working out the next run is quick, but not every frame
             self._next_run_checked = now
-            found = upcoming(show, datetime.now(), days=7, limit=1)
+            found = sorted(upcoming(show, datetime.now(), days=7, limit=1) + upcoming(globals_, datetime.now(), days=7, limit=1),
+                           key=lambda item: item[0])
             self._next_run_text = f"Next: {found[0][0]:%a %H:%M} {found[0][1].name}" if found else "Nothing timed in the next 7 days"
         tripped = [show.automations[aid].name for aid, s in view.statuses.items() if s.tripped and aid in show.automations]
+        tripped += [globals_.automations[aid].name for aid, s in frame.global_automations.statuses.items()
+                    if s.tripped and aid in globals_.automations]
         if tripped:
             self.header.set_chip("automations", STATE_ERROR, "Automations: check",
                                  f"Paused by the loop guard: {', '.join(tripped)}.\nSee the Automation tab.")
@@ -652,10 +878,18 @@ class MainWindow(QWidget):
                 who, action = requests.get_nowait()
             except queue.Empty:
                 return
-            show = self.show_data
+            if action.get("do") == "load_show":
+                try:
+                    self._load_requested(who, action)
+                except Exception as exc:  # (never let one request stop the rest)
+                    log_exception("loading a show", exc)
+                    self.engine.submit(ShowLoadFailed())
+                continue
+            document = self.global_document if action.get("_scope") == "global" else self.document
+            show = document.show
             if show.read_only:
                 continue
-            if action.get("do") == "layout":
+            if action.get("do") == "layout" and document is self.document:
                 layout = show.layout(str(action.get("layout", "")))
                 if layout is not None and layout.id != show.active_layout:
                     self.document.apply(switch_layout(show, layout.id), f"{who}: switch to layout {layout.name}")
@@ -663,8 +897,8 @@ class MainWindow(QWidget):
                 automation = show.automations.get(str(action.get("automation", "")))
                 enabled = bool(action.get("enabled", True))
                 if automation is not None and automation.enabled != enabled:
-                    self.document.apply(update_automation(show, automation.id, enabled=enabled),
-                                        f"{who}: turn “{automation.name}” {'on' if enabled else 'off'}")
+                    document.apply(update_automation(show, automation.id, enabled=enabled),
+                                   f"{who}: turn “{automation.name}” {'on' if enabled else 'off'}")
 
     # ------------------------------------------------------------ the Stream Deck remote
 
@@ -884,8 +1118,9 @@ class MainWindow(QWidget):
         self._backup_timer.stop()
         self.layout_page.on_leave()
         self.editor_page.shutdown()
-        if self.watcher is not None:
-            self.watcher.stop()
+        for watcher in (self.watcher, self.global_watcher):
+            if watcher is not None:
+                watcher.stop()
         self._guide_timer.stop()
         if self.remote is not None:
             self.remote.stop()
@@ -899,6 +1134,7 @@ class MainWindow(QWidget):
         if audio is not None:
             audio.stop()
         self.document.close()
+        self.global_document.close()
         log_info(f"CentraLight closed ({'lights off' if lights_off else 'lights left as they were'})")
         if self._save_files:
             try:

@@ -1,6 +1,7 @@
 """The header across the top of every page.
 
-Left to right: the logo and wordmark, the page tabs, status chips, Lock, Settings, the
+Left to right: the logo and wordmark, the page tabs, the show picker ("Show: Morning ▾"),
+status chips, Lock, Settings, the
 Festoon / Key lights / Master faders, and Cut to black / Fade to black. When the window is too narrow for
 one line, the faders move to a slim second row; narrower still, the chips shrink to
 coloured dots (hover for the details).
@@ -11,13 +12,16 @@ or the Stream Deck), and only send changes when someone moves them.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 
 from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QToolButton,
@@ -45,6 +49,98 @@ from .widgets import (
 
 PAGES = (("dashboard", "Dashboard"), ("editor", "Editor"), ("layout", "Layout"), ("automation", "Automation"))
 BLACK_TIP = "Click: colour lights. Hold: everything, including Festoon and Key lights (Shift-click too)."
+SHOW_NAME_MAX_PX = 190  # longer show names are shortened with "…" on the picker
+SHOW_NAME_MIN_PX = 60  # ...and more, down to this, when the header is short of room
+
+
+class ShowPicker(QToolButton):
+    """"Show: Morning ▾", after the tabs: load another show, or make, copy, rename or delete one. Changes save by
+    themselves, so there's no Save. The list of shows is read when the menu opens (provider: [ShowInfo])."""
+
+    load_requested = Signal(str)  # a show's folder
+    new_requested = Signal()
+    duplicate_requested = Signal()
+    rename_requested = Signal()
+    delete_requested = Signal(str)  # a show's folder (never the loaded one)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ShowPicker")
+        self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setAccessibleName("Show")
+        self.picker_menu = QMenu(self)
+        self.picker_menu.aboutToShow.connect(self.fill_menu)
+        self.setMenu(self.picker_menu)
+        self._provider: Callable[[], list] = lambda: []
+        self._name = ""
+        self._folder = ""
+        self._limit = SHOW_NAME_MAX_PX
+        self._same: Callable[[str, str], bool] = lambda a, b: a == b
+        self.set_show("", "")
+
+    def set_provider(self, provider: Callable[[], list], same_folder: Callable[[str, str], bool] | None = None) -> None:
+        self._provider = provider
+        if same_folder is not None:
+            self._same = same_folder
+
+    def set_show(self, name: str, folder: str) -> None:
+        self._name, self._folder = name, folder
+        self._update_text()
+
+    def set_text_limit(self, pixels: int) -> None:
+        """How wide the name may be (shortened with "…" beyond it): less when the header is short of room."""
+        pixels = max(SHOW_NAME_MIN_PX, min(SHOW_NAME_MAX_PX, int(pixels)))
+        if pixels != self._limit:
+            self._limit = pixels
+            self._update_text()
+
+    def _update_text(self) -> None:
+        full = f"Show: {self._name or '—'}"
+        metrics = self.fontMetrics()
+        if metrics.horizontalAdvance(full) <= self._limit:
+            text = full
+        else:  # short of room: the name alone, shortened ("Show:" goes first)
+            text = metrics.elidedText(self._name or "—", Qt.TextElideMode.ElideRight, self._limit)
+        if self.text() != f"{text}  ▾":
+            self.setText(f"{text}  ▾")
+        self.setToolTip(f"{full}\nLoad another show, or make, copy, rename or delete one. Changes save by themselves.")
+
+    def fill_menu(self) -> None:
+        """The shows (the loaded one ticked), then New / Duplicate / Rename / Delete."""
+        menu = self.picker_menu
+        menu.clear()
+        try:
+            shows = list(self._provider())
+        except Exception:
+            shows = []
+        title = menu.addAction("Load a show")
+        title.setEnabled(False)
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        for info in shows:
+            action = menu.addAction(info.name)
+            action.setCheckable(True)
+            action.setChecked(self._same(info.folder, self._folder))
+            action.setToolTip(info.folder)
+            action.triggered.connect(lambda _checked=False, folder=info.folder: self.load_requested.emit(folder))
+            group.addAction(action)
+        if not shows:
+            none = menu.addAction("(no shows found)")
+            none.setEnabled(False)
+        menu.addSeparator()
+        menu.addAction("New show…", self.new_requested.emit)
+        menu.addAction(f"Duplicate “{self._name}”…", self.duplicate_requested.emit)
+        menu.addAction(f"Rename “{self._name}”…", self.rename_requested.emit)
+        delete = menu.addMenu("Delete a show")
+        others = [info for info in shows if not self._same(info.folder, self._folder)]
+        for info in others:
+            delete.addAction(f"{info.name}…", lambda folder=info.folder: self.delete_requested.emit(folder))
+        if not others:
+            nothing = delete.addAction("(only the loaded show: it can't be deleted)")
+            nothing.setEnabled(False)
 
 
 class PercentLabel(QLabel):
@@ -166,7 +262,7 @@ class Header(QFrame):
         self._arranging = False
 
         self.brand = BrandBlock()
-        self.set_show_name(show_name)
+        self.brand.setToolTip(f"Show: {show_name}")
 
         self.tabs: dict[str, QPushButton] = {}
         self._tab_group = QButtonGroup(self)
@@ -185,6 +281,8 @@ class Header(QFrame):
             self._tab_group.addButton(button)
             tab_layout.addWidget(button)
             self.tabs[key] = button
+        self.show_picker = ShowPicker()
+        self.show_picker.set_show(show_name, "")
 
         self.chips: dict[str, StatusChip] = {}
         self.chip_box = QWidget()
@@ -247,6 +345,7 @@ class Header(QFrame):
         self.row1.setSpacing(14)
         self.row1.addWidget(self.brand)
         self.row1.addWidget(self.tab_box)
+        self.row1.addWidget(self.show_picker)
         self.row1.addStretch(1)
         self.row1.addWidget(self.chip_box)
         self.row1.addWidget(self.lock_button)
@@ -325,9 +424,12 @@ class Header(QFrame):
         if button is not None and not button.isChecked():
             button.setChecked(True)
 
-    def set_show_name(self, name: str) -> None:
-        # not shown in the header (just the wordmark); hovering the logo names the show
+    def set_show_name(self, name: str, folder: str | None = None) -> None:
+        """The loaded show, on the picker (and the logo's tooltip)."""
         self.brand.setToolTip(f"Show: {name}")
+        if name != self.show_picker._name or (folder is not None and folder != self.show_picker._folder):
+            self.show_picker.set_show(name, self.show_picker._folder if folder is None else folder)
+            self._arrange(force=True)
 
     def set_house(self, house: list[tuple[str, str]]) -> None:
         """Update the house-light controls after the show changed (renamed, added or removed)."""
@@ -397,6 +499,7 @@ class Header(QFrame):
         parts = [
             brand,
             self.tab_box.sizeHint().width(),
+            self.show_picker.sizeHint().width(),
             chip_width,
             self.lock_button.sizeHint().width(),
             self.settings_button.sizeHint().width(),
@@ -412,8 +515,13 @@ class Header(QFrame):
         self._arranging = True
         try:
             width = self.width()
+            self.show_picker.set_text_limit(SHOW_NAME_MAX_PX)
             one_row = self._row1_width(True, False) <= width
             compact = (not one_row) and self._row1_width(False, False) > width
+            if compact:  # still short of room with the chips as dots: the show's name shortens to fit
+                over = self._row1_width(False, True) - width
+                if over > 0:
+                    self.show_picker.set_text_limit(SHOW_NAME_MAX_PX - over - 8)  # (… cuts whole letters: some to spare)
             if force or one_row != self._one_row:
                 self._place_levels(one_row)
             if force or compact != self._compact_chips:

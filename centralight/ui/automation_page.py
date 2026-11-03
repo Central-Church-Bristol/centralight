@@ -1,15 +1,18 @@
 """The Automation tab: "when these conditions are met, do this".
 
-- Left: the list of automations (tick = on), with what each does and when it last ran, then
-  what's coming up in the next 7 days.
+- Left: two lists (tick = on), each with what its automations do and when they last ran: the
+  Global automations (app-wide: they can load a show, cut or fade to black, set Master and the
+  house lights; they're checked first), and This show's. Then what's coming up in the next 7 days,
+  from both (the global ones labelled).
 - Right: the selected automation: its name, on / off and Run now; "Run when All / Any of these
   are true" with a row per condition (each can be inverted); "Do this", a row per action (each
   can wait first); and, optionally, "When it stops matching, do this". Below, the history of
-  recent runs.
-- Top: pause every automation (also the header's Automations chip), and Undo / Redo / History
-  for changes on this tab.
+  recent runs (both lists').
+- Top: pause every automation, global ones too (also the header's Automations chip), and Undo /
+  Redo / History for changes to the list in use.
 
-Edits go through the show document (one undo step each) and are saved to automations\\<id>.json.
+Edits go through the show's document, or the global automations' (one undo step each), and are
+saved to automations\\<id>.json in the show, or to _Global automations\\<id>.json.
 """
 
 from __future__ import annotations
@@ -43,13 +46,15 @@ from PySide6.QtWidgets import (
 )
 
 from ..automations import (
-    ACTIONS,
-    CONDITIONS,
     DAY_NAMES,
     DAYS,
+    GLOBAL,
     MONTHS,
+    SHOW,
     SUN_MINUTES,
+    actions_for,
     add_automation,
+    conditions_for,
     default_action,
     default_condition,
     describe_action,
@@ -75,6 +80,8 @@ EVENT_HINTS = {
     "app_started": "Every time CentraLight starts (restarts too).",
     "pc_woke": "When the PC wakes from sleep.",
     "colour_black": "While nothing is on Base or in the overlays (after Cut or Fade to black, say).",
+    "show_loads": ("When this show is loaded (by you, the Stream Deck or a global automation), and when the PC starts with "
+                   "it. Not when CentraLight reopens after a quit or a crash: then it carries on as it was."),
 }
 SUN_WHEN_LABELS = (("after", "After"), ("before", "Before"))
 SUN_EVENT_LABELS = (("sunset", "sunset"), ("sunrise", "sunrise"))
@@ -174,7 +181,7 @@ class RuleRow(QFrame):
         self.page = page
         self.data = dict(data)
         self.is_action = is_action
-        kinds = ACTIONS if is_action else CONDITIONS
+        kinds = actions_for(page.scope) if is_action else conditions_for(page.scope)
         key = "do" if is_action else "type"
         self.kind = _combo(list(kinds.items()), self.data.get(key))
         self.kind.setToolTip("What this " + ("does" if is_action else "checks"))
@@ -222,7 +229,9 @@ class RuleRow(QFrame):
         kind = self.kind.currentData()
         if kind == self.data.get(key):
             return
-        fresh = default_action(kind, self.page.show_data) if self.is_action else default_condition(kind, self.page.show_data)
+        page = self.page
+        fresh = (default_action(kind, page.container(), page.scope, page.show_data, page.show_choices()) if self.is_action
+                 else default_condition(kind, page.container(), page.show_choices()))
         if self.is_action and self.data.get("delay"):
             fresh["delay"] = self.data["delay"]
         self.changed.emit(fresh)
@@ -320,7 +329,7 @@ class RuleRow(QFrame):
                 compare.currentIndexChanged.connect(lambda _i: (value.setVisible(compare.currentData() not in ("on", "off")), self._set("compare", compare.currentData())))
                 value.editingFinished.connect(lambda: self._set("value", _number_or_text(value.text())))
                 if not names:
-                    self._note("Add global variables in the Editor's Globals tab first.")
+                    self._note("Add show variables in the Editor's Show variables tab first.")
                 self._add(pick, compare, value)
             elif kind == "ndi":
                 source = QComboBox()
@@ -340,11 +349,33 @@ class RuleRow(QFrame):
                 hold.valueChanged.connect(lambda v: self._set("for", v))
                 self._add(band, self._text("above"), above, self._text("for"), hold)
                 self._note("Needs sound: Settings → Audio. It counts as stopped after 2 s of quiet.")
+            elif kind == "loaded_show":
+                pick = _combo(self.page.show_choices(), d.get("show"))
+                pick.currentIndexChanged.connect(lambda _i: self._set("show", pick.currentData()))
+                self._add(pick, self._text("is loaded"))
             else:
                 self._note(EVENT_HINTS.get(kind, ""))
             return
         # actions
-        if kind == "base":
+        if kind == "load_show":
+            pick = _combo(self.page.show_choices(), d.get("show"))
+            pick.currentIndexChanged.connect(lambda _i: self._set("show", pick.currentData()))
+            self._add(pick)
+            self._note("The lights hold what they show until one of its inputs is sent; its automations run then.")
+        elif kind == "house" and self.page.scope == GLOBAL:
+            label = QComboBox()
+            label.setEditable(True)
+            for name in dict.fromkeys([h.label for h in show.house] + ["Festoon", "Key lights"]):
+                label.addItem(name)
+            label.setCurrentText(str(d.get("label", "")))
+            label.setToolTip("The house light's name: it's found in whichever show is loaded (skipped if that show has none)")
+            label.currentTextChanged.connect(lambda text: self._set("label", " ".join(text.split())))
+            level = _spin(0.0, 100.0, _num(d.get("level", 1.0), 0.0) * 100, " %", 0)
+            level.valueChanged.connect(lambda v: self._set("level", round(v / 100, 3)))
+            switch = _combo(((True, "switch on"), (False, "switch off"), (None, "leave the switch")), d.get("on", True if d.get("level") is not None else None))
+            switch.currentIndexChanged.connect(lambda _i: self._set("on", switch.currentData()) if switch.currentData() is not None else self._drop("on"))
+            self._add(label, level, switch, *self._fade_widgets())
+        elif kind == "base":
             pick = _combo(inputs, d.get("input"))
             pick.currentIndexChanged.connect(lambda _i: self._set("input", pick.currentData()))
             transition = d.get("transition")
@@ -406,7 +437,7 @@ class RuleRow(QFrame):
             pick.currentIndexChanged.connect(lambda _i: self._set("layout", pick.currentData()))
             self._add(pick)
         elif kind == "automation":
-            others = [(a.id, a.name) for a in show.ordered_automations() if a.id != self.page.selected]
+            others = [(a.id, a.name) for a in self.page.container().ordered_automations() if a.id != self.page.selected]
             pick = _combo(others, d.get("automation"))
             pick.currentIndexChanged.connect(lambda _i: self._set("automation", pick.currentData()))
             on = _combo(((True, "on"), (False, "off")), bool(d.get("enabled", False)))
@@ -457,19 +488,29 @@ def _number_or_text(text: str) -> Any:
 
 
 class AutomationPage(QWidget):
+    scope_changed = Signal()  # the selection moved between the global automations and the show's (undo follows it)
+
     def __init__(self, document: ShowDocument, engine: Any, sources_provider: Callable[[], list[str]] | None = None,
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, *, global_document: ShowDocument | None = None,
+                 shows_provider: Callable[[], list] | None = None) -> None:
+        """global_document: the global automations' document (None: no global list). shows_provider: the shows there
+        are ([ShowInfo]), for "Load a show" and "This show is loaded"."""
         super().__init__(parent)
         self.setObjectName("AutomationPage")
         self.document = document
+        self.global_document = global_document
         self.engine = engine
         self._sources = sources_provider or (lambda: [])
+        self._shows = shows_provider or (lambda: [])
+        self.scope = SHOW  # which list the selected automation is in
         self.selected = ""
-        self._shown_key: tuple | None = None  # what set_show last showed
+        self._shown_key: tuple | None = None  # what refresh() last showed
         self._structure: tuple = ()
         self._view = AutomationsView()
-        self._list_key: tuple = ()
+        self._global_view = AutomationsView()
+        self._list_keys: dict[str, tuple] = {SHOW: (), GLOBAL: ()}
         self._last_upcoming = 0.0
+        self._choices: tuple[float, list[tuple[str, str]]] = (-1e9, [])
 
         # --- top bar
         self.pause_switch = ToggleSwitch()
@@ -486,29 +527,39 @@ class AutomationPage(QWidget):
         top.addWidget(self.pause_hint, 1)
         top.addWidget(self.undo_bar)
 
-        # --- left: the list and what's coming up
-        list_panel = Panel("Automations")
-        self.list = QListWidget()
-        self.list.setObjectName("AutomationList")
-        self.list.setWordWrap(False)
-        self.list.setTextElideMode(Qt.TextElideMode.ElideRight)
-        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.list.currentItemChanged.connect(self._picked)
-        self.list.itemChanged.connect(self._ticked)
-        list_panel.body.addWidget(self.list, 1)
-        buttons = QWidget()
-        flow = FlowLayout(buttons, spacing=6)
+        # --- left: the global list, the show's list, and what's coming up
+        self.global_panel = Panel("Global automations")
+        self.global_list = self._make_list("GlobalAutomationList", GLOBAL)
+        self.global_list.setToolTip("App-wide automations: they can load a show, cut or fade to black, and set Master and "
+                                    "the Festoon and Key lights. Each second they're checked before the show's own.")
+        self.global_panel.body.addWidget(self.global_list, 1)
+        self.new_global_button = QPushButton("+ New global automation")
+        self.new_global_button.setProperty("accent", True)
+        self.new_global_button.clicked.connect(lambda: self.new_automation(GLOBAL))
+        self.global_up = QPushButton("Up")
+        self.global_up.setToolTip("Earlier in the list (runs before the ones below when they fire together)")
+        self.global_up.clicked.connect(lambda: self.move(-1, GLOBAL))
+        self.global_down = QPushButton("Down")
+        self.global_down.clicked.connect(lambda: self.move(1, GLOBAL))
+        self.global_panel.body.addWidget(self._button_row(self.new_global_button, self.global_up, self.global_down))
+        self.global_panel.setVisible(global_document is not None)
+
+        self.show_panel = Panel()
+        self.show_title = ElidedLabel("THIS SHOW")  # "This show (Morning)": a long name is shortened with "…"
+        self.show_title.setObjectName("PanelTitle")
+        self.show_panel.body.addWidget(self.show_title)
+        self.list = self._make_list("AutomationList", SHOW)
+        self.show_panel.body.addWidget(self.list, 1)
         self.new_button = QPushButton("+ New automation")
         self.new_button.setProperty("accent", True)
-        self.new_button.clicked.connect(self.new_automation)
+        self.new_button.clicked.connect(lambda: self.new_automation(SHOW))
         self.up_button = QPushButton("Up")
         self.up_button.setToolTip("Earlier in the list (runs before the ones below when they fire together)")
-        self.up_button.clicked.connect(lambda: self.move(-1))
+        self.up_button.clicked.connect(lambda: self.move(-1, SHOW))
         self.down_button = QPushButton("Down")
-        self.down_button.clicked.connect(lambda: self.move(1))
-        for button in (self.new_button, self.up_button, self.down_button):
-            flow.addWidget(button)
-        list_panel.body.addWidget(buttons)
+        self.down_button.clicked.connect(lambda: self.move(1, SHOW))
+        self.show_panel.body.addWidget(self._button_row(self.new_button, self.up_button, self.down_button))
+
         upcoming_panel = Panel("Coming up (next 7 days)")
         self.upcoming = QListWidget()
         self.upcoming.setObjectName("UpcomingList")
@@ -517,10 +568,11 @@ class AutomationPage(QWidget):
         self.upcoming.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         upcoming_panel.body.addWidget(self.upcoming, 1)
         self.left = ResettableSplitter(Qt.Orientation.Vertical, self._default_left_split)
-        self.left.addWidget(list_panel)
+        self.left.addWidget(self.global_panel)
+        self.left.addWidget(self.show_panel)
         self.left.addWidget(upcoming_panel)
-        self.left.setStretchFactor(0, 2)
-        self.left.setStretchFactor(1, 1)
+        for index, stretch in enumerate((1, 2, 1)):
+            self.left.setStretchFactor(index, stretch)
 
         # --- right: the editor and the history
         self.editor = QWidget()
@@ -559,8 +611,28 @@ class AutomationPage(QWidget):
         layout.addWidget(self.splitter, 1)
 
         self.rows: dict[str, list[RuleRow]] = {"conditions": [], "actions": [], "on_end": []}
-        document.changed.connect(self.set_show)
-        self.set_show(document.show)
+        document.changed.connect(lambda _show: self.refresh())
+        if global_document is not None:
+            global_document.changed.connect(lambda _show: self.refresh())
+        self.refresh()
+
+    def _make_list(self, name: str, scope: str) -> QListWidget:
+        view = QListWidget()
+        view.setObjectName(name)
+        view.setWordWrap(False)
+        view.setTextElideMode(Qt.TextElideMode.ElideRight)
+        view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        view.currentItemChanged.connect(lambda item, _previous=None, s=scope: self._picked(item, s))
+        view.itemChanged.connect(lambda item, s=scope: self._ticked(item, s))
+        return view
+
+    @staticmethod
+    def _button_row(*buttons: QPushButton) -> QWidget:
+        row = QWidget()
+        flow = FlowLayout(row, spacing=6)
+        for button in buttons:
+            flow.addWidget(button)
+        return row
 
     # ------------------------------------------------------------ splits
 
@@ -571,7 +643,9 @@ class AutomationPage(QWidget):
 
     def _default_left_split(self) -> list[int]:
         total = max(1, self.left.height())
-        return [total - max(140, total // 3), max(140, total // 3)]
+        coming = max(120, total // 4)
+        global_part = max(140, (total - coming) // 3) if self.global_document is not None else 0
+        return [global_part, total - coming - global_part, coming]
 
     def _default_right_split(self) -> list[int]:
         total = max(1, self.right.height())
@@ -580,16 +654,52 @@ class AutomationPage(QWidget):
     def apply_split(self, sizes: dict | None) -> None:
         sizes = sizes if isinstance(sizes, dict) else {}
         for splitter, key in ((self.splitter, "outer"), (self.left, "left"), (self.right, "right")):
-            splitter.apply_sizes(sizes.get(key))
+            saved = sizes.get(key)
+            if splitter is self.left and isinstance(saved, list) and len(saved) != self.left.count():
+                saved = None  # (saved before the global list was there)
+            splitter.apply_sizes(saved)
 
     def splits(self) -> dict:
         return {"outer": self.splitter.sizes(), "left": self.left.sizes(), "right": self.right.sizes()}
 
-    # ------------------------------------------------------------ showing
+    # ------------------------------------------------------------ which list
 
     @property
     def show_data(self) -> Show:
+        """The loaded show (its inputs, variables, layouts and house lights, for the rows)."""
         return self.document.show
+
+    @property
+    def active_document(self) -> ShowDocument:
+        """The document of the list the selected automation is in."""
+        return self.global_document if self.scope == GLOBAL and self.global_document is not None else self.document
+
+    def container(self, scope: str | None = None) -> Show:
+        """The show (or, for the global list, the global automations) holding a list's automations."""
+        scope = self.scope if scope is None else scope
+        if scope == GLOBAL and self.global_document is not None:
+            return self.global_document.show
+        return self.document.show
+
+    def _document_for(self, scope: str) -> ShowDocument:
+        return self.global_document if scope == GLOBAL and self.global_document is not None else self.document
+
+    def global_selected(self) -> bool:
+        return self.scope == GLOBAL and self.global_document is not None
+
+    def show_choices(self) -> list[tuple[str, str]]:
+        """(id, name) of each show, for "Load a show" and "This show is loaded" (read at most every few seconds)."""
+        now = time.monotonic()
+        if now - self._choices[0] > 3.0:
+            try:
+                shows = [(info.id, info.name) for info in self._shows()]
+            except Exception:
+                shows = []
+            self._choices = (now, shows)
+        return self._choices[1]
+
+    def _show_names(self) -> dict[str, str]:
+        return dict(self.show_choices())
 
     def ndi_sources(self) -> list[str]:
         try:
@@ -598,41 +708,79 @@ class AutomationPage(QWidget):
             return []
 
     def current(self) -> Automation | None:
-        return self.show_data.automations.get(self.selected)
+        return self.container().automations.get(self.selected)
 
-    def set_show(self, show: Show) -> None:
-        if self.selected not in show.automations:
-            first = next(iter(show.ordered_automations()), None)
-            self.selected = first.id if first else ""
-        key = (show.automations, show.automation_order, tuple((i.id, i.name) for i in show.ordered_inputs()),
+    def _select(self, scope: str, automation_id: str) -> None:
+        moved = scope != self.scope
+        self.scope = scope
+        self.selected = automation_id
+        if moved:
+            self.scope_changed.emit()
+
+    # ------------------------------------------------------------ showing
+
+    def refresh(self) -> None:
+        show = self.document.show
+        globals_ = self.global_document.show if self.global_document is not None else None
+        if self.selected not in self.container().automations:
+            # the selected one has gone (deleted, or another show loaded): the first of its list, or of the other
+            first = next(iter(self.container().ordered_automations()), None)
+            if first is None:
+                other = GLOBAL if self.scope == SHOW else SHOW
+                first_other = next(iter(self.container(other).ordered_automations()), None)
+                if first_other is not None and (other == SHOW or globals_ is not None):
+                    self._select(other, first_other.id)
+                else:
+                    self.selected = ""
+            else:
+                self.selected = first.id
+        key = (show.automations, show.automation_order, globals_.automations if globals_ else None,
+               globals_.automation_order if globals_ else None, tuple((i.id, i.name) for i in show.ordered_inputs()),
                tuple(g.name for g in show.globals), tuple((lay.id, lay.name) for lay in show.layouts), show.house,
-               show.read_only, self.selected)
+               show.name, show.folder, show.read_only, self.scope, self.selected)
         if key == self._shown_key:
             return  # nothing this tab shows has changed (e.g. an edit in the Editor)
         self._shown_key = key
-        self._fill_list(show)
-        self._build_editor(show)
-        self._fill_upcoming(show, force=True)
-        read_only = show.read_only
+        self.show_title.setText(f"THIS SHOW ({show.name.upper()})")
+        self.show_title.setToolTip(f"The automations of the loaded show, {show.name}")
+        self._fill_lists()
+        self._build_editor()
+        self._fill_upcoming(force=True)
         for widget in (self.new_button, self.up_button, self.down_button):
-            widget.setEnabled(not read_only)
-        self.editor.setEnabled(not read_only)
+            widget.setEnabled(not show.read_only)
+        globals_read_only = globals_ is None or globals_.read_only
+        for widget in (self.new_global_button, self.global_up, self.global_down):
+            widget.setEnabled(not globals_read_only)
+        self.editor.setEnabled(not self.active_document.read_only)
 
-    def _fill_list(self, show: Show) -> None:
-        statuses = self._view.statuses
+    def set_show(self, show: Show) -> None:
+        """(The show changed: the window and tests call this; it refreshes from the documents.)"""
+        self.refresh()
+
+    def _fill_lists(self) -> None:
+        self._fill_list(SHOW, self.list, self._view)
+        if self.global_document is not None:
+            self._fill_list(GLOBAL, self.global_list, self._global_view)
+
+    def _fill_list(self, scope: str, view: QListWidget, engine_view: AutomationsView) -> None:
+        container = self.container(scope)
+        shows = self._show_names()
+        statuses = engine_view.statuses
         rows = []
-        for automation in show.ordered_automations():
+        for automation in container.ordered_automations():
             status = statuses.get(automation.id)
             last = status.last_run if status else None
             state = " · paused by the loop guard" if status and status.tripped else ""
-            rows.append((automation.id, automation.name, automation.enabled, f"{summary(automation, show)}", f"last ran {_when(last)}{state}",
-                         bool(status and status.tripped)))
-        key = tuple(rows) + (self.selected,)
-        if key == self._list_key:
+            rows.append((automation.id, automation.name, automation.enabled,
+                         summary(automation, self.show_data if scope == SHOW else container, scope, shows),
+                         f"last ran {_when(last)}{state}", bool(status and status.tripped)))
+        selected = self.selected if self.scope == scope else ""
+        key = tuple(rows) + (selected,)
+        if key == self._list_keys[scope]:
             return
-        self._list_key = key
-        blocked = self.list.blockSignals(True)
-        self.list.clear()
+        self._list_keys[scope] = key
+        blocked = view.blockSignals(True)
+        view.clear()
         for automation_id, name, enabled, text, last, tripped in rows:
             item = QListWidgetItem(f"{name}  ·  {last}\n{text}")
             item.setData(Qt.ItemDataRole.UserRole, automation_id)
@@ -641,30 +789,40 @@ class AutomationPage(QWidget):
             item.setToolTip(f"{name}\n{text}\n{last}\nTick = on")
             if tripped:
                 item.setForeground(Qt.GlobalColor.red)
-            self.list.addItem(item)
-            if automation_id == self.selected:
-                self.list.setCurrentItem(item)
+            view.addItem(item)
+            if automation_id == selected:
+                view.setCurrentItem(item)
         if not rows:
-            item = QListWidgetItem("No automations yet.\nClick + New automation to make one.")
+            empty = ("No global automations yet.\nThey can load a show at a set time, for example."
+                     if scope == GLOBAL else "No automations in this show yet.\nClick + New automation to make one.")
+            item = QListWidgetItem(empty)
             item.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.list.addItem(item)
-        self.list.blockSignals(blocked)
-        self.up_button.setEnabled(bool(self.selected) and not show.read_only)
-        self.down_button.setEnabled(bool(self.selected) and not show.read_only)
+            view.addItem(item)
+        if not selected:
+            view.clearSelection()
+            view.setCurrentItem(None)
+        view.blockSignals(blocked)
+        read_only = container.read_only
+        for button in ((self.up_button, self.down_button) if scope == SHOW else (self.global_up, self.global_down)):
+            button.setEnabled(bool(selected) and not read_only)
 
-    def _fill_upcoming(self, show: Show, force: bool = False) -> None:
+    def _fill_upcoming(self, force: bool = False) -> None:
         now = time.monotonic()
         if not force and now - self._last_upcoming < 30:
             return
         self._last_upcoming = now
         self.upcoming.clear()
-        found = upcoming(show, datetime.now())
-        for moment, automation, others in found[:30]:
+        found = [(moment, automation, others, False) for moment, automation, others in upcoming(self.show_data, datetime.now())]
+        if self.global_document is not None:
+            found += [(moment, automation, others, True) for moment, automation, others in upcoming(self.global_document.show, datetime.now())]
+        found.sort(key=lambda item: item[0])
+        for moment, automation, others, is_global in found[:30]:
             extra = ""
             if others:  # with Any, its other conditions being true already means it's running: no new start
                 extra = (" (unless its other conditions are already true)" if automation.logic == "any"
                          else " (if its other conditions are true then)")
-            self._add_line(self.upcoming, f"{moment:%a %d %b %H:%M}  {automation.name}{extra}")
+            label = "Global: " if is_global else ""
+            self._add_line(self.upcoming, f"{moment:%a %d %b %H:%M}  {label}{automation.name}{extra}")
         if not found:
             self._add_line(self.upcoming, "Nothing in the next 7 days.")
 
@@ -676,14 +834,16 @@ class AutomationPage(QWidget):
 
     def _structure_key(self, automation: Automation | None) -> tuple:
         if automation is None:
-            return ("none",)
+            return ("none", self.scope)
         kinds = tuple((key, tuple(item.get("do") if key != "conditions" else item.get("type") for item in getattr(automation, key)))
                       for key in ("conditions", "actions", "on_end"))
-        names = (tuple(i.id for i in self.show_data.ordered_inputs()), tuple(g.name for g in self.show_data.globals),
-                 tuple(lay.id for lay in self.show_data.layouts), tuple(self.show_data.automations))
-        return (automation.id, automation.logic, kinds, names)
+        show = self.show_data
+        names = (tuple(i.id for i in show.ordered_inputs()), tuple(g.name for g in show.globals),
+                 tuple(lay.id for lay in show.layouts), tuple(self.container().automations), tuple(h.label for h in show.house),
+                 tuple(self.show_choices()))
+        return (self.scope, automation.id, automation.logic, kinds, names)
 
-    def _build_editor(self, show: Show, force: bool = False) -> None:
+    def _build_editor(self, force: bool = False) -> None:
         automation = self.current()
         key = self._structure_key(automation)
         if key == self._structure and not force and self._rows_match(automation):
@@ -698,11 +858,13 @@ class AutomationPage(QWidget):
         if automation is None:
             panel = Panel("Automation")
             panel.body.addWidget(_hint("Automations look after the lights by themselves, for example “Sunday 09:00–12:30 → "
-                                       "Warm welcome on Base, key lights 70 %”. Click + New automation to make one."))
+                                       "Warm welcome on Base, key lights 70 %”. Click + New automation to make one in this "
+                                       "show, or + New global automation for one that loads a show at a set time."))
             self.editor_layout.addWidget(panel)
             self.editor_layout.addStretch(1)
             return
-        about = Panel("Automation")
+        is_global = self.scope == GLOBAL
+        about = Panel("Global automation" if is_global else "Automation")
         row = QHBoxLayout()
         row.setSpacing(8)
         self.name_edit = QLineEdit(automation.name)
@@ -719,9 +881,10 @@ class AutomationPage(QWidget):
         about.body.addLayout(row)
         buttons = QWidget()
         flow = FlowLayout(buttons, spacing=6)
+        scope = self.scope
         run = QPushButton("Run now")
         run.setToolTip("Do its actions now, whatever its conditions")
-        run.clicked.connect(lambda: self.engine.submit(RunAutomation(automation.id)))
+        run.clicked.connect(lambda: self.engine.submit(RunAutomation(automation.id, scope)))
         duplicate = QPushButton("Duplicate")
         duplicate.clicked.connect(self.duplicate)
         delete = QPushButton("Delete")
@@ -729,14 +892,18 @@ class AutomationPage(QWidget):
         delete.clicked.connect(self.delete)
         self.reset_button = QPushButton("Let it run again")
         self.reset_button.setToolTip("The loop guard paused it after it ran too often; this lets it run again")
-        self.reset_button.clicked.connect(lambda: self.engine.submit(ResetAutomation(automation.id)))
+        self.reset_button.clicked.connect(lambda: self.engine.submit(ResetAutomation(automation.id, scope)))
         for button in (run, duplicate, delete, self.reset_button):
             flow.addWidget(button)
         about.body.addWidget(buttons)
-        self.summary = QLabel(summary(automation, show))
+        self.summary = QLabel(self._summary(automation))
         self.summary.setObjectName("Hint")
         self.summary.setWordWrap(True)
         about.body.addWidget(self.summary)
+        if is_global:
+            about.body.addWidget(_hint("Global automations are app-wide: they can load a show, cut or fade to black, and "
+                                       "set Master and the Festoon and Key lights (found by name in whichever show is "
+                                       "loaded). Each second they're checked before the loaded show's own."))
         self.editor_layout.addWidget(about)
 
         conditions = Panel("Run when")
@@ -747,22 +914,26 @@ class AutomationPage(QWidget):
         logic_row.addWidget(QLabel("of these are true:"), 1)
         conditions.body.addLayout(logic_row)
         self._rule_rows(conditions, automation, "conditions")
-        self._add_button(conditions, "+ Add a condition  ▾", CONDITIONS, "conditions")
+        self._add_button(conditions, "+ Add a condition  ▾", conditions_for(self.scope), "conditions")
         conditions.body.addWidget(_hint("It runs once when this becomes true (not over and over while it stays true). "
                                         "At startup and after sleep it checks straight away, so it catches up."))
         self.editor_layout.addWidget(conditions)
 
         actions = Panel("Do this")
         self._rule_rows(actions, automation, "actions")
-        self._add_button(actions, "+ Add an action  ▾", ACTIONS, "actions")
+        self._add_button(actions, "+ Add an action  ▾", actions_for(self.scope), "actions")
         self.editor_layout.addWidget(actions)
 
         ending = Panel("When it stops matching, do this (optional)")
         self._rule_rows(ending, automation, "on_end")
-        self._add_button(ending, "+ Add an action  ▾", ACTIONS, "on_end")
+        self._add_button(ending, "+ Add an action  ▾", actions_for(self.scope), "on_end")
         self.editor_layout.addWidget(ending)
         self.editor_layout.addStretch(1)
         self._refresh_editor(automation)
+
+    def _summary(self, automation: Automation) -> str:
+        container = self.container()
+        return summary(automation, self.show_data if self.scope == SHOW else container, self.scope, self._show_names())
 
     def _rule_rows(self, panel: Panel, automation: Automation, key: str) -> None:
         for index, item in enumerate(getattr(automation, key)):
@@ -797,41 +968,45 @@ class AutomationPage(QWidget):
     def _refresh_editor(self, automation: Automation | None) -> None:
         if automation is None or not hasattr(self, "summary"):
             return
-        self.summary.setText(summary(automation, self.show_data))
+        self.summary.setText(self._summary(automation))
         if not self.name_edit.hasFocus():
             self.name_edit.setText(automation.name)
         if self.enabled_switch.isChecked() != automation.enabled:
             self.enabled_switch.setChecked(automation.enabled)
-        status = self._view.statuses.get(automation.id)
+        view = self._global_view if self.scope == GLOBAL else self._view
+        status = view.statuses.get(automation.id)
         self.reset_button.setVisible(bool(status and status.tripped))
 
     # ------------------------------------------------------------ engine frames
 
     def set_frame(self, frame: EngineFrame) -> None:
-        view = frame.automations
-        if view is self._view:
+        view, global_view = frame.automations, frame.global_automations
+        if view is self._view and global_view is self._global_view:
             return
-        self._view = view
+        self._view, self._global_view = view, global_view
         if self.pause_switch.isChecked() != view.paused:
             self.pause_switch.setChecked(view.paused)
         self.pause_hint.setText(f"Paused since {_when(view.paused_since)}: nothing runs by itself until you resume"
                                 if view.paused else "Automations run by themselves when their conditions are met")
         self.history.clear()
-        for entry in reversed(view.history):
+        entries = [(entry, False) for entry in view.history] + [(entry, True) for entry in global_view.history]
+        entries.sort(key=lambda pair: pair[0].when, reverse=True)
+        for entry, is_global in entries[:100]:
             detail = f" ({entry.detail})" if entry.detail else ""
-            self._add_line(self.history, f"{_when(entry.when)}  {entry.name} {entry.what}{detail}")
-        if not view.history:
+            label = "Global: " if is_global else ""
+            self._add_line(self.history, f"{_when(entry.when)}  {label}{entry.name} {entry.what}{detail}")
+        if not entries:
             self._add_line(self.history, "Nothing has run yet.")
-        self._fill_list(self.show_data)
+        self._fill_lists()
         self._refresh_editor(self.current())
-        self._fill_upcoming(self.show_data)
+        self._fill_upcoming()
 
     # ------------------------------------------------------------ edits (one undo step each)
 
     def change(self, text: str, merge_key: str | None = None, **changes: Any) -> bool:
         if not self.selected:
             return False
-        return self.document.apply(update_automation(self.show_data, self.selected, **changes), text, merge_key)
+        return self.active_document.apply(update_automation(self.container(), self.selected, **changes), text, merge_key)
 
     def _renamed(self) -> None:
         automation = self.current()
@@ -839,58 +1014,73 @@ class AutomationPage(QWidget):
         if automation is not None and name and name != automation.name:
             self.change(f"Rename “{automation.name}” → {name}", name=name)
 
-    def _picked(self, item, _previous=None) -> None:
+    def _picked(self, item, scope: str) -> None:
         if item is None:
             return
         automation_id = item.data(Qt.ItemDataRole.UserRole)
-        if automation_id and automation_id != self.selected:
-            self.selected = automation_id
-            self._build_editor(self.show_data)
-            self._list_key = ()
-            self._fill_list(self.show_data)
+        if automation_id and (automation_id != self.selected or scope != self.scope):
+            self._select(scope, automation_id)
+            self._build_editor()
+            self._list_keys = {SHOW: (), GLOBAL: ()}
+            self._fill_lists()
 
-    def _ticked(self, item) -> None:
+    def _ticked(self, item, scope: str) -> None:
         automation_id = item.data(Qt.ItemDataRole.UserRole)
-        automation = self.show_data.automations.get(automation_id) if automation_id else None
+        container = self.container(scope)
+        automation = container.automations.get(automation_id) if automation_id else None
         if automation is None:
             return
         on = item.checkState() == Qt.CheckState.Checked
         if on != automation.enabled:
-            self.document.apply(update_automation(self.show_data, automation_id, enabled=on),
-                                f"Turn “{automation.name}” {'on' if on else 'off'}")
+            self._document_for(scope).apply(update_automation(container, automation_id, enabled=on),
+                                            f"Turn “{automation.name}” {'on' if on else 'off'}")
 
-    def new_automation(self) -> str:
-        show, automation_id = add_automation(self.show_data)
-        self.selected = automation_id
-        return automation_id if self.document.apply(show, "New automation") else ""
+    def new_automation(self, scope: str | None = None) -> str:
+        scope = self.scope if scope is None else scope
+        if scope == GLOBAL and self.global_document is None:
+            return ""
+        container = self.container(scope)
+        show, automation_id = add_automation(container, "New global automation" if scope == GLOBAL else "New automation")
+        self._select(scope, automation_id)
+        made = self._document_for(scope).apply(show, "New global automation" if scope == GLOBAL else "New automation")
+        return automation_id if made else ""
 
     def duplicate(self) -> None:
         automation = self.current()
         if automation is not None:
-            show, new_id = duplicate_automation(self.show_data, automation.id)
+            show, new_id = duplicate_automation(self.container(), automation.id)
             self.selected = new_id
-            self.document.apply(show, f"Duplicate “{automation.name}”")
+            self.active_document.apply(show, f"Duplicate “{automation.name}”")
 
     def delete(self) -> None:
         automation = self.current()
         if automation is None:
             return
+        scope, document, container = self.scope, self.active_document, self.container()
         answer = QMessageBox.question(self, "Delete automation", f"Delete “{automation.name}”?\n\nCtrl+Z brings it back.")
-        if answer == QMessageBox.StandardButton.Yes:
-            self.document.apply(remove_automation(self.show_data, automation.id), f"Delete “{automation.name}”")
+        if answer == QMessageBox.StandardButton.Yes and automation.id in container.automations:
+            document.apply(remove_automation(self.container(scope), automation.id), f"Delete “{automation.name}”")
 
-    def move(self, step: int) -> None:
+    def move(self, step: int, scope: str | None = None) -> None:
+        scope = self.scope if scope is None else scope
+        if scope != self.scope:
+            return  # (the selected automation is in the other list)
         automation = self.current()
         if automation is not None:
-            self.document.apply(move_automation(self.show_data, automation.id, step), f"Move “{automation.name}” {'up' if step < 0 else 'down'}")
+            self.active_document.apply(move_automation(self.container(), automation.id, step),
+                                       f"Move “{automation.name}” {'up' if step < 0 else 'down'}")
 
     def add_rule(self, key: str, kind: str) -> None:
         automation = self.current()
         if automation is None:
             return
-        item = default_action(kind, self.show_data) if key != "conditions" else default_condition(kind, self.show_data)
+        if key != "conditions":
+            item = default_action(kind, self.container(), self.scope, self.show_data, self.show_choices())
+            label = actions_for(self.scope)[kind]
+        else:
+            item = default_condition(kind, self.container(), self.show_choices())
+            label = conditions_for(self.scope)[kind]
         items = [dict(x) for x in getattr(automation, key)] + [item]
-        label = (CONDITIONS if key == "conditions" else ACTIONS)[kind]
         self.change(f"“{automation.name}”: add {label.lower()}", **{key: items})
 
     def set_rule(self, key: str, index: int, data: dict) -> None:
@@ -899,8 +1089,10 @@ class AutomationPage(QWidget):
             return
         items = [dict(x) for x in getattr(automation, key)]
         items[index] = data
-        what = describe_condition(data, self.show_data) if key == "conditions" else describe_action(data, self.show_data)
-        self.change(f"“{automation.name}”: {what}", f"automation/{automation.id}/{key}/{index}", **{key: items})
+        shows = self._show_names()
+        what = (describe_condition(data, self.show_data, shows) if key == "conditions"
+                else describe_action(data, self.show_data if self.scope == SHOW else self.container(), self.scope, shows))
+        self.change(f"“{automation.name}”: {what}", f"automation/{self.scope}/{automation.id}/{key}/{index}", **{key: items})
 
     def remove_rule(self, key: str, index: int) -> None:
         automation = self.current()

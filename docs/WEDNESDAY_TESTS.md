@@ -38,7 +38,9 @@ The app starts in **Simulated** mode: it shows what it would send but never open
 - [ ] The chip turns green: **COM3 · …/s**. (Red **COM3 busy** = another program has the dongle: close it.
       **No dongle** = check the USB cable.)
 - [ ] The lights now show what the app is doing. On a first run that's **Follow screen** on Base, with the
-      festoon and key lights off.
+      festoon and key lights off. (If the PC started less than 10 minutes ago, everything starts black instead: that's
+      the "the PC has just started" rule. Send Follow screen from the Dashboard.)
+- [ ] The header says **Show: Central Church ▾** after the tabs: that's the loaded show (step 14f).
 
 ## 1b. Turn on Start with Windows
 
@@ -160,8 +162,9 @@ Worship blue.
 
 ## 11. Variables and expressions
 
-- [ ] Editor → open Worship blue → **Globals** tab → **+ Add a global variable ▾ → Number**. Rename it
-      **speed**, range 0 to 4, starts at 1, tick **Show on the dashboard**.
+- [ ] Editor → open Worship blue → **Show variables** tab → **+ Add a show variable ▾ → Number**. Rename it
+      **speed**, range 0 to 4, starts at 1, tick **Show on the dashboard**. (They were called "global variables";
+      each show has its own now.)
 - [ ] Click the Paint element → **=** next to **Opacity** → type `0.3 + 0.7 * wave(time, speed)` → **Use it**.
       The **=** turns blue. Send Worship blue to Base: the lights breathe.
 - [ ] Dashboard → **Variables** → drag **speed**: the breathing speeds up and slows down straight away.
@@ -255,14 +258,46 @@ Worship blue.
 - [ ] (Optional) If there's a feed from the mixer into the PC, pick it in Settings → Audio instead and try again.
 - [ ] Note the CPU in Task Manager while it listens.
 
+## 14f. Shows and global automations
+
+A show is everything above (inputs, show variables, automations, the lights and layouts, media), in its own folder
+in `Documents\CentraLight Shows`. Changes save by themselves: there's no Save.
+
+- [ ] Send Follow screen (or anything colourful) to Base and put an input in an overlay.
+- [ ] **Show: Central Church ▾** → **Duplicate “Central Church”…** → call it **Evening** → OK. The copy opens straight
+      away (**Show: Evening**), and the lights don't change: they hold what they showed, overlay included. The
+      Dashboard says **Base: frozen (from Central Church)**; the overlays are off; Festoon, Key lights and Master are
+      as they were.
+- [ ] Send any input: it comes in from the held colours with its own transition.
+- [ ] **Show: Evening ▾** → **Central Church**: the lights hold again until you send something. In each show, Ctrl+Z
+      only undoes that show's changes.
+- [ ] (Optional) **Show ▾ → Rename “Evening”…**: the name changes; its folder (and its Stream Deck id `evening`) stays.
+- [ ] Layout tab → **Layout: Main ▾** → **Import from another show…** → pick the other show and its **Main** layout:
+      the summary says what would change (nothing: the same lights) → **Import**. A new layout "Main (from …)" is in
+      use. Ctrl+Z on the Layout tab undoes it.
+- [ ] Automation tab: two lists, **Global automations** (app-wide) and **This show (…)**. **+ New global
+      automation** → **Days of the week**: today; **Time of day**: from 2 minutes from now, for 10 minutes → **+ Add
+      an action ▾ → Load a show** → the other show; **+ Add an action ▾ → Festoon or key lights** → Key lights 40 %.
+- [ ] In the show it will load, **+ New automation** → remove its two conditions, **+ Add a condition ▾ → When this
+      show loads** → **+ Add an action ▾ → Send an input to Base** → Warm white.
+- [ ] Switch to the first show and wait: at the time, the other show loads by itself (the lights hold for a moment),
+      Warm white comes in (its "When this show loads") and the key lights go to 40 %. **History** shows both,
+      the global one marked "Global:". **Coming up** lists the global one, marked too.
+- [ ] The **Remote** chip's page (or a phone): the list next to the show's name switches shows; the page then shows
+      that show's inputs. A Stream Deck key with `http://127.0.0.1:8746/api/show/central-church` loads Central Church.
+- [ ] (Optional) **Show ▾ → Delete a show → Evening…** → Yes: its folder goes to the Recycle Bin (you can put it back
+      from there). The loaded show can't be deleted. Delete the test automations afterwards.
+
 ## 15. Always running: the tray, a second launch, sleep
 
 - [ ] Close the window (✕): CentraLight keeps running in the tray by the clock (a message says so the first time);
       the lights carry on. Double-click the tray icon: the window comes back.
 - [ ] With the window closed, double-click `run.bat` again: the running CentraLight shows its window (no second copy).
 - [ ] Put the PC to sleep for a minute and wake it: the output chip goes green again and the lights carry on.
-- [ ] (Optional) Sign out and back in: CentraLight starts in the tray (you switched that on in step 1b) and the
-      lights come back as they were. Untick **Start CentraLight when I sign in to Windows** in Settings to stop that.
+- [ ] (Optional) Sign out and back in: CentraLight starts in the tray (you switched that on in step 1b). Windows
+      starting it counts as the PC starting: the last show loads with every light black (house lights off, their
+      levels kept) and nothing playing, then the automations run (global ones first; the show's "When this show loads"
+      too). Untick **Start CentraLight when I sign in to Windows** in Settings to stop it starting by itself.
 - [ ] Quitting is now in the tray icon's menu (right-click → **Quit CentraLight…**); it asks first.
 
 ## 15b. The launcher and Diagnostics
@@ -289,7 +324,8 @@ Worship blue.
 ## 18. Quitting and starting again
 
 - [ ] Tray icon → **Quit CentraLight…** → Yes → **Leave lights as they are**: the lights stay exactly as they were.
-- [ ] `.\run.bat` again: the lights don't flicker or change when the app opens, overlays included.
+- [ ] `.\run.bat` again: the lights don't flicker or change when the app opens, overlays included. (Reopening
+      carries on as it was: the same show, and its "When this show loads" automations don't run again.)
 - [ ] Tray icon → **Quit CentraLight…** → Yes → **Turn lights off**: everything fades to black.
 - [ ] `.\run.bat` again: it opens with everything black and nothing on Base. Send an input: the lights come back.
       (Automations leave the lights off after a "Turn lights off" quit until one of their time ranges begins after

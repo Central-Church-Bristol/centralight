@@ -277,7 +277,7 @@ class SettingsDialog(QDialog):
         files_buttons.addWidget(diagnostics)
         files_buttons.addWidget(preview)
         files_layout = QVBoxLayout(files_box)
-        files_layout.addWidget(QLabel("Show folder"))
+        files_layout.addWidget(QLabel("The loaded show's folder"))
         files_layout.addWidget(show_path)
         files_layout.addLayout(files_buttons)
 
@@ -286,7 +286,8 @@ class SettingsDialog(QDialog):
         ai_layout = QVBoxLayout(ai_box)
         ai_layout.addWidget(hint(
             "Any AI chat can write inputs: use Create with AI on the Dashboard. AI tools such as Claude Code or Cursor "
-            "can work in the show folder: they read AI_GUIDE.md there, and inputs they write appear straight away."
+            "can work in the show folder: they read AI_GUIDE.md there, and inputs they write appear straight away. "
+            "Global automations have a guide of their own, in the shows folder's “_Global automations”."
         ))
         ai_buttons = QHBoxLayout()
         ai_folder = QPushButton("Open show folder")

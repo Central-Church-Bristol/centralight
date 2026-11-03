@@ -198,3 +198,23 @@ def ai_edit_reply(show: Show, long: bool = False) -> str:
     data["tracks"][0][0]["fill"] = {"type": "colour", "colour": {"expr": "mix(#4B1A99, #C9A6FF, wave(time, 1/4))"}}
     data["transition"] = {"kind": "fade", "duration": 2}
     return "Sure, here's the faster version:\n\n```json\n" + json.dumps(data, indent=2) + "\n```\n"
+
+
+def sample_global_automations(long: bool = False) -> Show:
+    """Global automations with every kind of global condition and action (for the layout check and window tests)."""
+    name = "Sunday morning: load the morning show and bring the key lights up" if long else "Sunday morning"
+    morning = Automation(
+        "sunday-morning", name, True, "all",
+        freeze([{"type": "days", "days": ["sun"]}, {"type": "time", "from": "08:30", "to": "13:00"},
+                {"type": "loaded_show", "show": "evening", "invert": True}, {"type": "sun", "when": "before", "event": "sunset", "minutes": 0}]),
+        freeze([{"do": "load_show", "show": "central-church"}, {"do": "house", "label": "Key lights", "level": 0.7, "fade": 2},
+                {"do": "master", "level": 1.0, "fade": 2}, {"do": "fade_black", "fade": 2, "all": True, "delay": 3600}]),
+        freeze([{"do": "cut_black"}]),
+    )
+    starts = Automation(
+        "pc-starts", "When the PC starts or wakes", True, "any",
+        freeze([{"type": "pc_startup"}, {"type": "pc_woke"}, {"type": "app_started"}, {"type": "colour_black"},
+                {"type": "ndi", "source": "Media Background Pane"}, {"type": "audio", "band": "level", "above": 0.6, "for": 5}]),
+        freeze([{"do": "automation", "automation": "sunday-morning", "enabled": True}]),
+    )
+    return Show(name="Global automations").with_automations({a.id: a for a in (morning, starts)}, (morning.id, starts.id))

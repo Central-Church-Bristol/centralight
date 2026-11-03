@@ -22,7 +22,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from .automations import ACTIONS, CONDITIONS
+from .automations import actions_for, conditions_for
+from .global_automations import GLOBAL_DIR, ORDER_FILE
 from .elements import media_path
 from .expressions import AUDIO_NAMES, FUNCTIONS, ExpressionError, compile_expression
 from .files import json_text, write_atomic
@@ -267,7 +268,7 @@ def _region(x: float, y: float) -> str:
 
 def _globals_text(show: Show) -> str:
     if not show.globals:
-        return "This show has no global variables yet (they're made in the Editor's Globals tab)."
+        return "This show has no show variables yet (they're made in the Editor's Show variables tab)."
     rows = [["Name", "Type", "Range / default"]]
     for g in show.globals:
         detail = f"{g.min:g} to {g.max:g}, starts at {g.default}" if g.type == "number" else f"starts at {g.default}"
@@ -372,13 +373,13 @@ def guide_text(show: Show, full: bool = True) -> str:
         "colour is a grey. Nothing else is allowed (no text, lists or attributes).\n\n"
         "Names: `time` (seconds since the input started), `t` (the element's own time; the same in infinite inputs), "
         "`value` (the setting's own plain value), " + ", ".join(f"`audio.{n}`" for n in AUDIO_NAMES)
-        + " (0-1, from the music), the input's local variables, and the global variables below.\n\n"
+        + " (0-1, from the music), the input's local variables, and the show variables below.\n\n"
         "Cycles: `wave`, `pulse`, `saw`, `tri` and `square` take a time (usually `time`) and a rate in cycles per second, "
         "so `wave(time, 0.25)` breathes once every 4 seconds and `saw(time, 0.2)` sweeps every 5. The rate can be a "
-        "variable, e.g. `wave(time, speed)` with a number global called speed: changing it changes the pace smoothly, "
+        "variable, e.g. `wave(time, speed)` with a number show variable called speed: changing it changes the pace smoothly, "
         "without a jump. `noise(t)` drifts to a new random value each time `t` passes a whole number, so "
         "`noise(time * 0.2)` wanders every 5 seconds.\n\nFunctions:\n" + functions,
-        "### Global variables",
+        "### Show variables",
         _globals_text(show) + "\n\nThey're set from the Dashboard and the Stream Deck, so an input can respond live, e.g. "
         "`{\"expr\": \"mix(#FF0000, accent, 0.5)\"}`.",
         "### Local variables",
@@ -404,8 +405,12 @@ def guide_text(show: Show, full: bool = True) -> str:
             "on Base, key lights 70 %\". An automation runs its `actions` once when its `conditions` become true (`logic`: "
             "\"all\" or \"any\"; any condition can have `\"invert\": true`), and its optional `on_end` actions when they stop "
             "being true. Each action can wait first (`\"delay\"`: seconds).\n\n"
-            "Conditions (`type`): " + ", ".join(f"`{k}` ({v.lower()})" for k, v in CONDITIONS.items()) + ".\n\n"
-            "Actions (`do`): " + ", ".join(f"`{k}` ({v.lower()})" for k, v in ACTIONS.items()) + ".\n\n"
+            "Conditions (`type`): " + ", ".join(f"`{k}` ({v.lower()})" for k, v in conditions_for("show").items()) + ". "
+            "`show_loads` happens when this show is loaded (by a person, the Stream Deck or a global automation) and when "
+            "the PC starts with it, not when CentraLight reopens after a quit or a crash.\n\n"
+            "Actions (`do`): " + ", ".join(f"`{k}` ({v.lower()})" for k, v in actions_for("show").items()) + ".\n\n"
+            "The PC starting, CentraLight starting, the PC waking and loading another show are for global automations: "
+            f"they're in `..\\{GLOBAL_DIR}` (its AI_GUIDE.md says how).\n\n"
             "```json\n" + json_text({
                 "format": "centralight-automation", "version": 1, "id": "sunday-welcome", "name": "Sunday welcome", "logic": "all",
                 "conditions": [{"type": "days", "days": ["sun"]}, {"type": "time", "from": "09:00", "to": "12:30"}],
@@ -456,6 +461,56 @@ def write_guide_files(show: Show) -> list[str]:
         except OSError:
             continue
     return written
+
+
+def global_guide_text(shows: list[tuple[str, str]], house_labels: list[str]) -> str:
+    """AI_GUIDE.md for the global automations' folder. shows: (id, name) of each show."""
+    show_rows = _table([["`show` id", "Show"]] + [[f"`{sid}`", name] for sid, name in shows]) if shows else "(no shows yet)"
+    first = shows[0][0] if shows else "sunday-morning"
+    label = house_labels[-1] if house_labels else "Key lights"
+    example = {
+        "format": "centralight-automation", "version": 1, "id": "sunday-morning", "name": "Sunday morning",
+        "logic": "all",
+        "conditions": [{"type": "days", "days": ["sun"]}, {"type": "time", "from": "08:30", "to": "13:00"}],
+        "actions": [{"do": "load_show", "show": first}, {"do": "house", "label": label, "level": 0.7, "fade": 2}],
+    }
+    return "\n\n".join([
+        "# CentraLight: global automations",
+        "Each `<id>.json` file here is a global automation: app-wide, whichever show is loaded. They're for what isn't "
+        "about one show: load a show at a set time, cut or fade to black, Master, the Festoon and Key lights, and turning "
+        "another global automation on or off. They can't touch a show's inputs, overlays, variables or layouts (a show's "
+        "own automations do that: they're in each show's `automations` folder). Each second the global automations are "
+        f"checked first, then the loaded show's. `{ORDER_FILE}` is their order (CentraLight keeps it; a new file goes at "
+        "the end). The file format is the same as a show's automations.",
+        "Conditions (`type`): " + ", ".join(f"`{k}` ({v.lower()})" for k, v in conditions_for("global").items()) + ". "
+        '"This show is loaded": `{"type": "loaded_show", "show": "<show id>"}`.',
+        "Actions (`do`): " + ", ".join(f"`{k}` ({v.lower()})" for k, v in actions_for("global").items()) + ". "
+        'Load a show: `{"do": "load_show", "show": "<show id>"}` (the lights hold what they show until one of its inputs is '
+        "sent; its own automations are checked straight away, `show_loads` among them). The Festoon and Key lights are "
+        'named, not numbered: `{"do": "house", "label": "Key lights", "level": 0.7, "fade": 2}` sets the loaded show\'s '
+        "light of that name (skipped, with a note in the log, if it has none).",
+        "```json\n" + json_text(example) + "```",
+        "## The shows\n\n" + show_rows,
+        "Days are `mon` ... `sun`; times `\"HH:MM\"` (overnight ranges like 22:00-02:00 are fine); dates `\"MM-DD\"` with "
+        "an optional `year`; sunrise / sunset are Bristol's times.",
+    ]) + "\n"
+
+
+def write_global_guide(folder: Path, shows: list[tuple[str, str]], house_labels: list[str]) -> list[str]:
+    """Write AI_GUIDE.md into the global automations' folder if it has changed. Returns the files written."""
+    path = Path(folder) / GUIDE_FILE
+    data = (GUIDE_MARKER + "\n" + global_guide_text(shows, house_labels)).encode("utf-8")
+    try:
+        if path.is_file():
+            old = path.read_bytes()
+            if old == data:
+                return []
+            if not _ours(old):
+                return []
+        write_atomic(path, data)
+    except OSError:
+        return []
+    return [f"{GLOBAL_DIR}\\{GUIDE_FILE}"]
 
 
 def export_skill(show: Show, target: Path) -> Path:

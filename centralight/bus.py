@@ -48,11 +48,15 @@ class Instance:
 
 @dataclass
 class Frozen:
-    """A mix held still (at the moment a transition was interrupted): for the lights and for each picture size that
-    was being drawn then (one that wasn't is left out: it shows nothing)."""
+    """A mix held still (at the moment a transition was interrupted, a Cut / Fade to black, or a show loading): for the
+    lights, and for each picture size that was being drawn then. ids: the lights its "lights" layer is for, so after a
+    light is added or taken away (or another show's lights come) each light that's still there keeps its colour; a
+    picture that wasn't being drawn is drawn from those colours."""
 
     canvases: dict
     name: str = ""
+    ids: tuple[str, ...] | None = None
+    cache: dict = field(default_factory=dict, compare=False, repr=False)  # its colours for other sets of lights
 
 
 def layer_kind(ctx: RenderContext):
@@ -167,11 +171,45 @@ def _render_source(source: Instance | Frozen | None, now: float, ctx: RenderCont
     if source is None:
         return empty_layer(ctx)
     if isinstance(source, Frozen):
-        canvas = source.canvases.get(layer_kind(ctx))
-        blank = empty_layer(ctx)
-        # (frozen before a light was added or taken away, it doesn't fit the lights now: nothing, for the rest of it)
-        return canvas if canvas is not None and canvas.shape == blank.shape else blank
+        return _frozen_layer(source, ctx)
     return render_input(source, now, ctx)
+
+
+def frozen_for_lights(frozen: Frozen, ids: tuple[str, ...]) -> np.ndarray | None:
+    """A still mix's colours for these lights (4, lights): each light it knew keeps its colour, a new one is unlit.
+    None if it has no colours for the lights."""
+    canvas = frozen.canvases.get("lights")
+    if canvas is None:
+        return None
+    ids = tuple(ids)
+    if frozen.ids is None or tuple(frozen.ids) == ids:
+        return canvas if canvas.shape[1] == len(ids) else None
+    cached = frozen.cache.get(ids)
+    if cached is None:
+        column = {light_id: i for i, light_id in enumerate(frozen.ids)}
+        cached = np.zeros((canvas.shape[0], len(ids)), dtype=canvas.dtype)
+        for i, light_id in enumerate(ids):
+            if light_id in column:
+                cached[:, i] = canvas[:, column[light_id]]
+        frozen.cache.clear()  # (only the newest: lights moving around doesn't pile them up)
+        frozen.cache[ids] = cached
+    return cached
+
+
+def _frozen_layer(frozen: Frozen, ctx: RenderContext) -> np.ndarray:
+    blank = empty_layer(ctx)
+    if ctx.per_light:
+        colours = frozen_for_lights(frozen, ctx.lights.ids) if ctx.lights is not None else None
+        return colours if colours is not None and colours.shape == blank.shape else blank
+    canvas = frozen.canvases.get(layer_kind(ctx))
+    if canvas is not None and canvas.shape == blank.shape:
+        return canvas
+    # a picture that wasn't being drawn when it froze: each pixel takes its nearest light's frozen colour
+    owner = _owner(ctx)
+    colours = frozen_for_lights(frozen, ctx.lights.ids) if ctx.lights is not None and ctx.lights.ids else None
+    if owner is None or colours is None or colours.shape[1] == 0:
+        return blank
+    return colours[:, owner].astype(blank.dtype, copy=False)
 
 
 def _owner(ctx: RenderContext) -> np.ndarray | None:
@@ -199,11 +237,19 @@ def _contexts(ctx) -> tuple:
     return tuple(ctx) if isinstance(ctx, (tuple, list)) else (ctx,)
 
 
+def frozen_mix(layers: dict, contexts, name: str = "") -> Frozen:
+    """A still mix from layers drawn in these contexts ({layer_kind: layer})."""
+    ids = next((tuple(c.lights.ids) for c in contexts if c.per_light and c.lights is not None), None)
+    return Frozen(layers, name=name, ids=ids)
+
+
 class Bus:
     def __init__(self, name: str) -> None:
         self.name = name
         self.current: Instance | None = None
         self.outgoing: Instance | Frozen | None = None
+        # a still look shown while nothing plays (another show's mix, frozen when it loaded), until something's sent
+        self.held: Frozen | None = None
         self.transition = Transition("cut", 0.0)
         self.t_start = 0.0
         self._seed = 0
@@ -217,15 +263,17 @@ class Bus:
             return False
         self._start_transition(now, ctx, cut, transition or inp.transition, inp.id)
         self.current = Instance(inp, now)
+        self.held = None
         return True
 
     def clear(self, now: float, ctx: RenderContext | None = None, cut: bool = False) -> None:
         """Fade (or cut) to nothing, with the outgoing input's transition."""
-        if self.current is None and not self.transitioning(now):
+        if self.current is None and self.held is None and not self.transitioning(now):
             return
         transition = self.current.input.transition if self.current is not None else Transition()
         self._start_transition(now, ctx, cut, transition, "clear")
         self.current = None
+        self.held = None
 
     def _start_transition(self, now: float, ctx: RenderContext | None, cut: bool, transition: Transition, seed_text: str) -> None:
         if cut or transition.kind == "cut" or transition.duration <= 0:
@@ -234,9 +282,10 @@ class Bus:
             return
         contexts = _contexts(ctx)
         if self.transitioning(now) and contexts:
-            self.outgoing = Frozen({layer_kind(c): self.render(now, c) for c in contexts})  # freeze the mix as it is now
+            # freeze the mix as it is now
+            self.outgoing = frozen_mix({layer_kind(c): self.render(now, c) for c in contexts}, contexts)
         else:
-            self.outgoing = self.current
+            self.outgoing = self.current if self.current is not None else self.held
         self.transition = transition
         self.t_start = now
         self._seed = seed_for(seed_text)
@@ -261,7 +310,7 @@ class Bus:
         progress = self.progress(now)
         if progress is None:
             self.outgoing = None
-        current = _render_source(self.current, now, ctx)
+        current = _render_source(self.current if self.current is not None else self.held, now, ctx)
         if progress is None:
             return current
         before = _render_source(self.outgoing, now, ctx)

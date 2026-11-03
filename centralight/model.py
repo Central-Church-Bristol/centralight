@@ -1,4 +1,4 @@
-"""The show in memory: lights, house lights, global variables and inputs.
+"""The show in memory: lights, house lights, show variables ("globals" in the files) and inputs.
 
 Everything here is immutable (frozen dataclasses, tuples, read-only mappings), so the
 engine can keep using one snapshot while the screen builds the next one.

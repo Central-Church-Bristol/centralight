@@ -1,6 +1,6 @@
 """Variables in the Editor.
 
-- GlobalsPanel (the details panel's Globals tab): the show's global variables. Each has a
+- GlobalsPanel (the details panel's Show variables tab): the show's variables. Each has a
   name, a type (number, colour or switch), the value it starts at, a range for numbers, and
   "Show on the dashboard". Every input's expressions can use them; the Dashboard and the
   Stream Deck (/api/var/<name>?value=…) set them while the show runs.
@@ -111,7 +111,7 @@ class _NameEdit(QLineEdit):
 
 
 class GlobalCard(QFrame):
-    """One global variable."""
+    """One show variable."""
 
     def __init__(self, panel: GlobalsPanel, var: GlobalVar) -> None:
         super().__init__()
@@ -128,7 +128,7 @@ class GlobalCard(QFrame):
         self.kind = ChoiceField(GLOBAL_TYPES)
         self.kind.set_value(var.type)
         self.kind.edited.connect(lambda value, _f: panel.change(self.name, type=value))
-        remove = _remove_button(f"Remove the global variable {var.name}")
+        remove = _remove_button(f"Remove the show variable {var.name}")
         remove.clicked.connect(lambda: panel.remove(self.name))
 
         layout = QVBoxLayout(self)
@@ -194,7 +194,7 @@ class GlobalCard(QFrame):
 
 
 class GlobalsPanel(QWidget):
-    """The Globals tab."""
+    """The Show variables tab."""
 
     def __init__(self, document: ShowDocument, url_base: Callable[[], str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -202,7 +202,7 @@ class GlobalsPanel(QWidget):
         self._url_base = url_base
         self.cards: dict[str, GlobalCard] = {}
         self._key: tuple = ()
-        panel = Panel("Global variables")
+        panel = Panel("Show variables")
         panel.body.addWidget(_hint(
             "Shared by every input's expressions. Set them from the Dashboard (tick “On the dashboard”), "
             "from the Stream Deck, or here."
@@ -210,11 +210,11 @@ class GlobalsPanel(QWidget):
         self.list = QVBoxLayout()
         self.list.setSpacing(8)
         panel.body.addLayout(self.list)
-        self.empty = _hint("No global variables yet.")
+        self.empty = _hint("No show variables yet.")
         panel.body.addWidget(self.empty)
         self.add_button = QToolButton()
         self.add_button.setObjectName("MenuButton")
-        self.add_button.setText("+ Add a global variable  ▾")
+        self.add_button.setText("+ Add a show variable  ▾")
         self.add_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(self.add_button)
         for kind, label in GLOBAL_TYPES:
@@ -259,7 +259,7 @@ class GlobalsPanel(QWidget):
 
     def add(self, kind: str) -> str:
         show, name = add_global(self.show_data, kind)
-        return name if self.document.apply(show, f"Add global {name}") else ""
+        return name if self.document.apply(show, f"Add show variable {name}") else ""
 
     def change(self, name: str, merge: bool = False, **changes: Any) -> None:
         old = next((g for g in self.show_data.globals if g.name == name), None)
@@ -268,13 +268,13 @@ class GlobalsPanel(QWidget):
         show = update_global(self.show_data, name, **changes)
         new = next((g for g in show.globals if g.name == name), old)
         if "type" in changes:
-            text = f"Global {name}: type {old.type} → {new.type}"
+            text = f"Show variable {name}: type {old.type} → {new.type}"
         elif "dashboard" in changes:
-            text = f"Global {name}: {'show on' if new.dashboard else 'hide from'} the dashboard"
+            text = f"Show variable {name}: {'show on' if new.dashboard else 'hide from'} the dashboard"
         elif "default" in changes:
-            text = f"Global {name}: starts at {self._describe(old)} → {self._describe(new)}"
+            text = f"Show variable {name}: starts at {self._describe(old)} → {self._describe(new)}"
         else:
-            text = f"Global {name}: range {old.min:g}–{old.max:g} → {new.min:g}–{new.max:g}"
+            text = f"Show variable {name}: range {old.min:g}–{old.max:g} → {new.min:g}–{new.max:g}"
         self.document.apply(show, text, f"global/{name}/default" if merge else None)
 
     @staticmethod
@@ -286,10 +286,10 @@ class GlobalsPanel(QWidget):
         return f"{float(var.default):g}"
 
     def rename(self, old: str, new: str) -> None:
-        self.document.apply(rename_global(self.show_data, old, new), f"Rename global {old} → {new}")
+        self.document.apply(rename_global(self.show_data, old, new), f"Rename show variable {old} → {new}")
 
     def remove(self, name: str) -> None:
-        self.document.apply(remove_global(self.show_data, name), f"Remove global {name}")
+        self.document.apply(remove_global(self.show_data, name), f"Remove show variable {name}")
 
     def copy_url(self, name: str, button: QPushButton | None = None) -> str:
         var = next((g for g in self.show_data.globals if g.name == name), None)

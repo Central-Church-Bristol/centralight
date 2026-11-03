@@ -56,6 +56,37 @@ class SwapShow:
 
 
 @dataclass(frozen=True)
+class LoadShow:
+    """Load another show (the window has read it from disk). The lights freeze on what they're showing: Base and the
+    overlays become one still look on Base, held until an input of the new show is sent (it transitions from it).
+    Nothing of the new show starts by itself; its automations are checked straight away ("When this show loads").
+    automation: a global automation asked for it (otherwise a person did: the picker, the Stream Deck)."""
+
+    show: Show
+    automation: bool = False
+
+
+@dataclass(frozen=True)
+class RequestShow:
+    """Ask the window to load a show (the Stream Deck, the phone page): the window reads it from disk and loads it."""
+
+    folder: str
+    who: str = "Stream Deck"
+
+
+@dataclass(frozen=True)
+class ShowLoadFailed:
+    """The window couldn't load a show a global automation asked for: the loaded show's automations carry on."""
+
+
+@dataclass(frozen=True)
+class SetGlobalAutomations:
+    """The global automations changed (in the app, or their files outside it): a Show holding just them, in order."""
+
+    automations: Show
+
+
+@dataclass(frozen=True)
 class SendToBase:
     """Put an input on Base with its own transition (cut=True: switch at once; transition:
     use this one instead, e.g. from the Stream Deck's ?transition=fade&duration=2)."""
@@ -119,7 +150,7 @@ class SetOverlayOpacity:
 
 @dataclass(frozen=True)
 class SetVariable:
-    """Set a global variable. value: a number, a colour ("#FF6F59", "FF6F59" or (r, g, b)), or for a
+    """Set a show variable. value: a number, a colour ("#FF6F59", "FF6F59" or (r, g, b)), or for a
     switch on / off / toggle (or true / false). Unknown names and values that don't fit are ignored."""
 
     name: str
@@ -135,9 +166,11 @@ class SetAutomationsPaused:
 
 @dataclass(frozen=True)
 class RunAutomation:
-    """Run an automation's actions now, whatever its conditions (the Run now button)."""
+    """Run an automation's actions now, whatever its conditions (the Run now button). scope: "show" (the loaded
+    show's automations) or "global"."""
 
     automation_id: str
+    scope: str = "show"
 
 
 @dataclass(frozen=True)
@@ -145,6 +178,7 @@ class ResetAutomation:
     """Let an automation the loop guard paused run again."""
 
     automation_id: str
+    scope: str = "show"
 
 
 @dataclass(frozen=True)
@@ -153,6 +187,7 @@ class SetAutomationEnabled:
 
     automation_id: str
     enabled: bool
+    scope: str = "show"
 
 
 @dataclass(frozen=True)
@@ -183,6 +218,10 @@ Command = (
     | SetHouse
     | ToBlack
     | SwapShow
+    | LoadShow
+    | RequestShow
+    | ShowLoadFailed
+    | SetGlobalAutomations
     | SendToBase
     | ClearBase
     | SetIdentify

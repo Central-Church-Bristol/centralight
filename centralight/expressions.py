@@ -1,8 +1,8 @@
 """Expressions: small formulas that set a value, like a spreadsheet cell.
 
     sin(time) * 0.5 + 0.5              a slow pulse between 0 and 1
-    mix(#FF0000, accent, audio.bass)   red, moving towards the global colour "accent" with the bass
-    value * speed                      the setting's own value, times the global "speed"
+    mix(#FF0000, accent, audio.bass)   red, moving towards the show variable colour "accent" with the bass
+    value * speed                      the setting's own value, times the show variable "speed"
     1 if time < 2 else 0               on for the first two seconds
 
 A result is a number or a colour (r, g, b from 0 to 1). A number used where a colour is
@@ -15,7 +15,7 @@ There are no strings (apart from colours), no attributes, no imports and no way 
 anything else. The text is compiled once into plain Python functions (closures) and never
 passed to eval().
 
-Names are looked up in this order: the input's local variables, global variables, then
+Names are looked up in this order: the input's local variables, show variables, then
 t (element time), time (input time) and value (the setting's own value before the
 expression). audio.level / bass / mid / treble / beat / pitch are 0-1 (0 until audio is set up).
 
@@ -287,7 +287,7 @@ FUNCTIONS: dict[str, Function] = {
     "tri": Function(_tri, 1, 2, "tri(t, rate=1): 0 → 1 → 0, in straight lines"),
     "square": Function(_square, 1, 2, "square(t, rate=1): 1 for half of each cycle, then 0"),
     "wave": Function(_wave, 1, 2, "wave(t, rate=1): a smooth 0 → 1 → 0, starting at 0. rate = cycles per second "
-                                  "(0.25: one every 4 s); a changing rate (e.g. a speed global) changes the pace smoothly"),
+                                  "(0.25: one every 4 s); a changing rate (e.g. a speed show variable) changes the pace smoothly"),
     "noise": Function(_noise, 1, 2, "noise(t, seed=0): smooth random wandering between 0 and 1, to a new value each "
                                     "time t passes a whole number"),
     "random": Function(lambda *_: 0.0, 0, 1, "random(seed=0): a random 0-1 that stays the same for this element"),

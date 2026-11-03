@@ -11,16 +11,17 @@ from dataclasses import replace
 from pathlib import Path
 
 from .engine import Engine
+from .global_automations import GLOBAL_NAME, global_folder, load_global_automations
 from .live_state import LiveState
 from .log import install_crash_logging, log_exception, log_info
 from .model import Show
 from .new_show import FOLLOW_SCREEN_ID, open_or_create_show, show_from_patch
 from .output import DmxOutputThread, device_spec, universe_size
 from .sources import SourceManager
-from .paths import default_show_dir
+from .paths import default_show_dir, shows_root
 from .priority import prefer_livestream_apps
 from .settings import QUIT_OFF, Settings
-from .show_io import ShowError, backup_show
+from .show_io import SHOW_FILE, ShowError, backup_show
 from .timing import begin_precise_timer, end_precise_timer
 
 
@@ -35,9 +36,32 @@ def _prepare_windows_shell() -> None:
         pass
 
 
-def open_show(settings: Settings) -> tuple[Show, str]:
+def show_to_open(settings: Settings, live: LiveState | None) -> Path:
+    """The show that was loaded last (live.json says which), else the one Settings names, else Central Church."""
+    for candidate in (live.show if live is not None else "", settings.show_folder):
+        if candidate and (Path(candidate) / SHOW_FILE).is_file():
+            return Path(candidate)
+    return Path(settings.show_folder) if settings.show_folder else default_show_dir()
+
+
+def open_global_automations(root: Path | None = None) -> Show:
+    """The global automations (app-wide, next to the shows). If they can't be read, CentraLight still starts."""
+    folder = global_folder(root if root is not None else shows_root())
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        container = load_global_automations(folder)
+    except Exception as exc:
+        log_exception("opening the global automations", exc)
+        return Show(name=GLOBAL_NAME, folder=str(folder), read_only=True)
+    for warning in container.warnings:
+        log_info(f"Global automations: {warning}")
+    return container
+
+
+def open_show(settings: Settings, folder: Path | None = None) -> tuple[Show, str]:
     """The show to use, plus a message for people if something was wrong with it."""
-    folder = Path(settings.show_folder) if settings.show_folder else default_show_dir()
+    if folder is None:
+        folder = Path(settings.show_folder) if settings.show_folder else default_show_dir()
     try:
         show = open_or_create_show(folder)
     except Exception as exc:  # whatever is wrong with the files, CentraLight still starts (and says why)
@@ -85,10 +109,13 @@ def main(argv: list[str] | None = None) -> int:
     app.setWindowIcon(app_icon())
 
     settings = Settings.load()
-    show, problem = open_show(settings)
     live = LiveState.load()
-    if live is not None and live.show != show.folder:
-        live = None  # it belongs to a different show
+    show, problem = open_show(settings, show_to_open(settings, live))
+    if live is not None:
+        live = live.for_show(show.folder)  # (saved with another show loaded: only what's app-wide carries over)
+    if show.folder and not show.read_only:
+        settings.show_folder = show.folder
+    global_automations = open_global_automations()
 
     try:
         import cv2
@@ -104,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     audio = AudioCapture(settings.audio_source, settings.audio_attack, settings.audio_release)
     audio.start()  # off unless Settings → Audio says what to listen to
     engine = Engine(show, output, live, sources=sources, audio=audio, initial_base=FOLLOW_SCREEN_ID,
-                    started_by_windows="--minimized" in argv)
+                    started_by_windows="--minimized" in argv, global_automations=global_automations)
     engine.start()
     log_info(f"CentraLight started: show {show.folder}, output {settings.output}")
 
@@ -122,7 +149,8 @@ def main(argv: list[str] | None = None) -> int:
     remote = RemoteServer.from_settings(engine, settings)
     remote.start()  # if the port is taken, the header's Remote chip says so
 
-    window = MainWindow(settings, show, engine, output, remote=remote)
+    window = MainWindow(settings, show, engine, output, remote=remote, global_automations=global_automations,
+                        shows_root=shows_root())
     # Windows logging off or shutting down: stop cleanly without asking
     app.aboutToQuit.connect(lambda: window.shutdown(lights_off=settings.quit_action == QUIT_OFF))
 

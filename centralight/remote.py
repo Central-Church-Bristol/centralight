@@ -11,22 +11,27 @@ in a browser for a page listing every URL, with big buttons (it doubles as a pho
     /api/input/<id>/overlay/<1-4>          toggle it in an overlay (?state=on or off to be exact)
     /api/overlay/<1-4>/off                 switch an overlay off
     /api/overlay/<1-4>/opacity?value=0.5   (&fade=1)
-    /api/var/<name>?value=0.7              a global variable: numbers; colours as FF6F59;
+    /api/var/<name>?value=0.7              a show variable: numbers; colours as FF6F59;
                                            switches on / off / toggle
     /api/master?level=0.8                  (&fade=2)
     /api/house/<light>?level=0.4           festoon or key lights (&fade=3); /on, /off, /toggle
     /api/black/cut, /api/black/fade        the colour lights to black (?all=1: the Festoon and Key
                                            lights too; ?seconds=2 for the fade)
     /api/identify/on, /off
-    /api/automation/<id>/run               run an automation now (/enable, /disable)
+    /api/automation/<id>/run               run one of the show's automations now (/enable, /disable)
+    /api/global-automation/<id>/run        ...or a global automation (/enable, /disable)
     /api/automations/pause, /resume, /toggle
     /api/layout/<id>                       switch to a saved layout
+    /api/show/<id or name>                 load another show (the lights hold what they show until
+                                           one of its inputs is sent)
+    /api/shows                             the shows there are, as JSON
     /api/state                             what's happening now, as JSON
     POST /api/command {"op": "input", "id": "warm-white"}   the same things as JSON
 
 Each reply is {"ok": true} straight away (or {"ok": false, "error": "..."} with 404 for an
-unknown input, variable or light, 400 for a bad value). Commands go straight to the engine, so
-they work while the window is minimised or a dialog is open.
+unknown input, variable or light, 400 for a bad value). Inputs, variables, house lights,
+automations and layouts are the loaded show's: one that isn't in it gets 404 "not in this show".
+Commands go straight to the engine, so they work while the window is minimised or a dialog is open.
 
 Safety: it listens on 127.0.0.1 (this PC only) unless "Allow other computers" is on, which then
 needs ?key=... on every URL. Requests that a browser makes for another website are refused, and
@@ -41,13 +46,16 @@ import json
 import secrets
 import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .commands import (
     BLACK_FADE,
     OverlayOff,
+    RequestShow,
     RunAutomation,
     SendToBase,
     SendToOverlay,
@@ -64,9 +72,11 @@ from .commands import (
 from .expressions import describe_value
 from .log import log_exception, log_info
 from .model import TRANSITION_KINDS, Show, Transition, slugify
+from .shows import ShowInfo, find_show, list_shows, same_folder, show_id
 from .variables import coerce_global
 
 DEFAULT_PORT = 8746
+SHOWS_FRESH = 3.0  # seconds the list of shows is kept before it's read again
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
 OVERLAYS = (1, 2, 3, 4)
 MAX_BODY = 64_000
@@ -117,13 +127,17 @@ def _fade(params: dict[str, str]) -> float | None:
     return _number(params, "fade", 0.0, 600.0) if "fade" in params else None
 
 
+def _in_this_show(show: Show) -> str:
+    return f"not in this show ({show.name})" if show.name else "not in this show"
+
+
 def _input_id(show: Show, raw: str) -> str:
     if raw in show.inputs:
         return raw
     for inp in show.inputs.values():  # a name works too: /api/input/Warm%20white
         if inp.name.casefold() == raw.casefold() or slugify(inp.name) == slugify(raw):
             return inp.id
-    raise BadRequest(404, f"there's no input called {raw!r}")
+    raise BadRequest(404, f"there's no input called {raw!r}: {_in_this_show(show)}")
 
 
 def _house_id(show: Show, raw: str) -> str:
@@ -131,16 +145,16 @@ def _house_id(show: Show, raw: str) -> str:
         if raw in (item.fixture, slugify(item.label)) or item.label.casefold() == raw.casefold():
             return item.fixture
     names = ", ".join(slugify(item.label) for item in show.house)
-    raise BadRequest(404, f"there's no house light called {raw!r} (try {names})")
+    raise BadRequest(404, f"there's no house light called {raw!r}: {_in_this_show(show)} (try {names})")
 
 
-def _automation_id(show: Show, raw: str) -> str:
+def _automation_id(show: Show, raw: str, what: str = "automation", where: str = "") -> str:
     if raw in show.automations:
         return raw
     for automation in show.automations.values():
         if automation.name.casefold() == raw.casefold() or slugify(automation.name) == slugify(raw):
             return automation.id
-    raise BadRequest(404, f"there's no automation called {raw!r}")
+    raise BadRequest(404, f"there's no {what} called {raw!r}" + (f": {where}" if where else ""))
 
 
 def _overlay(raw: str) -> int:
@@ -161,11 +175,27 @@ def _on_off(word: str) -> bool | None:
     raise BadRequest(404, "use on, off or toggle")
 
 
-def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any = None, black_fade: float = BLACK_FADE) -> Any:
-    """The engine command for an API path (split into parts, after /api/). Raises BadRequest."""
+def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any = None, black_fade: float = BLACK_FADE,
+                shows: list[ShowInfo] | None = None, global_automations: Show | None = None) -> Any:
+    """The engine command for an API path (split into parts, after /api/). Raises BadRequest. show: the loaded
+    show; shows: the shows there are (for /api/show/...); global_automations: a Show holding just them."""
     if not parts:
         raise BadRequest(404, "see / for the list of URLs")
     head, rest = parts[0], parts[1:]
+    if head == "show" and len(rest) == 1:
+        info = find_show(Path("."), rest[0], shows or [])
+        if info is None:
+            names = ", ".join(s.id for s in shows or []) or "none yet"
+            raise BadRequest(404, f"there's no show called {rest[0]!r} (the shows: {names})")
+        return RequestShow(info.folder)
+    if head == "global-automation" and len(rest) == 2:
+        container = global_automations if global_automations is not None else Show(name="Global automations")
+        automation_id = _automation_id(container, rest[0], "global automation")
+        if rest[1] == "run":
+            return RunAutomation(automation_id, "global")
+        if rest[1] in ("enable", "disable"):
+            return SetAutomationEnabled(automation_id, rest[1] == "enable", "global")
+        raise BadRequest(404, "use /run, /enable or /disable")
     if head == "input" and rest:
         input_id = _input_id(show, rest[0])
         if len(rest) == 1:
@@ -196,7 +226,7 @@ def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any
         name = rest[0]
         var = next((g for g in show.globals if g.name == name), None)
         if var is None:
-            raise BadRequest(404, f"there's no global variable called {name!r}")
+            raise BadRequest(404, f"there's no show variable called {name!r}: {_in_this_show(show)}")
         raw = params.get("value")
         if raw is None:
             raise BadRequest(400, "add ?value=… (a number, a colour like FF6F59, or on / off / toggle)")
@@ -229,7 +259,7 @@ def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any
             raise BadRequest(404, "use /api/identify/on or /api/identify/off")
         return SetIdentify(on, show.identify_seed)
     elif head == "automation" and len(rest) == 2:
-        automation_id = _automation_id(show, rest[0])
+        automation_id = _automation_id(show, rest[0], where=_in_this_show(show))
         if rest[1] == "run":
             return RunAutomation(automation_id)
         if rest[1] in ("enable", "disable"):
@@ -241,12 +271,13 @@ def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any
     elif head == "layout" and len(rest) == 1:
         layout = show.layout(rest[0]) or next((lay for lay in show.layouts if lay.name.casefold() == rest[0].casefold()), None)
         if layout is None:
-            raise BadRequest(404, f"there's no saved layout called {rest[0]!r}")
+            raise BadRequest(404, f"there's no saved layout called {rest[0]!r}: {_in_this_show(show)}")
         return SwitchLayout(layout.id)
     raise BadRequest(404, "there's no such URL: see / for the list")
 
 
-def command_from_json(payload: Any, show: Show, frame: Any = None, black_fade: float = BLACK_FADE) -> Any:
+def command_from_json(payload: Any, show: Show, frame: Any = None, black_fade: float = BLACK_FADE,
+                      shows: list[ShowInfo] | None = None, global_automations: Show | None = None) -> Any:
     """POST /api/command: {"op": "input", "id": "warm-white"} and so on, the same as the URLs."""
     if not isinstance(payload, dict) or not isinstance(payload.get("op"), str):
         raise BadRequest(400, 'send {"op": ...}, e.g. {"op": "input", "id": "warm-white"}')
@@ -277,17 +308,26 @@ def command_from_json(payload: Any, show: Show, frame: Any = None, black_fade: f
     elif op == "identify":
         parts = [op, str(payload.get("state", "toggle"))]
         params.pop("state", None)
+    elif op == "show":
+        parts = ["show", str(payload.get("id") or payload.get("name") or "")]
     else:
         raise BadRequest(400, f"unknown op {op!r}")
-    return command_for(parts, params, show, frame, black_fade)
+    return command_for(parts, params, show, frame, black_fade, shows, global_automations)
 
 
-def state_of(engine: Any) -> dict[str, Any]:
+def shows_of(shows: list[ShowInfo], loaded: str) -> list[dict[str, Any]]:
+    """/api/shows (and /api/state's "shows"): each show's id and name, and which is loaded."""
+    return [{"id": s.id, "name": s.name, "loaded": same_folder(s.folder, loaded)} for s in shows]
+
+
+def state_of(engine: Any, shows: list[ShowInfo] | None = None) -> dict[str, Any]:
     """/api/state: what's happening now."""
     show: Show = engine.show
     frame = engine.frames.get()
     data: dict[str, Any] = {
         "show": show.name,
+        "show_id": show_id(show.folder) if show.folder else "",
+        "shows": shows_of(shows or [], show.folder),
         "inputs": [{"id": inp.id, "name": inp.name} for inp in show.ordered_inputs()],
         "globals": [{"name": g.name, "type": g.type, "min": g.min, "max": g.max, "dashboard": g.dashboard} for g in show.globals],
         "house": [{"id": h.fixture, "name": h.label, "slug": slugify(h.label)} for h in show.house],
@@ -397,7 +437,8 @@ class _Handler(BaseHTTPRequestHandler):
             if self.command == "POST":
                 if path != ["api", "command"]:
                     raise BadRequest(404, "POST goes to /api/command")
-                command = command_from_json(payload, remote.engine.show, remote.engine.frames.get(), remote.black_fade())
+                command = command_from_json(payload, remote.engine.show, remote.engine.frames.get(), remote.black_fade(),
+                                            remote.shows(), remote.global_automations())
                 remote.engine.submit(command)
                 remote.count += 1
                 self._json(200, {"ok": True})
@@ -408,9 +449,12 @@ class _Handler(BaseHTTPRequestHandler):
             elif path[0] != "api":
                 raise BadRequest(404, "there's no such page: see /")
             elif path[1:] == ["state"]:
-                self._json(200, {"ok": True, **state_of(remote.engine)})
+                self._json(200, {"ok": True, **state_of(remote.engine, remote.shows())})
+            elif path[1:] == ["shows"]:
+                self._json(200, {"ok": True, "shows": shows_of(remote.shows(fresh=True), remote.engine.show.folder)})
             else:
-                command = command_for(path[1:], params, remote.engine.show, remote.engine.frames.get(), remote.black_fade())
+                command = command_for(path[1:], params, remote.engine.show, remote.engine.frames.get(), remote.black_fade(),
+                                      remote.shows(), remote.global_automations())
                 remote.engine.submit(command)
                 remote.count += 1
                 self._json(200, {"ok": True})
@@ -436,8 +480,9 @@ class RemoteServer:
     """The remote's web server, on its own thread ("remote")."""
 
     def __init__(self, engine: Any, port: int = DEFAULT_PORT, lan: bool = False, key: str = "",
-                 black_fade: Any = None) -> None:
-        """black_fade: gives Fade to black's time (Settings); 2 s if not given."""
+                 black_fade: Any = None, shows_root: Path | None = None) -> None:
+        """black_fade: gives Fade to black's time (Settings); 2 s if not given. shows_root: the folder the shows are
+        in (Documents\\CentraLight Shows if not given)."""
         self.engine = engine
         self._black_fade = black_fade
         self.port = port
@@ -447,13 +492,34 @@ class RemoteServer:
         self.error = ""
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
+        self.shows_root = Path(shows_root) if shows_root is not None else None
+        self._shows: tuple[float, list[ShowInfo]] = (-1e9, [])
+        self._shows_lock = threading.Lock()
 
     @classmethod
-    def from_settings(cls, engine: Any, settings: Any) -> RemoteServer:
+    def from_settings(cls, engine: Any, settings: Any, shows_root: Path | None = None) -> RemoteServer:
         """The remote as Settings set it up: its port, other computers and their key, and Fade to black's time (read
         each time, so a change in Settings counts at once)."""
         return cls(engine, settings.remote_port, settings.remote_lan, settings.remote_key,
-                   black_fade=lambda: settings.black_fade)
+                   black_fade=lambda: settings.black_fade, shows_root=shows_root)
+
+    def shows(self, fresh: bool = False) -> list[ShowInfo]:
+        """The shows there are (read from disk at most every few seconds: the phone page asks every 1.5 s)."""
+        with self._shows_lock:
+            now = time.monotonic()
+            if fresh or now - self._shows[0] > SHOWS_FRESH:
+                from .paths import shows_root
+
+                try:
+                    found = list_shows(self.shows_root if self.shows_root is not None else shows_root())
+                except Exception as exc:  # (never let it stop the remote)
+                    log_exception("listing the shows", exc)
+                    found = []
+                self._shows = (now, found)
+            return list(self._shows[1])
+
+    def global_automations(self) -> Show | None:
+        return getattr(self.engine, "global_automations", None)
 
     @property
     def running(self) -> bool:
@@ -550,6 +616,12 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
         f'{button("Off", f"/api/house/{slugify(h.label)}/off", "small")}</div>'
         for h in show.house
     )
+    shows = remote.shows()
+    show_options = "".join(
+        f'<option value="{esc(s.id)}"{" selected" if same_folder(s.folder, show.folder) else ""}>{esc(s.name)}</option>'
+        for s in shows)
+    if not any(same_folder(s.folder, show.folder) for s in shows):
+        show_options = f'<option value="" selected>{esc(show.name)}</option>' + show_options
     examples = [
         ("Send an input to Base", "/api/input/<id>"),
         ("…with another transition", "/api/input/<id>?transition=fade&duration=2"),
@@ -566,25 +638,37 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
         ("Fade them to black", "/api/black/fade  (?seconds=2, ?all=1)"),
         ("Identify", "/api/identify/on  (or /off)"),
         ("Run an automation", "/api/automation/<id>/run  (or /enable, /disable)"),
+        ("Run a global automation", "/api/global-automation/<id>/run  (or /enable, /disable)"),
         ("Pause all automations", "/api/automations/pause  (or /resume, /toggle)"),
         ("Switch layout", "/api/layout/<id>"),
+        ("Load a show", "/api/show/<id or name>"),
+        ("The shows", "/api/shows"),
         ("What's happening now", "/api/state"),
     ]
+    show_urls = "".join(
+        f"<tr><td>Load {esc(s.name)}</td><td><code>{esc(base)}/api/show/{esc(quote(s.id))}{esc(suffix)}</code></td></tr>"
+        for s in shows)
     url_rows = "".join(f"<tr><td>{esc(what)}</td><td><code>{esc(base + path)}</code></td></tr>" for what, path in examples)
     ids = "".join(
         f"<tr><td>{esc(inp.name)}</td><td><code>{esc(base)}/api/input/{esc(quote(inp.id))}{esc(suffix)}</code></td></tr>"
         for inp in show.ordered_inputs()
     )
     lights = ", ".join(f"<code>{esc(slugify(h.label))}</code>" for h in show.house)
+    def script_value(value: Any) -> str:  # (safe inside <script>)
+        return json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
     return PAGE.format(
         show=esc(show.name),
+        show_options=show_options,
         tiles="".join(rows) or "<p>No inputs yet: make one in CentraLight's Editor.</p>",
-        variables="".join(variables) or "<p>No global variables yet (Editor → Globals tab).</p>",
+        variables="".join(variables) or "<p>No show variables yet (Editor → Show variables tab).</p>",
         house=house,
         url_rows=url_rows,
         ids=ids,
+        show_urls=show_urls,
         lights=lights,
-        key=json.dumps(key).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026"),  # safe inside <script>
+        key=script_value(key),
+        show_id=script_value(show_id(show.folder) if show.folder else ""),
     )
 
 
@@ -619,13 +703,17 @@ button.black {{ background: transparent; border: 2px solid var(--red); color: va
   min-height: 40px; }}
 button.black.held {{ background: var(--red); color: white; }}
 #status {{ color: var(--dim); font-size: 13px; }}
+select#shows {{ background: var(--card); color: var(--text); border: 1px solid #26324A; border-radius: 8px; font: inherit;
+  min-height: 40px; padding: 0 8px; max-width: 60vw; }}
 table {{ margin: 0 16px 24px; border-collapse: collapse; font-size: 13px; }}
 td {{ padding: 4px 10px 4px 0; vertical-align: top; }}
 code {{ color: var(--accent); word-break: break-all; }}
 p {{ margin: 8px 16px; color: var(--dim); }}
 </style></head>
 <body>
-<header><h1>{show}</h1><span id="status">Connecting…</span>
+<header><h1>{show}</h1>
+<select id="shows" title="Load another show (the lights hold what they show until one of its inputs is sent)">{show_options}</select>
+<span id="status">Connecting…</span>
 <button class="black" data-black="/api/black/cut" title="Tap: the colour lights. Hold: everything, Festoon and Key lights too">Cut to black</button>
 <button class="black" data-black="/api/black/fade" title="Tap: the colour lights. Hold: everything, Festoon and Key lights too">Fade to black</button></header>
 <h2>Inputs: tap to send to Base</h2>
@@ -637,8 +725,10 @@ p {{ margin: 8px 16px; color: var(--dim); }}
 Companion: use <b>Generic HTTP → GET</b>. House lights are called {lights}.</p>
 <table>{url_rows}</table>
 <table>{ids}</table>
+<table>{show_urls}</table>
 <script>
 const key = {key};
+const pageShow = {show_id};
 function withKey(path) {{
   if (!key) return path;
   return path + (path.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(key);
@@ -673,10 +763,15 @@ document.querySelectorAll("input[data-var]").forEach(input => input.addEventList
   const value = input.dataset.colour ? input.value.slice(1) : input.value;
   call(input.dataset.var + "?value=" + encodeURIComponent(value));
 }}));
+// the show switcher: load another show (this page then shows its inputs)
+document.getElementById("shows").addEventListener("change", e => {{
+  if (e.target.value) call("/api/show/" + encodeURIComponent(e.target.value));
+}});
 async function refresh() {{
   try {{
     const state = await (await fetch(withKey("/api/state"))).json();
     if (!state.ok) {{ document.getElementById("status").textContent = state.error; return; }}
+    if (state.show_id !== pageShow) {{ location.reload(); return; }}  // another show is loaded: its inputs and variables
     document.getElementById("status").textContent = "Base: " + state.base.name;
     document.querySelectorAll(".tile").forEach(t => t.classList.toggle("base", t.dataset.id === state.base.id));
     document.querySelectorAll(".tile").forEach(t => t.querySelectorAll(".row button[data-path*='/overlay/']").forEach(b => {{

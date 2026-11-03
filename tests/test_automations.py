@@ -23,7 +23,7 @@ from centralight.automations import (
 from centralight.commands import PowerEvent, RunAutomation, SendToBase, SetAutomationsPaused, SetHouse, SwitchLayout, ToBlack
 from centralight.engine import Engine
 from centralight.live_state import LiveState
-from centralight.model import Automation, GlobalVar, Input
+from centralight.model import Automation, GlobalVar, Input, Show
 from centralight.new_show import create_show, show_from_patch
 from centralight.show_io import automation_from_dict, automation_to_dict, freeze, load_show, save_whole_show
 from centralight.sun import sun_times
@@ -85,18 +85,23 @@ WELCOME = [{"do": "base", "input": "warm-welcome"}, {"do": "house", "light": "di
 
 
 class AutomationEngineTestCase(unittest.TestCase):
-    def make(self, start: datetime, automations: list[Automation], live: LiveState | None = None, uptime: float = 3600.0) -> Engine:
+    def make(self, start: datetime, automations: list[Automation], live: LiveState | None = None, uptime: float = 3600.0,
+             global_automations: list[Automation] = ()) -> Engine:
+        """uptime: how long Windows has been running (under 10 minutes: the PC has just started)."""
         inputs = {i.id: i for i in (paint("warm-welcome"), paint("evening"), paint("ping"), paint("pong"))}
         show = show_from_patch().with_inputs(inputs, tuple(inputs))
         show = show.with_automations({a.id: a for a in automations}, tuple(a.id for a in automations))
         from dataclasses import replace
 
         self.show = replace(show, globals=(GlobalVar("mood", "number", 0.0, 0.0, 1.0),))
+        self.global_automations = Show(name="Global automations").with_automations(
+            {a.id: a for a in global_automations}, tuple(a.id for a in global_automations))
         self.clocks = Clocks(start)
         self.clocks.uptime_value = uptime
         self.output = ReconnectingOutput()
         self.engine = Engine(self.show, self.output, live, clock=lambda: self.clocks.mono, wall=lambda: self.clocks.wall,
-                             local_time=uk_local, uptime=lambda: self.clocks.uptime_value)
+                             local_time=uk_local, uptime=lambda: self.clocks.uptime_value,
+                             global_automations=self.global_automations)
         return self.engine
 
     def run_until(self, until: datetime, step: float = 30.0) -> None:
@@ -110,6 +115,9 @@ class AutomationEngineTestCase(unittest.TestCase):
 
     def runs(self, automation_id: str) -> list:
         return [h for h in self.engine._runner.history if h.automation == automation_id and h.what == "ran"]
+
+    def global_runs(self, automation_id: str) -> list:
+        return [h for h in self.engine._global_runner.history if h.automation == automation_id and h.what == "ran"]
 
 
 class ReconnectingOutput(FakeOutput):
@@ -165,7 +173,8 @@ class WhenTheyRunTests(AutomationEngineTestCase):
         self.assertEqual([h.what for h in week._runner.history].count("ran"), 2)
 
     def test_pc_startup_and_sunday_runs_once(self) -> None:
-        both = automation("startup", [{"type": "pc_startup"}, {"type": "days", "days": ["sun"]}], [{"do": "base", "input": "evening"}])
+        # (a show's "The PC starts" is "When this show loads" now: it loads at PC start)
+        both = automation("startup", [{"type": "show_loads"}, {"type": "days", "days": ["sun"]}], [{"do": "base", "input": "evening"}])
         self.make(datetime(2026, 11, 8, 18, 0), [both], uptime=120.0)
         self.engine.tick()
         self.assertEqual(self.base(), "evening")
@@ -179,9 +188,11 @@ class WhenTheyRunTests(AutomationEngineTestCase):
         self.assertEqual(self.base(), "")
 
     def test_app_started_runs_on_every_start(self) -> None:
-        self.make(datetime(2026, 11, 9, 18, 0), [automation("hello", [{"type": "app_started"}], [{"do": "base", "input": "ping"}])], uptime=99999.0)
+        hello = automation("hello", [{"type": "app_started"}], [{"do": "master", "level": 0.4}])  # (a global automation's)
+        self.make(datetime(2026, 11, 9, 18, 0), [], uptime=99999.0, global_automations=[hello])
         self.engine.tick()
-        self.assertEqual(self.base(), "ping")
+        self.assertAlmostEqual(self.engine._master.target, 0.4)
+        self.assertEqual(len(self.global_runs("hello")), 1)
 
     def test_invert_and_any(self) -> None:
         weekend = automation("weekend", [{"type": "days", "days": ["sat"]}, {"type": "days", "days": ["sun"]}],
@@ -244,31 +255,31 @@ class WhenTheyRunTests(AutomationEngineTestCase):
 
 class SleepWakeAndControlTests(AutomationEngineTestCase):
     def test_waking_runs_pc_woke_and_reconnects(self) -> None:
-        woke = automation("woke", [{"type": "pc_woke"}], [{"do": "base", "input": "evening"}])
-        engine = self.make(datetime(2026, 11, 9, 20, 0), [woke])
+        woke = automation("woke", [{"type": "pc_woke"}], [{"do": "master", "level": 0.5}])  # (a global automation's)
+        engine = self.make(datetime(2026, 11, 9, 20, 0), [], global_automations=[woke])
         engine.tick()
-        self.assertEqual(self.base(), "")
+        self.assertAlmostEqual(engine._master.target, 1.0)
         self.clocks.jump_wall(2 * 3600)  # asleep for two hours
         self.clocks.advance(0.025)
         engine.tick()
-        self.assertEqual(self.base(), "evening")
+        self.assertAlmostEqual(engine._master.target, 0.5)
         self.assertEqual(self.output.reconnects, 1)
         engine.submit(PowerEvent("woke"))  # Windows' "resumed" message for the same wake: still one run
         self.clocks.advance(0.025)
         engine.tick()
-        self.assertEqual(len(self.runs("woke")), 1)
+        self.assertEqual(len(self.global_runs("woke")), 1)
         self.clocks.advance(5.0)
         engine.tick()
         engine.submit(PowerEvent("woke"))  # Windows' second message for the same wake, a few seconds on: still one
         self.clocks.advance(0.025)
         engine.tick()
-        self.assertEqual(len(self.runs("woke")), 1)
+        self.assertEqual(len(self.global_runs("woke")), 1)
         self.clocks.advance(120.0)
         engine.tick()
         engine.submit(PowerEvent("woke"))  # a later wake, reported by Windows: runs again
         self.clocks.advance(0.025)
         engine.tick()
-        self.assertEqual(len(self.runs("woke")), 2)
+        self.assertEqual(len(self.global_runs("woke")), 2)
         self.assertEqual(self.output.reconnects, 2)
 
     def test_catch_up_after_waking(self) -> None:
@@ -280,9 +291,9 @@ class SleepWakeAndControlTests(AutomationEngineTestCase):
         self.assertEqual(self.base(), "warm-welcome")
 
     def test_order_later_ones_win(self) -> None:
-        first = automation("first", [{"type": "app_started"}], [{"do": "base", "input": "ping", "transition": "cut"}])
-        second = automation("second", [{"type": "app_started"}], [{"do": "base", "input": "pong", "transition": "cut"}])
-        self.make(datetime(2026, 11, 9, 12, 0), [first, second])
+        first = automation("first", [{"type": "show_loads"}], [{"do": "base", "input": "ping", "transition": "cut"}])
+        second = automation("second", [{"type": "show_loads"}], [{"do": "base", "input": "pong", "transition": "cut"}])
+        self.make(datetime(2026, 11, 9, 12, 0), [first, second], uptime=120.0)  # (the PC has just started: the show loads)
         self.engine.tick()
         self.assertEqual(self.base(), "pong")
 
@@ -305,8 +316,8 @@ class SleepWakeAndControlTests(AutomationEngineTestCase):
         self.assertEqual(self.base(), "")  # it became true while paused: resuming doesn't run it
 
     def test_delays(self) -> None:
-        later = automation("later", [{"type": "app_started"}], [{"do": "base", "input": "ping", "transition": "cut", "delay": 10}])
-        self.make(datetime(2026, 11, 9, 12, 0), [later])
+        later = automation("later", [{"type": "show_loads"}], [{"do": "base", "input": "ping", "transition": "cut", "delay": 10}])
+        self.make(datetime(2026, 11, 9, 12, 0), [later], uptime=120.0)
         self.engine.tick()
         self.run_until(datetime(2026, 11, 9, 12, 0, 9), step=1.0)
         self.assertEqual(self.base(), "")
@@ -321,7 +332,7 @@ class SleepWakeAndControlTests(AutomationEngineTestCase):
         engine.submit(RunAutomation("by-hand"))
         engine.tick()
         self.assertEqual(self.base(), "pong")
-        self.assertEqual(engine.gui_requests.get_nowait(), ("By Hand", {"do": "layout", "layout": "main"}))
+        self.assertEqual(engine.gui_requests.get_nowait(), ("By Hand", {"do": "layout", "layout": "main", "_scope": "show"}))
         engine.submit(SwitchLayout("christmas"))  # from the Stream Deck
         engine.tick()
         self.assertEqual(engine.gui_requests.get_nowait(), ("Stream Deck", {"do": "layout", "layout": "christmas"}))

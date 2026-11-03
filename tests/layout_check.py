@@ -53,7 +53,7 @@ def main() -> int:
 
     from tests import layout_rules
     from tests.fakes import FakeEngine
-    from tests.gui_fixtures import ai_edit_reply, ai_problem_reply, busy_show_engine, long_names_show, with_inputs
+    from tests.gui_fixtures import ai_edit_reply, ai_problem_reply, busy_show_engine, long_names_show, sample_global_automations, with_inputs
 
     from centralight.new_show import show_from_patch
     from centralight.settings import Settings
@@ -86,7 +86,8 @@ def main() -> int:
                 window.hide()
                 window.deleteLater()
             engine: FakeEngine = busy_show_engine(show)
-            window = MainWindow(Settings(), engine.show, engine, engine.fake_output, save_files=False)
+            window = MainWindow(Settings(), engine.show, engine, engine.fake_output, save_files=False,
+                                global_automations=sample_global_automations(long=variant == "long"))
             layout_rules.show_all_chips(window)
             if variant == "long":
                 window.header.set_show_name(LONG_SHOW_NAME)
@@ -103,15 +104,15 @@ def main() -> int:
                     states = ["editor-element", "editor-brush", "editor-ndi", "editor-mask", "editor-input", "editor-globals",
                               "editor-timed", "editor-timed-input"]
                 if key == "automation":  # both sample automations: the second has every kind of condition (sound too)
-                    states = ["automation", "automation-evening"]
+                    states = ["automation", "automation-evening", "automation-global"]
                 for state in states:
                     window.show_page(key)
-                    if state == "automation-evening":
+                    if state in ("automation-evening", "automation-global"):  # (and a global one, with every global kind)
                         page = window.automation_page
-                        page.selected = "evening"
-                        page._build_editor(page.show_data)
-                        page._list_key = ()
-                        page._fill_list(page.show_data)
+                        page._select(*(("show", "evening") if state == "automation-evening" else ("global", "sunday-morning")))
+                        page._build_editor()
+                        page._list_keys = {"show": (), "global": ()}
+                        page._fill_lists()
                     elif state == "editor-timed":
                         window.editor_page.open_input("christmas")
                         window.editor_page.set_playing(False)

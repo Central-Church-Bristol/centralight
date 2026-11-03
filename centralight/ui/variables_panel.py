@@ -1,4 +1,4 @@
-"""The Dashboard's Variables panel: the global variables marked "show on dashboard", as a
+"""The Dashboard's Variables panel: the show variables marked "show on dashboard", as a
 slider (numbers), a colour (colours) or a switch (switches). Moving one changes the lights
 straight away (inputs whose expressions use it follow), the same as the Stream Deck's
 /api/var URLs. The values shown come back from the engine, so a Stream Deck change shows here too.
@@ -25,7 +25,7 @@ class VariablesPanel(Panel):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Variables", parent)
-        self.hint = QLabel("Global variables ticked “On the dashboard” appear here (Editor → Globals tab).")
+        self.hint = QLabel("Show variables ticked “On the dashboard” appear here (Editor → Show variables tab).")
         self.hint.setObjectName("Hint")
         self.hint.setWordWrap(True)
         self.body.addWidget(self.hint)

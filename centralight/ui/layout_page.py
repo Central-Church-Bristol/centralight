@@ -25,6 +25,8 @@ from PySide6.QtGui import QActionGroup, QBrush, QColor, QFont, QImage, QPainter,
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -59,10 +61,22 @@ from ..commands import FlashLights, SetIdentify, SetTestColour
 from ..elements import media_path
 from ..engine import EngineFrame
 from ..files import write_atomic
-from ..layouts import delete_layout, rename_layout, save_layout_as, set_backdrop, set_backdrop_opacity, sorted_layouts, switch_layout
+from ..layouts import (
+    delete_layout,
+    import_layout,
+    import_summary,
+    rename_layout,
+    save_layout_as,
+    set_backdrop,
+    set_backdrop_opacity,
+    sorted_layouts,
+    switch_layout,
+)
 from ..log import log_exception
 from ..model import ROLE_COLOUR, MapSpot, Show
 from ..notes import load_notes, save_notes
+from ..show_io import ShowError
+from ..show_io import load_show as read_show
 from ..output import RGB
 from ..lights import EDITOR_H, EDITOR_W, identify_colours
 from ..show_edit import (
@@ -412,11 +426,14 @@ class LightsTable(QTableWidget):
 
 
 class LayoutPage(QWidget):
-    def __init__(self, document: ShowDocument, engine, parent: QWidget | None = None, notes_path: Path | None = None) -> None:
+    def __init__(self, document: ShowDocument, engine, parent: QWidget | None = None, notes_path: Path | None = None,
+                 shows_provider=None) -> None:
+        """shows_provider: the shows there are ([ShowInfo]), for "Import from another show…"."""
         super().__init__(parent)
         self.setObjectName("LayoutPage")
         self.document = document
         self.engine = engine
+        self._shows = shows_provider or (lambda: [])
         self.snap = False
         self._notes_path = notes_path
         by_name = load_notes(notes_path) if notes_path else load_notes()
@@ -824,9 +841,12 @@ class LayoutPage(QWidget):
         save = menu.addAction("Save as a new layout…", self._ask_save_layout_as)
         rename = menu.addAction("Rename this layout…", self._ask_rename_layout)
         delete = menu.addAction("Delete this layout…", self._ask_delete_layout)
+        menu.addSeparator()
+        bring = menu.addAction("Import from another show…", self.ask_import)
         save.setEnabled(not show.read_only)
         rename.setEnabled(not show.read_only and show.layout() is not None)
         delete.setEnabled(not show.read_only and len(show.layouts) > 1)
+        bring.setEnabled(not show.read_only and bool(show.folder))
 
     def switch_layout(self, layout_id: str) -> bool:
         layout = self.show_data.layout(layout_id)
@@ -877,6 +897,56 @@ class LayoutPage(QWidget):
         )
         if answer == QMessageBox.StandardButton.Yes:
             self.delete_layout(current.id)
+
+    # ------------------------------------------------------------ importing a layout from another show
+
+    def other_shows(self) -> list:
+        """The shows to import from (not this one)."""
+        from ..shows import same_folder
+
+        try:
+            shows = list(self._shows())
+        except Exception:
+            return []
+        return [info for info in shows if not same_folder(info.folder, self.show_data.folder)]
+
+    def ask_import(self) -> None:
+        """Pick a show and one of its saved layouts; a summary of what changes comes first (Import / Cancel)."""
+        if self.show_data.read_only:
+            return
+        shows = self.other_shows()
+        if not shows:
+            QMessageBox.information(self, "Import from another show", "There are no other shows to import from yet.")
+            return
+        dialog = ImportLayoutDialog(self, shows, self.show_data)
+        try:
+            if dialog.exec() == QDialog.DialogCode.Accepted and dialog.other is not None and dialog.layout_id:
+                self.import_from(dialog.other, dialog.layout_id)
+        finally:
+            dialog.deleteLater()
+
+    def import_from(self, other: Show, layout_id: str) -> bool:
+        """Bring the other show's lights and one of its layouts (and its room photo) here as a new saved layout.
+        One undo step, in the layout's history."""
+        show = self.show_data
+        source = other.layout(layout_id)
+        if source is None or show.read_only:
+            return False
+        backdrop = ""
+        if source.backdrop:
+            photo = media_path(other.folder, source.backdrop)
+            if photo is not None and photo.is_file():
+                try:
+                    data = photo.read_bytes()
+                    backdrop = f"media/room-{hashlib.sha1(data).hexdigest()[:12]}{photo.suffix.lower() or '.jpg'}"
+                    target = Path(show.folder) / backdrop
+                    if not target.is_file():
+                        write_atomic(target, data)
+                except OSError as exc:
+                    log_exception("copying the room photo", exc)
+                    backdrop = ""
+        new = import_layout(show, other, layout_id, backdrop)
+        return self.document.apply(new, f"Import layout {source.name} from {other.name}")
 
     # ------------------------------------------------------------ frames from the engine
 
@@ -1148,3 +1218,80 @@ class LayoutPage(QWidget):
         if self.identify_switch.isChecked() or self._identify_on:
             self.set_identify(False)
         self.engine.submit(SetTestColour(None))
+
+
+class ImportLayoutDialog(QDialog):
+    """Import from another show: pick the show and one of its saved layouts; what changes here is shown before Import."""
+
+    def __init__(self, parent: QWidget | None, shows: list, show: Show) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Import from another show")
+        self.setObjectName("ImportLayoutDialog")
+        self._show = show
+        self._read_shows: dict[str, Show | None] = {}
+        self.other: Show | None = None
+        self.layout_id = ""
+        intro = QLabel("This brings another show's lights (their names, types, addresses and groups, and the house "
+                       "lights) here, at the positions of one of its saved layouts, with its room photo, as a new saved "
+                       "layout. Ctrl+Z on the Layout tab puts this show's lights back.")
+        intro.setWordWrap(True)
+        self.show_pick = QComboBox()
+        for info in shows:
+            self.show_pick.addItem(info.name, info.folder)
+        self.layout_pick = QComboBox()
+        form = QFormLayout()
+        form.addRow("Show", self.show_pick)
+        form.addRow("Layout", self.layout_pick)
+        self.summary = QLabel()
+        self.summary.setObjectName("Hint")
+        self.summary.setWordWrap(True)
+        self.summary.setMinimumWidth(440)
+        buttons = QDialogButtonBox()
+        self.import_button = buttons.addButton("Import", QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(intro)
+        layout.addLayout(form)
+        layout.addWidget(self.summary)
+        layout.addWidget(buttons)
+        self.show_pick.currentIndexChanged.connect(self._show_picked)
+        self.layout_pick.currentIndexChanged.connect(self._layout_picked)
+        self._show_picked()
+
+    def _read(self, folder: str) -> Show | None:
+        if folder not in self._read_shows:
+            try:
+                self._read_shows[folder] = read_show(Path(folder))
+            except (ShowError, OSError) as exc:
+                log_exception(f"reading the show in {folder}", exc)
+                self._read_shows[folder] = None
+        return self._read_shows[folder]
+
+    def _show_picked(self, *_args) -> None:
+        folder = self.show_pick.currentData()
+        self.other = self._read(folder) if folder else None
+        blocked = self.layout_pick.blockSignals(True)
+        self.layout_pick.clear()
+        if self.other is not None:
+            for lay in sorted_layouts(self.other):
+                self.layout_pick.addItem(lay.name, lay.id)
+            self.layout_pick.setCurrentIndex(max(0, self.layout_pick.findData(self.other.active_layout)))
+        self.layout_pick.blockSignals(blocked)
+        self._layout_picked()
+
+    def _layout_picked(self, *_args) -> None:
+        other = self.other
+        self.layout_id = self.layout_pick.currentData() or ""
+        if other is None:
+            self.summary.setText("That show couldn't be read (the session log says why).")
+            self.import_button.setEnabled(False)
+            return
+        layout = other.layout(self.layout_id)
+        lines = [f"• {line}" for line in import_summary(self._show, other)]
+        if layout is not None:
+            photo = "with its room photo" if layout.backdrop else "(it has no room photo)"
+            lines.append(f"It becomes the saved layout “{layout.name} (from {other.name})” here, the one in use, {photo}.")
+        self.summary.setText("What changes here:\n" + "\n".join(lines))
+        self.import_button.setEnabled(layout is not None)

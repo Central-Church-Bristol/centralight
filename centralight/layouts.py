@@ -155,3 +155,49 @@ def forget_lights(show: Show, fixture_ids: set[str]) -> Show:
             lay = replace(lay, positions=frozen_map({k: v for k, v in lay.positions.items() if k not in fixture_ids}))
         layouts.append(lay)
     return replace(show, layouts=tuple(layouts))
+
+
+# ---------------------------------------------------------------- importing a layout from another show
+
+
+def import_summary(show: Show, other: Show) -> list[str]:
+    """What importing the other show's lights would change here: lights added or removed, addresses changed."""
+    here = {fx.id: fx for fx in show.fixtures}
+    there = {fx.id: fx for fx in other.fixtures}
+    added = [there[i] for i in there if i not in here]
+    removed = [here[i] for i in here if i not in there]
+    moved = [(here[i], there[i]) for i in there if i in here and here[i].address != there[i].address]
+    changed = [there[i] for i in there if i in here and (here[i].name, here[i].profile, here[i].group, here[i].role)
+               != (there[i].name, there[i].profile, there[i].group, there[i].role)]
+    lines = []
+    if added:
+        lines.append("Lights added: " + ", ".join(f"{fx.name} ({fx.channel_range()})" for fx in added))
+    if removed:
+        lines.append("Lights removed: " + ", ".join(f"{fx.name} ({fx.channel_range()})" for fx in removed))
+    if moved:
+        lines.append("Addresses changed: " + ", ".join(f"{new.name} {old.channel_range()} → {new.channel_range()}"
+                                                       for old, new in moved))
+    if changed:
+        lines.append("Names, types or groups changed: " + ", ".join(fx.name for fx in changed))
+    if not lines:
+        lines.append("The lights are the same as this show's.")
+    return lines
+
+
+def import_layout(show: Show, other: Show, layout_id: str, backdrop: str | None = None) -> Show:
+    """Bring another show's lights (names, types, addresses, groups; the house lights too) into this show, at the
+    positions of one of its saved layouts, as a new saved layout here (the one in use). backdrop: its room photo, once
+    it's copied into this show's folder (None: the same path as there). The other saved layouts here keep their
+    positions for the lights that are still here."""
+    source = other.layout(layout_id)
+    if source is None:
+        return show
+    there = {fx.id for fx in other.fixtures}
+    show = forget_lights(sync_active_layout(show), {fx.id for fx in show.fixtures if fx.id not in there})
+    fixtures = tuple(replace(fx, map=source.positions.get(fx.id, fx.map)) if fx.role == ROLE_COLOUR else fx
+                     for fx in other.fixtures)
+    name = unique_name(show, f"{source.name} (from {other.name})")
+    imported = Layout(id=_unique_id(show, name), name=name, positions=frozen_map({}),
+                      backdrop=source.backdrop if backdrop is None else backdrop, backdrop_opacity=source.backdrop_opacity)
+    show = replace(show, fixtures=fixtures, house=other.house, layouts=show.layouts + (imported,), active_layout=imported.id)
+    return sync_active_layout(show)
