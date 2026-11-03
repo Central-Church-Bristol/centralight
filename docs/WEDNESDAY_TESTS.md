@@ -270,9 +270,13 @@ Worship blue.
 - [ ] `.\run.bat` again: the lights don't flicker or change when the app opens, overlays included.
 - [ ] Tray icon → **Quit CentraLight…** → Yes → **Turn lights off**: everything fades to black.
 - [ ] `.\run.bat` again: it opens blacked out (**Lights off — click to restore**); one click brings it all back.
-      (If an automation sends an input while it's blacked out like this, the lights come back by themselves. That's on
-      purpose, so an unattended Sunday morning after a "Turn lights off" quit isn't left dark. A Blackout someone
-      clicks is never lifted by an automation.)
+      (An automation lifts this Blackout by itself only when one of its time ranges begins after the quit, e.g.
+      Sunday 09:00–12:30 after a quit on Saturday, so an unattended Sunday morning isn't left dark. "CentraLight
+      starts", a feed coming back or a whole day such as "Sundays" never lifts it, and a Blackout someone clicks is
+      never lifted by an automation.)
+- [ ] Optional, to see that happen: Automation tab → **+ New automation** → **Time of day** starting two minutes from
+      now, for five minutes → **Send an input to Base**: Warm white. Straight away, quit with **Turn lights off** and
+      start again: when the time range begins, the lights come back by themselves. Delete the automation afterwards.
 
 ## 19. If the lights behave oddly
 

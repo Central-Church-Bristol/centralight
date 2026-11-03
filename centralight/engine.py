@@ -42,7 +42,6 @@ from .automations import (
     Situation,
     action_command,
     describe_action,
-    lifts_restored_blackout,
     system_uptime,
 )
 from .bus import Bus, Instance, OverlaySlot, composite, render_input
@@ -99,6 +98,7 @@ OVERLAY_SLOTS = 4
 WAKE_GAP = 60.0  # seconds: a jump this big in the clocks means the PC slept (or the clock was changed)
 WAKE_DEBOUNCE = 60.0  # seconds: wake signals this close together are the same wake
 STARTUP_HOLD = 3.0  # seconds: at most this long at startup, nothing is sent while the screen feed's first picture comes
+FEED_WAIT = 10.0  # seconds: at startup, an automation about a feed waits at most this long for it to start sending
 BLACK: RGB = (0.0, 0.0, 0.0)
 WHITE: RGB = (1.0, 1.0, 1.0)
 
@@ -281,6 +281,9 @@ class Engine:
         # brings the lights up, so an unattended Sunday morning isn't left dark
         self._blackout_restored = bool(live.blackout and live.blackout_by_quit)  # (never one a person clicked)
         self._blackout_by_quit = self._blackout_restored
+        # when that quit was (if live.json doesn't say, at least before this start): only a time range that begins
+        # after it lifts the Blackout
+        self._quit_at = (live.saved_at if live.saved_at > 0 else wall()) if self._blackout_restored else None
         self._house: dict[str, _House] = {}
         self._house_driven: dict[str, str] = {}  # house light id -> the input that set it
         self._sync_house(live.house)
@@ -316,6 +319,7 @@ class Engine:
         # overlays use have their first picture, instead of going black for a second or two meanwhile
         self._holding = True
         self._hold_until = now + STARTUP_HOLD
+        self._feeds_until = now + FEED_WAIT
         self._identify = False
         self._identify_seed = show.identify_seed
         self._identify_map: dict[str, RGB] = {}
@@ -644,13 +648,13 @@ class Engine:
         ran = False
         if events or key != self._auto_key or runner.wants_check(now):
             self._auto_key = key
-            # just after starting, the NDI feeds are still connecting: until they report (or STARTUP_HOLD has
-            # passed) "feed lost" isn't true yet, so automations about feeds wait
-            ndi_known = now >= self._hold_until or (bool(self._ndi_sending) and all(self._ndi_sending.values()))
+            # just after starting, the NDI feeds are still connecting: until one sends (or FEED_WAIT has passed)
+            # "feed lost" isn't true yet, so an automation about it waits
             situation = Situation(
                 now=wall, local=self._local_time(wall), base=base, overlays=overlays, variables=self._ctx.globals,
                 ndi=dict(self._ndi_sending), blackout=self._blackout, audio=dict(self._ctx.audio), events=frozenset(events),
-                ndi_known=ndi_known,
+                ndi_known=now >= self._feeds_until,
+                quit_blackout_since=self._quit_at if self._blackout and self._blackout_restored else None,
             )
             self._first_check = False
             self._woke = False
@@ -664,13 +668,13 @@ class Engine:
 
     def _do_action(self, who: str, action: dict, now: float) -> None:
         action = dict(action)
-        phase = action.pop("_phase", "")
+        lifts = bool(action.pop("_lifts", False))
         try:
-            self._do_action_now(who, action, now, phase)
+            self._do_action_now(who, action, now, lifts)
         except Exception as exc:  # a wrong value in an automation's file must never stop the engine
             log_exception(f"automation {who}: doing {action.get('do')!r}", exc)
 
-    def _do_action_now(self, who: str, action: dict, now: float, phase: str = "") -> None:
+    def _do_action_now(self, who: str, action: dict, now: float, lifts: bool = False) -> None:
         if action.get("do") in GUI_ACTIONS:
             name = self.show.automations[who].name if who in self.show.automations else who
             self.gui_requests.put((name, action))
@@ -679,10 +683,9 @@ class Engine:
         if command is None:
             log_info(f"Automation {who}: couldn't {describe_action(action, self.show)} (is it still there?)", key=f"automation-skip-{who}")
             return
-        lifts = lifts_restored_blackout(self.show.automations.get(who), self._runner.results(who))
-        if self._blackout and self._blackout_restored and phase == "run" and lifts and _brings_lights_up(command):
-            # a lights-off quit's Blackout gives way to a real run of an automation (e.g. Sunday 09:00), not to
-            # "CentraLight starts" or a "when it stops" step
+        if lifts and self._blackout and self._blackout_restored and _brings_lights_up(command):
+            # a lights-off quit's Blackout gives way to a run made by a time range that began after the quit (e.g.
+            # Sunday 09:00), not to "CentraLight starts", a feed coming back or a "when it stops" step
             log_info(f"Automation {who}: lifting the Blackout left from before CentraLight restarted")
             self._apply(SetBlackout(on=False), now)
         self._apply(command, now)

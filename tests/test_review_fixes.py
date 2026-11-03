@@ -1601,5 +1601,196 @@ class LiveStateSavingTests(unittest.TestCase):
         window._save_files = False
 
 
+# ---------------------------------------------------------------- the fourth review
+
+FEED = {"type": "ndi", "source": "Media Background Pane"}
+MBP = "media background pane"
+
+
+class FeedSources:
+    """NDI feeds for engine tests: each one sends (or not) as the test says."""
+
+    def __init__(self) -> None:
+        self.sending: dict[str, bool] = {}
+
+    def frame(self, name: str):
+        return None
+
+    def set_keep(self, names) -> None:
+        return None
+
+    def statuses(self) -> dict:
+        from types import SimpleNamespace
+
+        return {name: SimpleNamespace(state="connected" if on else "searching", found_name="") for name, on in self.sending.items()}
+
+    def tidy(self) -> None:
+        return None
+
+
+class FourthReviewAutomationTests(AutomationEngineTestCase):
+    quit_lights_off = ThirdReviewAutomationTests.quit_lights_off
+
+    def make_fed(self, start, automations, live: LiveState | None = None) -> Engine:
+        self.make(start, automations, live)
+        self.feeds = FeedSources()
+        self.engine = Engine(self.show, self.output, live, sources=self.feeds, clock=lambda: self.clocks.mono,
+                             wall=lambda: self.clocks.wall, local_time=uk_local, uptime=lambda: self.clocks.uptime_value)
+        return self.engine
+
+    def restart(self, live: LiveState) -> Engine:
+        self.engine = Engine(self.show, FakeOutput(), live, sources=self.feeds, clock=lambda: self.clocks.mono,
+                             wall=lambda: self.clocks.wall, local_time=uk_local, uptime=lambda: 9999.0)
+        self.engine.tick()
+        return self.engine
+
+    def seconds(self, count: int) -> None:
+        for _ in range(count):
+            self.clocks.advance(1.0)
+            self.engine.tick()
+
+    def test_a_whole_day_or_a_range_from_before_the_quit_doesnt_lift_a_quit_blackout(self) -> None:
+        sundays = automation("sundays", [{"type": "days", "days": ["sun"]}, FEED], [{"do": "base", "input": "ping", "transition": "cut"}])
+        november = automation("november", [{"type": "dates", "from": "11-01", "to": "11-30"}, FEED],
+                              [{"do": "house", "light": "dimmer-4", "level": 0.7}])
+        outside = automation("outside", [{"type": "time", "from": "09:00", "to": "17:00", "invert": True}, FEED],
+                             [{"do": "base", "input": "pong", "transition": "cut"}])  # (on since 17:00 on Saturday)
+        service = automation("service", SUNDAY_MORNING + [FEED], WELCOME)
+        self.make_fed(_dt(2026, 11, 7, 22, 0), [sundays, november, outside, service])  # Saturday night, no feed
+        self.run_until(_dt(2026, 11, 7, 22, 1))
+        live = self.quit_lights_off()
+        self.clocks.advance(5 * 3600 - 60)  # Windows Update restarts the PC at 03:00 on Sunday...
+        engine = self.restart(live)
+        self.clocks.advance(300)
+        self.feeds.sending[MBP] = True  # ...and Media Background Pane starts sending at 03:05
+        self.run_until(_dt(2026, 11, 8, 3, 6), step=1.0)
+        self.assertEqual(sorted({h.automation for h in engine._runner.history if h.what == "ran"}), ["november", "outside", "sundays"])
+        self.assertTrue(engine._blackout)  # none of them lifted it
+        self.run_until(_dt(2026, 11, 8, 9, 0, 30))
+        self.assertEqual(len(self.runs("service")), 1)
+        self.assertFalse(engine._blackout)  # Sunday 09:00-12:30 began after the quit: that does
+
+    def test_a_service_range_lifts_it_even_when_the_feed_comes_late(self) -> None:
+        service = automation("service", SUNDAY_MORNING + [FEED], WELCOME)
+        self.make_fed(_dt(2026, 11, 7, 22, 0), [service])
+        self.run_until(_dt(2026, 11, 7, 22, 1))
+        live = self.quit_lights_off()
+        self.clocks.advance(11 * 3600)  # the PC is switched on at 09:01 on Sunday
+        engine = self.restart(live)
+        self.run_until(_dt(2026, 11, 8, 9, 20), step=10.0)
+        self.assertTrue(engine._blackout)  # no feed yet, so nothing ran
+        self.feeds.sending[MBP] = True  # Media Background Pane is started at 09:20
+        self.seconds(3)
+        self.assertEqual(len(self.runs("service")), 1)
+        self.assertFalse(engine._blackout)
+
+    def test_a_time_range_ending_keeps_the_waiting_step_though_it_also_needs_a_feed(self) -> None:
+        countdown = automation("countdown", [{"type": "time", "from": "10:30", "to": "10:31"}, FEED],
+                               [{"do": "base", "input": "ping", "transition": "cut"},
+                                {"do": "base", "input": "pong", "transition": "cut", "delay": 120}])
+        self.make_fed(_dt(2026, 11, 8, 10, 29), [countdown])
+        self.feeds.sending[MBP] = True
+        self.run_until(_dt(2026, 11, 8, 10, 30, 30), step=1.0)
+        self.assertEqual(self.base(), "ping")
+        self.run_until(_dt(2026, 11, 8, 10, 32, 30), step=1.0)
+        self.assertEqual(self.base(), "pong")  # the range ended at 10:31, but "after 120 s" still came
+
+    def test_a_feed_blip_cancels_the_waiting_step_of_an_any_automation(self) -> None:
+        fallback = automation("fallback", [{"type": "app_started"}, {**FEED, "invert": True}],
+                              [{"do": "base", "input": "warm-welcome", "transition": "cut", "delay": 10}], logic="any")
+        self.make_fed(_dt(2026, 11, 8, 10, 0), [fallback])
+        self.feeds.sending[MBP] = True
+        self.run_until(_dt(2026, 11, 8, 10, 0, 20), step=1.0)  # ("CentraLight starts" ran it once)
+        self.engine.submit(SendToBase("evening", cut=True))
+        self.run_until(_dt(2026, 11, 8, 10, 30), step=1.0)
+        self.feeds.sending[MBP] = False  # the feed drops for 2 s
+        self.seconds(2)
+        self.feeds.sending[MBP] = True
+        self.run_until(_dt(2026, 11, 8, 10, 30, 20), step=1.0)
+        self.assertEqual(len(self.runs("fallback")), 2)
+        self.assertEqual(self.base(), "evening")  # its 10 s were cancelled when the feed came back
+
+    def follow_then_restart(self) -> Engine:
+        follow = automation("follow", SUNDAY_MORNING + [FEED], [{"do": "base", "input": "warm-welcome", "transition": "cut"}],
+                            on_end=[{"do": "base", "input": "ping", "transition": "cut"}])
+        self.make_fed(_dt(2026, 11, 8, 8, 59), [follow])
+        self.feeds.sending[MBP] = True
+        self.run_until(_dt(2026, 11, 8, 9, 0, 30), step=1.0)
+        self.assertEqual(self.base(), "warm-welcome")
+        self.engine.submit(SendToBase("evening", cut=True))  # chosen by hand
+        self.run_until(_dt(2026, 11, 8, 10, 30))
+        live = AutomationReviewTests.saved(self)
+        live.saved_at = self.clocks.wall  # (live.json's minute save)
+        self.clocks.advance(20)  # CentraLight restarts, and the feed is slow to come back
+        self.feeds.sending[MBP] = False
+        return self.restart(live)
+
+    def test_a_slow_feed_at_a_restart_doesnt_stop_it_and_run_it_again(self) -> None:
+        engine = self.follow_then_restart()
+        self.seconds(6)
+        self.feeds.sending[MBP] = True  # 6 s
+        self.seconds(5)
+        self.assertEqual(self.base(), "evening")  # no "when it stops", and no second run over what was chosen
+        self.assertEqual([h.what for h in engine._runner.history if h.automation == "follow"], ["ran"])
+
+    def test_a_feed_that_doesnt_come_back_counts_as_lost_after_the_wait(self) -> None:
+        engine = self.follow_then_restart()
+        self.seconds(12)
+        self.assertEqual(self.base(), "ping")  # its "when it stops" ran
+        self.assertEqual([h.what for h in engine._runner.history if h.automation == "follow"], ["ran", "stopped matching"])
+
+    def test_an_automation_whose_feed_is_sending_doesnt_wait_for_the_others(self) -> None:
+        there = automation("there", [FEED], [{"do": "base", "input": "warm-welcome", "transition": "cut"}])
+        camera = automation("camera", [{"type": "ndi", "source": "Camera PC"}], [])
+        self.make_fed(_dt(2026, 11, 8, 10, 0), [there, camera])
+        self.feeds.sending[MBP] = True
+        self.feeds.sending["camera pc"] = False  # (still connecting, or off)
+        self.seconds(2)
+        self.assertEqual(self.base(), "warm-welcome")
+
+
+class FourthReviewWindowTests(unittest.TestCase):
+    setUpClass = WindowReviewTests.__dict__["setUpClass"]
+    setUp = WindowReviewTests.setUp
+    tearDown = WindowReviewTests.tearDown
+
+    def test_the_minute_save_of_live_json_stops_at_shutdown(self) -> None:
+        from dataclasses import replace as _replace
+
+        window = self.window
+        window._live_heartbeat.start()
+        window.shutdown(lights_off=True)
+        self.assertFalse(window._live_heartbeat.isActive())
+        window._save_files = True
+        window._live_path = Path(self._tmp.name) / "live.json"
+        window.last_frame = _replace(self.engine.frames.get(), live=LiveState(show="x"))
+        window._save_live_heartbeat()  # (had it fired just after: the lights-on state from before the quit)
+        self.assertFalse(window._live_path.exists())
+        window._save_files = False
+
+
+class FourthReviewFilesTests(unittest.TestCase):
+    setUpClass = SecondReviewFilesTests.__dict__["setUpClass"]
+    setUp = SecondReviewFilesTests.setUp
+    tearDown = SecondReviewFilesTests.tearDown
+
+    def test_closing_while_the_reload_question_is_up_saves_the_rest_and_leaves_their_file(self) -> None:
+        from centralight.automations import add_automation
+        from centralight.input_edit import update_input
+
+        path = self.folder / "inputs" / "follow-screen.json"
+        self.doc.apply(update_input(self.doc.show, "follow-screen", name="Mine"), "Rename")
+        self.doc.pause_saving(True, asking_about="follow-screen")  # "Load the changed file?" is on screen...
+        theirs = input_to_dict(self.doc.show.inputs["follow-screen"])
+        theirs["name"] = "Theirs"
+        path.write_text(json.dumps(theirs), encoding="utf-8")
+        show, new_id = add_automation(self.doc.show)
+        self.doc.apply(show, "Add an automation")  # (something else changed meanwhile)
+        self.doc.close()  # ...when Windows shuts down
+        self.assertIn("Theirs", path.read_text(encoding="utf-8"))  # their file isn't written over
+        self.assertTrue((self.folder / "automations" / f"{new_id}.json").exists())  # the rest is saved
+
+
+
 if __name__ == "__main__":
     unittest.main()

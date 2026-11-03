@@ -23,6 +23,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M8 Audio variables | **done** (3 Nov, 03:13) |
 | M9 Polish (launcher .exe, Diagnostics) | **done** (3 Nov, 03:54) |
 | A review of the whole app (five reviewers, 46 problems) | **done** (3 Nov: part 1 at 05:21, part 2 at 06:00; 522 tests pass) |
+| Reviews of those fixes (three more rounds, each checking the one before) | **done** (3 Nov, 08:30; 560 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -46,6 +47,28 @@ Run all the tests (about five minutes, including the layout check at every scali
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## A fourth look (3 Nov, morning)
+
+A fourth reviewer checked the third round. This time the rules were made simpler to explain, so they stop producing
+edge cases. Fixed, each with a test that fails without it:
+- **A "Turn lights off" quit keeps the lights off until a scheduled time range begins after the quit**: e.g. Sunday
+  09:00–12:30 (or "after sunset") after a quit on Saturday. Then the automation that brings the lights up lifts the
+  Blackout, even if its feed comes late. Nothing else lifts it: not "CentraLight starts", not a feed coming back at
+  03:00, and not a whole day ("Sundays", "1–30 Nov") or a range that was already on at the quit. Before, "Sundays
+  and the feed is there" lit the church at 03:05 after a Windows Update restart.
+- **A stop cancels the waiting "after N s" steps only when a live condition is what went false** (a feed, sound, a
+  variable, an input, Blackout), or when the automation has a "when it stops". So "10:30–10:31 and the feed is
+  there → Countdown, then after 120 s Worship blue" carries on when the range ends, and "feed lost → after 10 s
+  the fallback" is cancelled when the feed comes back, also in an "Any" automation with "CentraLight starts".
+- **At startup, an automation about a feed waits up to 10 s for it** (it was 3 s), and only for its own feeds: one
+  that's already sending counts straight away. A restart mid-service with a slow feed no longer runs "when it stops"
+  and then the automation again over what someone chose. The lights themselves still wait at most 3 s for the
+  feed's first picture.
+- **live.json's once-a-minute save stops at shutdown**, so it can't save "lights on" just after a "Turn lights off"
+  quit.
+- **If Windows closes CentraLight while "Load the changed file?" is on screen**, everything else is saved, and that
+  input's file is left as it is on disk (nobody said to write over it).
 
 ## A third look (3 Nov, morning)
 

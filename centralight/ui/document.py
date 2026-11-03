@@ -273,6 +273,7 @@ class ShowDocument(QObject):
         self._save_timer.setInterval(save_delay_ms)
         self._save_timer.timeout.connect(self.flush)
         self._saving_paused = False
+        self._asked_input: str | None = None  # the input "Load the changed file?" is about, while it's up
         self._newest_undone: list[QUndoStack] = []  # the histories the Dashboard's undo took steps from, in order
         self._retry_show = False  # show.json couldn't be written: write it again next time
         # inputs, layouts and automations whose file couldn't be written or removed: saved again next time, as they
@@ -418,9 +419,10 @@ class ShowDocument(QObject):
         if self._autosaver is not None and not self._saving_paused:
             self._save_timer.start()
 
-    def pause_saving(self, paused: bool) -> None:
+    def pause_saving(self, paused: bool, asking_about: str | None = None) -> None:
         """While a question about a changed file is on screen, nothing is saved over it (retries included)."""
         self._saving_paused = paused
+        self._asked_input = asking_about if paused else None
         if paused:
             self._save_timer.stop()
             self._retry_timer.stop()
@@ -526,12 +528,31 @@ class ShowDocument(QObject):
                                          deleted_layouts, automations, deleted_automations))
 
     def close(self, timeout: float = 5.0) -> None:
-        """Save anything outstanding and stop the autosave thread."""
+        """Save anything outstanding and stop the autosave thread. If Windows closes CentraLight while "Load the
+        changed file?" is on screen, everything else is saved, and that input's file stays as it is on disk (nobody
+        said to write over it)."""
+        if self._saving_paused:
+            self._saving_paused = False
+            if self._asked_input is not None:
+                self._leave_on_disk(self._asked_input)
         self.flush()
         if self._autosaver is not None:
             self._autosaver.wait(timeout)
             self._autosaver.close()
             self._autosaver = None
+
+    def _leave_on_disk(self, input_id: str) -> None:
+        """Count an input as saved as it was, so the last save leaves its file alone (CentraLight is closing)."""
+        saved = self._saved.inputs.get(input_id)
+        inputs = dict(self._show.inputs)
+        if saved is None:
+            inputs.pop(input_id, None)
+            order = tuple(i for i in self._show.input_order if i != input_id)
+        else:
+            inputs[input_id] = saved
+            order = self._show.input_order
+        self._show = self._show.with_inputs(inputs, order)
+        self._retry["input"].discard(input_id)
 
     def undo_newest(self) -> bool:
         """The Dashboard's Ctrl+Z: the newest change to the show or to any input (an AI's change to an input goes in

@@ -347,7 +347,8 @@ class Situation:
     events: frozenset[str] = frozenset()  # app_started, pc_startup, pc_woke happening now
     previous_local: datetime | None = None  # local time at the last check (to spot clock changes)
     previous_now: float | None = None  # wall clock at the last check (a clock change moves local time, not this)
-    ndi_known: bool = True  # False just after starting, while the NDI feeds connect ("feed lost" isn't true yet)
+    ndi_known: bool = True  # False just after starting: a feed that isn't sending yet may still be connecting
+    quit_blackout_since: float | None = None  # wall time of the lights-off quit whose Blackout is still on, else None
 
 
 def _in_range(start: int, end: int, minutes: int) -> bool:
@@ -432,24 +433,47 @@ def timed_continuous(automation: Automation, start: datetime, end: datetime) -> 
 STATE_KINDS = ("input_live", "variable", "ndi", "blackout", "audio")  # conditions about how things are right now
 
 
-def _stop_cancels_waiting(automation: Automation) -> bool:
-    """Does a stop cancel the waiting "after N s" steps of its run? Yes if it depends on how things are (a feed, sound,
-    a variable, an input on Base, Blackout: the delay is a grace period, e.g. "feed lost for 10 s") or has a "when it
-    stops" to do instead. No for clock-only ones ("at 10:30 do this, then 2 minutes later that"), and never for an
-    event such as "CentraLight starts", which only lasts a moment."""
-    kinds = {c.get("type") for c in automation.conditions}
-    if kinds & set(EVENTS):
-        return False
-    return bool(kinds & set(STATE_KINDS)) or bool(automation.on_end)
+def _stop_cancels_waiting(automation: Automation, before: list[bool] | None, after: list[bool] | None) -> bool:
+    """Does this stop cancel the waiting "after N s" steps of the automation's run? Yes if a condition about how
+    things are (a feed, sound, a variable, an input, Blackout) is what went false: the wait was a grace period ("feed
+    lost for 10 s"). Yes if it has a "when it stops" to do instead, unless it's about an event such as "CentraLight
+    starts", which only lasts a moment. No when only the clock moved on ("at 10:30 do this, then 2 minutes later
+    that"), even if it also looks at a feed."""
+    went_false = {c.get("type") for c, was, now in zip(automation.conditions, before or (), after or ()) if was and not now}
+    if went_false & set(STATE_KINDS):
+        return True
+    return bool(automation.on_end) and not any(c.get("type") in EVENTS for c in automation.conditions)
 
 
-def lifts_restored_blackout(automation: Automation | None, results: list[bool] | None) -> bool:
-    """May this automation's run lift a Blackout left from a "Turn lights off" quit? Only a run made by a clock
-    condition that's true now (e.g. Sunday 09:00), never by a start event or by a feed coming back at 03:00."""
-    if automation is None or any(c.get("type") in EVENTS for c in automation.conditions):
+def _comes_on_at_a_set_time(cond: Mapping[str, Any]) -> bool:
+    """A time range (not all day), or a sunrise / sunset condition that comes on at the sun's time ("after sunset",
+    "not before sunrise"). Days, dates and "before sunrise" come on at midnight instead."""
+    kind = cond.get("type")
+    if kind == "time":
+        start, end = parse_time(cond.get("from")), parse_time(cond.get("to"))
+        return start is not None and end is not None and start != end
+    if kind == "sun":
+        return (cond.get("when") == "before") == bool(cond.get("invert", False))
+    return False
+
+
+def began_after(automation: Automation, since: datetime, local: datetime) -> bool:
+    """Is one of the automation's time ranges (or an "after sunset"-style time) on now, having come on after `since`?
+    Only such a run lifts the Blackout left from a "Turn lights off" quit: Sunday 09:00-12:30 after a quit on
+    Saturday. Never a whole day (Sundays, 1-31 Dec), a feed coming back at 03:00, or "CentraLight starts"."""
+    if any(c.get("type") in EVENTS for c in automation.conditions):
         return False
-    results = results or []
-    return any(r for c, r in zip(automation.conditions, results) if c.get("type") in TIMED_KINDS)
+    for cond in automation.conditions:
+        if not _comes_on_at_a_set_time(cond):
+            continue
+        probe = Automation(automation.id, automation.name, True, "all", (cond,))
+
+        def on_at(moment: datetime) -> bool:
+            return AutomationRunner().matches(probe, Situation(now=0.0, local=moment))[0]  # fresh: no memory
+
+        if on_at(local) and not (on_at(since) and timed_continuous(probe, since, local)):
+            return True
+    return False
 
 
 def _ndi_true(source: Any, ndi: Mapping[str, bool]) -> bool:
@@ -780,6 +804,7 @@ class AutomationRunner:
                 old_state, _when, definition = self._removed.pop(automation.id)
                 if definition == automation:  # the same automation back (Undo): its state comes back too
                     self.states[automation.id] = old_state
+            edited = self._definitions.get(automation.id, automation) != automation
             self._definitions[automation.id] = automation
             state = self.states.setdefault(automation.id, AutomationState())
             if not automation.enabled or state.tripped:
@@ -788,11 +813,13 @@ class AutomationRunner:
                 self._drop_pending(automation.id)
                 self._forget_sound(automation.id)
                 continue
-            if not situation.ndi_known and any(c.get("type") == "ndi" for c in automation.conditions):
-                # just started: the feeds are still connecting, so "feed lost" isn't true (nor false) yet. A start
-                # event happening now is kept for its first real check.
+            if not situation.ndi_known and any(c.get("type") == "ndi" and not _ndi_true(c.get("source"), situation.ndi)
+                                               for c in automation.conditions):
+                # just started: a feed that isn't sending yet may still be connecting, so "feed lost" isn't true (nor
+                # false) yet. A start event happening now is kept for its first real check.
                 self._held_events[automation.id] = self._held_events.get(automation.id, frozenset()) | situation.events
                 continue
+            before = None if edited else self._results.get(automation.id)  # each condition at the last check
             held = self._held_events.pop(automation.id, None)
             if held:
                 situation_now = replace(situation, events=situation.events | held)
@@ -814,20 +841,25 @@ class AutomationRunner:
                 continue
             state.matched = matched
             state.since = situation.now
-            if matched or _stop_cancels_waiting(automation):
+            if matched or _stop_cancels_waiting(automation, before, self._results.get(automation.id)):
                 self._drop_pending(automation.id)  # (a new run replaces whatever was waiting)
             if self.paused:
                 continue  # paused: keep track quietly, run nothing
             if matched:
-                now_actions += self._run(automation, list(automation.actions), mono_now, situation.now, "ran", ", ".join(true))
+                now_actions += self._run(automation, list(automation.actions), mono_now, situation.now, "ran", ", ".join(true),
+                                         lifts=self._lifts_quit_blackout(automation, situation))
             elif automation.on_end:
                 now_actions += self._run(automation, list(automation.on_end), mono_now, situation.now, "stopped matching",
-                                         count=False, phase="end")
+                                         count=False)
         return now_actions
 
-    def results(self, automation_id: str) -> list[bool] | None:
-        """Each condition of an automation, true or not, at its last check."""
-        return self._results.get(automation_id)
+    @staticmethod
+    def _lifts_quit_blackout(automation: Automation, situation: Situation) -> bool:
+        """Is a lights-off quit's Blackout still on, and did one of this automation's time ranges begin after it?"""
+        if situation.quit_blackout_since is None:
+            return False
+        since = situation.local - timedelta(seconds=max(0.0, situation.now - situation.quit_blackout_since))
+        return began_after(automation, since, situation.local)
 
     def _kept_by_untimed(self, automation: Automation) -> bool:
         """An "any" automation that's true through something other than the clock right now (a variable, an input
@@ -850,13 +882,12 @@ class AutomationRunner:
 
     def run_now(self, automation: Automation, mono_now: float, wall_now: float) -> list[tuple[str, dict]]:
         """The Run now button (and the API): its actions, whatever the conditions."""
-        return self._run(automation, list(automation.actions), mono_now, wall_now, "run by hand", count=False, why="by hand",
-                         phase="by hand")
+        return self._run(automation, list(automation.actions), mono_now, wall_now, "run by hand", count=False, why="by hand")
 
     def _run(self, automation: Automation, actions: list, mono_now: float, wall_now: float, what: str,
-             detail: str = "", count: bool = True, why: str = "conditions", phase: str = "run") -> list[tuple[str, dict]]:
-        """phase ("run", "end" or "by hand") goes with each action as "_phase": the engine lets only a real run lift
-        a Blackout left from before a restart."""
+             detail: str = "", count: bool = True, why: str = "conditions", lifts: bool = False) -> list[tuple[str, dict]]:
+        """lifts: this run may lift the Blackout left from a lights-off quit (see began_after). It goes with each
+        action as "_lifts", the waiting ones too."""
         state = self.states.setdefault(automation.id, AutomationState())
         if count:
             state.runs.append(mono_now)
@@ -876,7 +907,7 @@ class AutomationRunner:
         for action in actions:
             if not isinstance(action, Mapping):
                 continue
-            action = {**dict(action), "_phase": phase}
+            action = {**dict(action), "_lifts": lifts}
             delay = action.get("delay", 0)
             delay = float(delay) if isinstance(delay, (int, float)) and not isinstance(delay, bool) else 0.0
             if delay > 0:

@@ -165,7 +165,7 @@ class FolderWatcher(QObject):
             return  # CentraLight's own save, or nothing new
         if current is not None and document.has_unsaved("input", input_id) and self._editing() == input_id:
             self._asking = True
-            document.pause_saving(True)  # nothing is saved over the file while the question is up
+            document.pause_saving(True, asking_about=input_id)  # nothing is saved over the file while the question is up
             try:
                 load_theirs = self._ask_reload(current.name)
             finally:

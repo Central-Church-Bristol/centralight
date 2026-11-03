@@ -463,6 +463,8 @@ class MainWindow(QWidget):
             self.header.set_chip("ndi", STATE_ERROR, "NDI error", worst.message)
 
     def _save_live_heartbeat(self) -> None:
+        if self._shut_down:
+            return  # (shutdown saves the last state itself: lights off, if it turned them off)
         if self.last_frame is not None and self.last_frame.live is not None and self._save_files:
             self._pending_live = self.last_frame.live
             self._save_live()
@@ -865,6 +867,7 @@ class MainWindow(QWidget):
         self._shut_down = True
         self.bridge.stop()
         self._live_timer.stop()
+        self._live_heartbeat.stop()
         self._backup_timer.stop()
         self.layout_page.on_leave()
         self.editor_page.shutdown()
