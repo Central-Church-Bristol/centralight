@@ -306,7 +306,9 @@ in `Documents\CentraLight Shows`. Changes save by themselves: there's no Save.
       without a black console window, with the logo on the taskbar. If you like it, right-click it → Send to →
       Desktop (create shortcut).
 - [ ] Ctrl+Shift+D (or the tray icon's menu → Diagnostics): the engine runs at about 40 ticks a second, the output
-      shows the Eurolite sending, and CentraLight's CPU is a few % of one core at most. Click **Copy** and paste it
+      shows the Eurolite sending, and CentraLight's CPU is a few % of one core at most. Please note that figure with
+      ProPresenter and Media Background Pane running (on a quiet PC it's about 1 % of one core; it reads higher when
+      the PC is busy, up to about 11 % when the tests kept six cores busy). Click **Copy** and paste it
       somewhere: it's all there as text.
 - [ ] Its **On time** line: the engine's ticks start about 1 ms late, and none (or almost none) over 5 ms late,
       even with the Editor playing a video. That's the lights coming first; the pictures on screen give way.

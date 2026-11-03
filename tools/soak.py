@@ -2,12 +2,17 @@ r"""Run the whole CentraLight app for a while and watch its CPU and memory.
 
     .\.venv\Scripts\python.exe tools\soak.py --minutes 1
     .\.venv\Scripts\python.exe tools\soak.py --minutes 180 --csv soak.csv
+    .\.venv\Scripts\python.exe tools\soak.py --minutes 180 --switch-shows 120
 
 The app runs with no visible window (Qt's offscreen platform), Simulated output and its
 own temporary settings and show, so the lights and your real files are never touched.
 A test NDI source ("CentraLight Soak Source") plays a slowly moving rainbow for it to
 follow. Every --every seconds it records the app's CPU use and memory, and at the end
 prints a summary (memory should level off, not keep climbing).
+
+--switch-shows N: there are two shows, and every N seconds the other one is loaded (through
+the remote, as a Stream Deck key would) and its "Follow screen" sent, so memory can be
+watched across many show loads.
 """
 
 from __future__ import annotations
@@ -149,18 +154,43 @@ def make_show(shows: Path) -> None:
     load_show(folder)
 
 
+def make_second_show(shows: Path) -> None:
+    """"Evening": a copy of the soak's show, to switch to and fro."""
+    from centralight.shows import duplicate_show
+
+    duplicate_show(shows / "Central Church", shows, "Evening")
+
+
+def remote_get(port: int, path: str) -> bool:
+    """Ask the app's remote for something (as a Stream Deck key does). True if it said ok."""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as reply:
+            return bool(json.loads(reply.read().decode("utf-8")).get("ok"))
+    except Exception:
+        return False
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--minutes", type=float, default=1.0)
     p.add_argument("--every", type=float, default=10.0, help="seconds between samples")
     p.add_argument("--size", default="960x540")
     p.add_argument("--csv", type=Path, help="also write the samples here")
+    p.add_argument("--switch-shows", type=float, default=0.0, help="load the other show every this many seconds (0: never)")
     args = p.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     width, height = (int(v) for v in args.size.split("x"))
     home = Path(tempfile.mkdtemp(prefix="centralight-soak-"))
     make_show(home / "shows")
+    port = 18000 + os.getpid() % 1000  # (its own remote port, never the real one's)
+    (home / "appdata").mkdir(parents=True, exist_ok=True)
+    (home / "appdata" / "settings.json").write_text(json.dumps({"output": "simulated", "remote_port": port}), encoding="utf-8")
+    if args.switch_shows > 0:
+        make_second_show(home / "shows")
+    switches, failed, next_show = 0, 0, "evening"
     env = dict(
         os.environ,
         QT_QPA_PLATFORM="offscreen",
@@ -179,12 +209,23 @@ def main() -> int:
         last_cpu, _, _ = sample(pid)
         last_t = time.monotonic()
         started = last_t
-        print(f"Watching CentraLight (pid {pid}) for {args.minutes:g} min; source {width}x{height} at 24 fps; {cores} cores")
+        print(f"Watching CentraLight (pid {pid}) for {args.minutes:g} min; source {width}x{height} at 24 fps; {cores} cores"
+              + (f"; switching shows every {args.switch_shows:g} s" if args.switch_shows > 0 else ""))
+        last_switch = started
         while time.monotonic() - started < args.minutes * 60:
             time.sleep(args.every)
             if app.poll() is not None:
                 print(f"The app stopped by itself (exit code {app.returncode})!")
                 return 1
+            while args.switch_shows > 0 and time.monotonic() - last_switch >= args.switch_shows:
+                last_switch += args.switch_shows
+                if remote_get(port, f"/api/show/{next_show}"):
+                    time.sleep(1.0)  # (the window loads it)
+                    remote_get(port, "/api/input/follow-screen")  # its Follow screen, from the held look
+                    switches += 1
+                    next_show = "central-church" if next_show == "evening" else "evening"
+                else:
+                    failed += 1
             cpu, private, working = sample(pid)
             now = time.monotonic()
             share = (cpu - last_cpu) / (now - last_t) * 100
@@ -207,10 +248,14 @@ def main() -> int:
                   f"({sum(shares) / len(shares) / cores:.2f} % of the PC), worst {max(shares):.1f} %")
             print(f"Memory: private {private[0] / 1024:.1f} MB at the start, {private[-1] / 1024:.1f} MB at the end, "
                   f"peak {max(private) / 1024:.1f} MB; second half averages {(second - first) / 1024:+.1f} MB vs the first")
+        if args.switch_shows > 0:
+            print(f"Shows loaded: {switches} times ({failed} asks the remote didn't answer)")
         if log.exists():
             text = log.read_text(encoding="utf-8")
             problems = [line for line in text.splitlines() if "Traceback" in line or "Error" in line]
             print(f"Session log: {len(text.splitlines())} lines, {len(problems)} lines mentioning errors")
+            for line in problems[:5]:
+                print(f"    {line[:200]}")
         return 0
     finally:
         app.kill()

@@ -27,7 +27,8 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M10 Per-light colours (your change of 3 Nov) | **done** (3 Nov, 10:31; 570 tests pass; engine 0.16 ms a tick) |
 | M11 Cut to black / Fade to black (your change of 3 Nov), and a look at M10 (five fixes) | **done** (3 Nov, 11:20; 587 tests pass) |
 | M12 Shows + global automations (your change of 3 Nov) | **done** (3 Nov, 12:25; 620 tests pass) |
-| A look at M12 (fourteen findings), and less CPU for video | **done** (3 Nov, 13:25; 635 tests pass) |
+| A look at M12 (fourteen findings) | **done** (3 Nov, 13:25; 635 tests pass) |
+| A third 3-hour soak (after M10) | **done** (3 Nov, 13:31; flat memory, no errors; about 1 % of one core) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -866,6 +867,20 @@ Measured (Simulated output, so no lights):
   fixes) followed a 960×540, 24 fps test feed for 180 minutes. CPU averaged 1.2 % of one core (0.08 % of the PC;
   worst minute 1.9 %), memory stayed flat (141 MB at the start and at the end, peak 143 MB; the second half no
   higher than the first), and the session log has no errors.
+- **A third 3-hour soak** (finished 3 Nov 13:31): the app as committed after M10 followed a 960×540, 24 fps test
+  feed for 180 minutes. Memory stayed flat (106 MB at the start, 110 MB at the end, peak 111 MB; the second half
+  averaged 1 MB more than the first), and the session log has no errors. The CPU averaged 3.6 % of one core (worst
+  minute 5.2 %), but for most of those three hours I was running the whole test suite again and again on the same
+  PC. Measured afterwards on its own (the same feed, three 20-second windows each), the app after M10 used about
+  1.0 % of one core and the app now, after M12, about 1.1 % (0.07 % of the PC). About a quarter of that is the NDI
+  receiver shrinking each picture to 320×180.
+  - How busy the PC is changes the figure a lot: with the test suite running on the same PC, the same app read about
+    11 % of one core (0.7 % of the PC). Its own Python work looked the same both times, so it's the busy PC (how
+    Windows counts time then, and slower cores) more than extra work. On Wednesday, step 15b reads the real figure
+    with ProPresenter and Media Background Pane running.
+  - A correction: from the soak's figure I first thought M10 had tripled the CPU, and I added a faster way to
+    shrink pictures for the lights (in the commit with the M12 review's fixes). It never did anything, because
+    NDI and video pictures are already 320×180 by then, so it's taken out again.
 
 ### Media Background Pane is only sending one picture per connection
 

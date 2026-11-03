@@ -233,22 +233,14 @@ class AreaTable:
     most images) is summed as the 8-bit picture it is, which is fast and exact; one with see-through parts is
     premultiplied first, with its alpha summed too."""
 
-    def __init__(self, image: np.ndarray, quick: bool = False) -> None:
-        """quick: a moving picture's frame (NDI, video), shrunk the quickest way, by halving; a still picture is
-        shrunk in one step to fit, which keeps more detail (it's done once)."""
+    def __init__(self, image: np.ndarray) -> None:
         import cv2
 
         if image.ndim == 2:
             image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
         h, w = image.shape[:2]
         limit_w, limit_h = TABLE_MAX
-        if quick:
-            while w > limit_w or h > limit_h:
-                # halved each time: an exact average of each 2x2 block, and OpenCV's quickest shrink (a 960x540 frame
-                # to 240x135 takes 0.15 ms this way, against 0.85 ms in one step to 320x180)
-                image = cv2.resize(image, (max(1, w // 2), max(1, h // 2)), interpolation=cv2.INTER_AREA)
-                h, w = image.shape[:2]
-        elif w > limit_w or h > limit_h:
+        if w > limit_w or h > limit_h:
             scale = min(limit_w / w, limit_h / h)
             image = cv2.resize(image, (max(1, round(w * scale)), max(1, round(h * scale))), interpolation=cv2.INTER_AREA)
             h, w = image.shape[:2]
@@ -451,7 +443,7 @@ def _frame_table(element: Mapping[str, Any], ctx: RenderContext) -> AreaTable | 
         key = ("video", str(path), ctx.video_threaded)
         cached = _tables.get_fresh(key)
         if cached is None or cached[0] is not frame:
-            cached = (frame, AreaTable(frame, quick=True))  # (the newest frame of each video: the frame tells them apart)
+            cached = (frame, AreaTable(frame))  # (the newest frame of each video: the frame tells them apart)
             _tables.put(key, cached)
         return cached[1]
     if kind == "ndi":
@@ -463,7 +455,7 @@ def _frame_table(element: Mapping[str, Any], ctx: RenderContext) -> AreaTable | 
         key = ("area-ndi", name.lower())
         cached = ctx.cache.get(key)
         if cached is None or cached[0] != frame.seq:
-            cached = (frame.seq, AreaTable(frame.image, quick=True))
+            cached = (frame.seq, AreaTable(frame.image))
             ctx.cache[key] = cached
         return cached[1]
     return None
