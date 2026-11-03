@@ -34,7 +34,7 @@ from ..model import PATCH_RADIUS, Input, Show
 from ..output import RGB
 from . import icons, theme
 from .light_view import rgb_colour
-from .widgets import ElidedLabel, set_property, discard
+from .widgets import DOUBLE_CLICK_GUARD_S, ElidedLabel, discard, set_property
 
 TILE_MIN = 200  # wide enough for the bottom row: overlays 1-4, pencil and sparkle
 TILE_MAX = 270
@@ -196,7 +196,7 @@ class InputTile(QFrame):
 
     def _overlay_clicked(self, slot: int) -> None:
         now = time.monotonic()
-        if now - self._last_overlay_click.get(slot, -1e9) < QApplication.doubleClickInterval() / 1000.0:
+        if now - self._last_overlay_click.get(slot, -1e9) < DOUBLE_CLICK_GUARD_S:
             return  # a double-click is one click (the toggle rule would take it straight off again)
         self._last_overlay_click[slot] = now
         self.overlay_requested.emit(self.input.id, slot)

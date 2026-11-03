@@ -332,7 +332,7 @@ class AutomationReviewTests(AutomationEngineTestCase):
 
     def test_a_lights_off_restart_lets_automations_light_the_room(self) -> None:
         self.make(_dt(2026, 11, 8, 8, 59), [automation("welcome", SUNDAY_MORNING, WELCOME)],
-                  live=LiveState(blackout=True))
+                  live=LiveState(blackout=True, blackout_by_quit=True))  # (from a "Turn lights off" quit)
         self.assertTrue(self.engine._blackout)
         self.run_until(_dt(2026, 11, 8, 9, 0, 30))
         self.assertEqual(self.base(), "warm-welcome")
@@ -1096,6 +1096,343 @@ class LighterChangesTests(unittest.TestCase):
         self.assertIn("Drum wash", [r.label.text() if hasattr(r, "label") else "" for r in window.dashboard.output_rows.values()]
                       + [window.layout_page.table.item(r, window.layout_page.table.column("name")).text()
                          for r in range(window.layout_page.table.rowCount())])  # a change they do show still shows
+
+
+# ---------------------------------------------------------------- the second review (regressions in the first fixes)
+
+class SecondReviewAutomationTests(AutomationEngineTestCase):
+    restart = AutomationReviewTests.restart
+    saved = AutomationReviewTests.saved
+
+    def quit_lights_off(self) -> LiveState:
+        live = self.engine.stop(lights_off=True, fade=False)
+        live.saved_at = self.clocks.wall
+        return LiveState.from_dict(json.loads(json.dumps(live.to_dict())))
+
+    def test_a_clicked_blackout_survives_a_restart_and_a_starts_automation(self) -> None:
+        starts = automation("starts", [{"type": "app_started"}], [{"do": "base", "input": "ping", "transition": "cut"}])
+        self.make(_dt(2026, 11, 8, 20, 0), [starts])
+        self.engine.submit(SetBlackout(on=True))  # pressed by hand after the evening service
+        self.run_until(_dt(2026, 11, 8, 20, 1))
+        live = self.saved()
+        self.assertFalse(live.blackout_by_quit)
+        self.clocks.advance(7 * 3600)  # Windows Update restarts the PC at 03:00
+        engine = self.restart(live)
+        engine.tick()
+        self.assertTrue(engine._blackout)  # still dark
+
+    def test_a_lights_off_quit_gives_way_only_to_a_real_timed_run(self) -> None:
+        service = automation("service", SUNDAY_MORNING, [{"do": "base", "input": "warm-welcome"}],
+                             on_end=[{"do": "base", "input": "evening", "transition": "cut"}])
+        starts = automation("starts", [{"type": "app_started"}], [{"do": "base", "input": "ping", "transition": "cut"}])
+        self.make(_dt(2026, 11, 8, 8, 59), [service, starts])
+        self.run_until(_dt(2026, 11, 8, 12, 0))
+        live = self.quit_lights_off()  # "Turn lights off" at 12:00, inside 09:00-12:30
+        self.assertTrue(live.blackout_by_quit)
+        self.clocks.advance(15 * 3600)  # Monday 03:00
+        engine = self.restart(live)
+        self.clocks.advance(1.0)
+        engine.tick()
+        self.assertTrue(engine._blackout)  # "CentraLight starts" didn't lift it...
+        self.assertNotIn("stopped matching", [h.what for h in engine._runner.history if h.automation == "service"][-1:])
+        self.clocks.advance(6 * 86400 - 3 * 3600)  # ...nor a "when it stops" at startup; next Sunday 09:00 does
+        engine.tick()
+        self.run_until(_dt(2026, 11, 15, 9, 0, 30))
+        self.assertFalse(engine._blackout)
+        self.assertEqual(self.base(), "warm-welcome")
+
+    def test_key_lights_to_zero_isnt_lights_up(self) -> None:
+        from centralight.commands import SetHouse
+        from centralight.engine import _brings_lights_up
+
+        self.assertFalse(_brings_lights_up(SetHouse("dimmer-4", level=0.0, on=True)))
+        self.assertTrue(_brings_lights_up(SetHouse("dimmer-4", level=0.7, on=True)))
+        self.assertTrue(_brings_lights_up(SetHouse("dimmer-4", on=True)))
+
+    def test_an_any_automation_kept_by_a_variable_isnt_rerun_after_a_sleep(self) -> None:
+        from centralight.commands import SetVariable
+
+        moody = automation("moody", [{"type": "time", "from": "18:00", "to": "22:00"},
+                                     {"type": "variable", "name": "mood", "compare": ">", "value": 0.5}],
+                           [{"do": "base", "input": "evening", "transition": "cut"}], logic="any")
+        self.make(_dt(2026, 11, 9, 15, 0), [moody])
+        self.engine.submit(SetVariable("mood", 0.8))
+        self.run_until(_dt(2026, 11, 9, 15, 1))
+        self.assertEqual(len(self.runs("moody")), 1)
+        self.engine.submit(SendToBase("ping", cut=True))  # someone chose another look
+        self.run_until(_dt(2026, 11, 9, 15, 2))
+        self.clocks.jump_wall(180)  # a 3-minute sleep
+        self.clocks.advance(0.025)
+        self.engine.tick()
+        self.clocks.advance(2)
+        self.engine.tick()
+        self.assertEqual(len(self.runs("moody")), 1)
+        self.assertEqual(self.base(), "ping")
+
+    def test_a_new_automation_doesnt_inherit_a_deleted_ones_state(self) -> None:
+        loud = automation("new-automation", [{"type": "variable", "name": "mood", "compare": ">", "value": 0.5}],
+                          [{"do": "base", "input": "evening", "transition": "cut"}])
+        self.make(_dt(2026, 11, 9, 15, 0), [loud])
+        from centralight.commands import SetVariable
+
+        self.engine.submit(SetVariable("mood", 0.8))
+        self.run_until(_dt(2026, 11, 9, 15, 1))
+        self.assertEqual(len(self.runs("new-automation")), 1)
+        self.engine.submit(SwapShow(self.show.with_automations({}, ())))  # deleted
+        self.run_until(_dt(2026, 11, 9, 15, 2))
+        other = automation("new-automation", [{"type": "variable", "name": "mood", "compare": ">", "value": 0.2}],
+                           [{"do": "base", "input": "ping", "transition": "cut"}])  # "+ New automation" again: a new one
+        self.engine.submit(SwapShow(self.show.with_automations({"new-automation": other}, ("new-automation",))))
+        self.run_until(_dt(2026, 11, 9, 15, 3))
+        self.assertEqual(self.base(), "ping")  # it ran: it didn't take the old one's "already matched"
+
+    def test_a_feed_lost_automation_doesnt_fire_while_the_feed_connects(self) -> None:
+        lost = automation("lost", [{"type": "ndi", "source": "Media Background Pane", "invert": True}],
+                          [{"do": "base", "input": "warm-welcome", "transition": "cut"}])
+        self.make(_dt(2026, 11, 9, 15, 0), [lost])
+        self.engine._ndi_sending = {}  # (just started: nothing has reported)
+        self.clocks.advance(0.5)
+        self.engine.tick()
+        self.assertEqual(self.runs("lost"), [])  # not straight away...
+        self.run_until(_dt(2026, 11, 9, 15, 0, 10), step=1.0)
+        self.assertEqual(len(self.runs("lost")), 1)  # ...but once it's clear the feed really isn't there
+
+    def test_a_sound_condition_starts_afresh_when_turned_on_again(self) -> None:
+        from dataclasses import replace
+
+        music = Automation("music", "Music", True, "all", freeze([{"type": "audio", "band": "level", "above": 0.5, "for": 3}]),
+                           freeze([{"do": "overlay", "input": "x", "slot": 1, "state": "on"}]))
+        show = show_from_patch().with_automations({"music": music}, ("music",))
+        runner = AutomationRunner()
+        local = _dt(2026, 11, 8, 12, 0)
+        for second in range(10):  # loud
+            runner.check(show, Situation(now=1000.0 + second, local=local, audio={"level": 0.9}), 1000.0 + second)
+        off = show.with_automations({"music": replace(music, enabled=False)}, ("music",))
+        runner.check(off, Situation(now=1011.0, local=local, audio={"level": 0.9}), 1011.0)  # turned off while loud
+        runs = [h.what for h in runner.history].count("ran")
+        runner.check(show, Situation(now=9000.0, local=local, audio={"level": 0.0}), 9000.0)  # on again, in silence
+        self.assertEqual([h.what for h in runner.history].count("ran"), runs)
+
+    def test_at_1030_then_later_carries_on_after_a_short_range(self) -> None:
+        later = automation("sequence", [{"type": "time", "from": "10:30", "to": "10:31"}],
+                           [{"do": "base", "input": "ping", "transition": "cut"},
+                            {"do": "base", "input": "pong", "transition": "cut", "delay": 120}])
+        self.make(_dt(2026, 11, 9, 10, 29), [later])
+        self.run_until(_dt(2026, 11, 9, 10, 33), step=5.0)
+        self.assertEqual(self.base(), "pong")  # the delayed step happened, though the range had ended
+
+
+class SecondReviewFilesTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = qt_app()
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.folder = Path(self._tmp.name) / "Show"
+        self.doc = ShowDocument(create_show(self.folder), RecordingEngine(), save_delay_ms=10)
+
+    def tearDown(self) -> None:
+        for path in (self.folder / "inputs").glob("*.json"):
+            os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+        self.doc.close()
+        self._tmp.cleanup()
+
+    def test_putting_the_file_back_as_centralight_wrote_it_is_a_change(self) -> None:
+        watcher = FolderWatcher(self.doc, ask_reload=lambda _name: True, editing=lambda: "")
+        try:
+            path = self.folder / "inputs" / "follow-screen.json"
+            from centralight.input_edit import update_input
+
+            self.doc.apply(update_input(self.doc.show, "follow-screen", name="Ours"), "Rename")
+            self.doc.flush()
+            self.assertTrue(self.doc.wait_saved(10))
+            ours = path.read_bytes()
+            theirs = json.loads(ours)
+            theirs["name"] = "Theirs"
+            path.write_text(json.dumps(theirs), encoding="utf-8")
+            touch(path, 5)
+            watcher.check()
+            self.assertEqual(self.doc.show.inputs["follow-screen"].name, "Theirs")
+            path.write_bytes(ours)  # e.g. Ctrl+Z in the editor and save, or a copy put back
+            touch(path, 10)
+            watcher.check()
+            self.assertEqual(self.doc.show.inputs["follow-screen"].name, "Ours")
+        finally:
+            watcher.stop()
+
+    def test_a_delete_made_while_a_save_is_failing_still_happens(self) -> None:
+        from dataclasses import replace
+
+        from centralight.new_show import follow_screen_input
+
+        extra = replace(follow_screen_input(), id="extra", name="Extra")
+        show = self.doc.show
+        self.doc.apply(show.with_inputs({**show.inputs, "extra": extra}, show.input_order + ("extra",)), "Add")
+        self.doc.flush()
+        self.assertTrue(self.doc.wait_saved(10))
+        path = self.folder / "inputs" / "extra.json"
+        os.chmod(path, stat.S_IREAD)  # held
+        self.doc.apply(self.doc.show.with_inputs({**self.doc.show.inputs, "extra": replace(extra, name="Changed")},
+                                                 self.doc.show.input_order), "Rename")
+        self.doc.flush()
+        self.assertTrue(self.doc.wait_saved(10))
+        self.doc._check_saves()
+        self.assertTrue(self.doc.problem)
+        self.assertEqual(self.doc._save_timer.interval(), 10)  # the autosave keeps its own pace
+        show = self.doc.show
+        self.doc.apply(show.with_inputs({k: v for k, v in show.inputs.items() if k != "extra"},
+                                        tuple(i for i in show.input_order if i != "extra")), "Delete")  # deleted meanwhile
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+        self.doc.flush()
+        self.assertTrue(self.doc.wait_saved(10))
+        self.doc._check_saves()
+        self.assertFalse(path.exists())  # the delete happened
+        self.assertEqual(self.doc.problem, "")
+
+
+class SecondReviewOutputTests(unittest.TestCase):
+    setUp = OutputReviewTests.setUp
+    tearDown = OutputReviewTests.tearDown
+
+    def test_removing_the_top_light_keeps_its_channels_going(self) -> None:
+        self.thread.set_trim(85)
+        self.thread.submit(bytes(512))
+        self.assertTrue(_wait_for(lambda: bool(self.port.all_sent()) and len(self.port.all_sent()[-1]) == 85))
+        self.thread.set_trim(67)  # SlimPAR 108 removed: its channels keep being sent (as 0), not dropped
+        self.thread.submit(bytes([1]) + bytes(511))
+        self.assertTrue(_wait_for(lambda: self.port.all_sent()[-1][0] == 1))
+        self.assertEqual(len(self.port.all_sent()[-1]), 85)
+
+
+# ---------------------------------------------------------------- the second review (window)
+
+class SecondReviewWindowTests(unittest.TestCase):
+    setUpClass = WindowReviewTests.__dict__["setUpClass"]
+    setUp = WindowReviewTests.setUp
+    tearDown = WindowReviewTests.tearDown
+    refresh = WindowReviewTests.refresh
+
+    def activate(self) -> None:
+        self.window.activateWindow()
+        self.window.windowHandle().requestActivate()
+        QTest.qWaitForWindowActive(self.window, 1000)
+        process(self.app, 2)
+
+    def real_wheel(self, widget, notches: int) -> None:
+        """Through Qt as a real mouse wheel arrives (focus-on-wheel and propagation included)."""
+        pos = widget.mapTo(self.window, QPoint(widget.width() // 2, widget.height() // 2))
+        QTest.wheelEvent(self.window.windowHandle(), QPointF(pos), QPoint(0, 120 * notches))
+        process(self.app, 3)
+
+    def test_a_real_wheel_doesnt_change_unclicked_drop_downs_or_number_boxes(self) -> None:
+        from PySide6.QtWidgets import QComboBox
+
+        self.window.show_page("automation")
+        page = self.window.automation_page
+        page.selected = "sunday-welcome"
+        page._build_editor(self.window.document.show, force=True)
+        process(self.app, 3)
+        self.activate()
+        self.window.header.tabs["automation"].setFocus()
+        before = self.window.document.show.automations["sunday-welcome"]
+        combo = [c for c in page.editor_scroll.widget().findChildren(QComboBox) if c.isVisible()][1]
+        page.editor_scroll.ensureWidgetVisible(combo)
+        process(self.app)
+        self.real_wheel(combo, -1)
+        self.assertEqual(self.window.document.show.automations["sunday-welcome"], before)  # the condition stayed
+        self.window.show_page("dashboard")
+        process(self.app, 2)
+        speed = self.window.dashboard.variables.controls["speed"]
+        value = speed.value()
+        self.window.header.tabs["dashboard"].setFocus()
+        self.real_wheel(speed.spin, 2)
+        self.assertEqual(speed.value(), value)  # the variable stayed (the column scrolls instead)
+        speed.spin.setFocus()  # clicked into: then the wheel works
+        self.real_wheel(speed.spin, 1)
+        self.assertNotEqual(speed.value(), value)
+
+    def test_the_editor_stays_idle_after_leaving_whatever_changes(self) -> None:
+        from centralight.input_edit import set_element_value
+
+        self.window.open_editor("follow-screen")
+        process(self.app, 2)
+        self.window.show_page("dashboard")
+        renderer = self.window.editor_page._renderer
+        self.assertIsNone(renderer._requests.get())
+        show = set_element_value(self.window.document.show, "warm-white", "E1", "opacity", 0.5)
+        self.window.document.apply(show, "opacity")  # (e.g. an automation or an AI changing something)
+        process(self.app, 2)
+        self.assertIsNone(renderer._requests.get())  # still idle
+
+    def test_a_wheel_step_on_an_editor_slider_ends_its_gesture(self) -> None:
+        page_details = None
+        self.window.open_editor("warm-white")
+        page = self.window.editor_page
+        page.set_playing(False)
+        page.select_element("E1")
+        process(self.app)
+        page_details = page.details
+        field = page_details._fields["element:opacity"]
+        field.slider.setFocus()
+        field.slider.wheelEvent(QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, -120),
+                                            Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                                            Qt.ScrollPhase.NoScrollPhase, False))
+        self.assertEqual(page_details._gesture_t, {})  # the wheel step was a whole change
+
+    def test_minimising_ends_the_ai_dialogs_try_it_on_the_lights(self) -> None:
+        from PySide6.QtCore import Qt as _Qt
+
+        from tests.gui_fixtures import ai_edit_reply
+
+        dialog = self.window.open_ai_dialog("warm-white", ai_edit_reply(self.window.document.show))
+        process(self.app, 2)
+        dialog.check() if hasattr(dialog, "check") else None
+        process(self.app)
+        if not dialog.solo_button.isEnabled():
+            self.skipTest("the sample reply isn't usable here")
+        dialog.solo_button.setChecked(True)
+        self.engine.settle(0.2)
+        self.assertTrue(self.engine.frames.get().solo)
+        self.window.setWindowState(_Qt.WindowState.WindowMinimized)
+        process(self.app)
+        self.engine.settle(0.2)
+        self.assertEqual(self.engine.frames.get().solo, "")
+        self.assertFalse(dialog.solo_button.isChecked())
+        self.window.setWindowState(_Qt.WindowState.WindowNoState)
+        dialog.reject()
+
+    def test_the_layout_tabs_territories_follow_a_drag(self) -> None:
+        self.window.show_page("layout")
+        page = self.window.layout_page
+        process(self.app, 2)
+        key = page._territory_key
+        page.begin_drag()
+        item = page._items["slimpar-101"]
+        item.setPos(item.pos().x() + 40, item.pos().y())
+        page.light_moving(item)
+        page._push_drag_preview()
+        page.end_drag()
+        process(self.app)
+        self.assertNotEqual(page._territory_key, key)  # redrawn for where the light is now
+
+    def test_dashboard_redo_redoes_only_what_its_undo_undid(self) -> None:
+        from centralight.input_edit import update_input
+
+        document = self.window.document
+        show = document.show
+        document.apply(show.with_inputs({k: v for k, v in show.inputs.items() if k != "off"},
+                                        tuple(i for i in show.input_order if i != "off")), "Delete All off")
+        document.set_scope("show")
+        document.undo()  # undone long ago, from the show's history
+        self.assertIn("off", document.show.inputs)
+        document.apply(update_input(document.show, "warm-white", name="Warm (AI)"), "Changed outside CentraLight")
+        self.window.show_page("dashboard")
+        self.window.undo()
+        self.window.redo()
+        self.assertEqual(document.show.inputs["warm-white"].name, "Warm (AI)")
+        self.window.redo()  # nothing more to redo from the Dashboard: the old delete doesn't come back
+        self.assertIn("off", document.show.inputs)
 
 
 if __name__ == "__main__":

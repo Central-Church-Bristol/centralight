@@ -355,7 +355,8 @@ def render_video(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray |
     speed = max(0.0, float(param(element, "speed", ctx.time, 1.0)))
     frame = clip.frame_at(max(0.0, ctx.time) * speed)
     if frame is None:
-        ctx.waiting = not clip.error
+        if not clip.error:
+            ctx.waiting = True  # (never cleared here: an NDI feed in the same picture may still be waiting)
         return None
     fit = _fit_of(element)
     key = ("video", str(path), fit, ctx.width, ctx.height)

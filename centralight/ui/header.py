@@ -32,6 +32,7 @@ from ..output import BUSY, CLOSED, CONNECTED, CONNECTING, MISSING, OutputStatus
 from ..settings import OUTPUT_ARTNET, OUTPUT_SIMULATED
 from . import icons, theme
 from .widgets import (
+    DOUBLE_CLICK_GUARD_S,
     STATE_ERROR,
     STATE_OFF,
     STATE_OK,
@@ -373,7 +374,7 @@ class Header(QFrame):
 
     def _blackout_clicked(self) -> None:
         now = time.monotonic()
-        if now - self._last_blackout_click < QApplication.doubleClickInterval() / 1000.0:
+        if now - self._last_blackout_click < DOUBLE_CLICK_GUARD_S:
             return  # a double-click (in a hurry) is one click, not off-and-on-again
         self._last_blackout_click = now
         instant = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)

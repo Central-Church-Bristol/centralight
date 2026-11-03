@@ -487,7 +487,7 @@ class EditorPage(QWidget):
     # ------------------------------------------------------------ rendering the viewports
 
     def _request(self) -> None:
-        if self.input_id and self._renderer_running:
+        if self.input_id and self._renderer_running and self._entered:  # (not while the Editor isn't on screen)
             self._renderer.request(self.show_data, self.input_id, self.element_id or None, self.playhead, self.variables())
 
     def _poll_picture(self) -> None:

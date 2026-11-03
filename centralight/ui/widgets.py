@@ -174,6 +174,8 @@ class WheelGuard(QObject):
     wheel goes on to the page around it (which scrolls), so scrolling past a control never changes a live level."""
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.Polish and isinstance(obj, (QAbstractSpinBox, QComboBox)):
+            _no_wheel_focus(obj)  # (Qt otherwise gives them focus from the wheel, before this filter sees it)
         if event.type() == QEvent.Type.Wheel and isinstance(obj, QWidget):
             control = obj
             for _ in range(3):  # (the wheel can land on a control's inner line edit)
@@ -193,6 +195,14 @@ class WheelGuard(QObject):
 
 
 _wheel_guard: WheelGuard | None = None
+# A second click on Blackout (or an overlay button) this soon after the first is the same click: a hurried
+# double-click. A person correcting an accidental click takes longer than this, so that still works.
+DOUBLE_CLICK_GUARD_S = 0.35
+
+
+def _no_wheel_focus(widget: QWidget) -> None:
+    if widget.focusPolicy() == Qt.FocusPolicy.WheelFocus:
+        widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
 
 def install_wheel_guard(app) -> None:
@@ -201,6 +211,9 @@ def install_wheel_guard(app) -> None:
     if _wheel_guard is None:
         _wheel_guard = WheelGuard()
         app.installEventFilter(_wheel_guard)
+        for widget in app.allWidgets():  # (the ones that already exist)
+            if isinstance(widget, (QAbstractSpinBox, QComboBox)):
+                _no_wheel_focus(widget)
 
 
 class Fader(QSlider):
@@ -301,6 +314,7 @@ class Fader(QSlider):
         delta = event.angleDelta().y()
         if delta:
             self._user_set(self.value() + (20 if delta > 0 else -20))
+            self.released.emit()  # each wheel step is a whole change (its own undo step, its own keyframe time)
         event.accept()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802

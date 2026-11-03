@@ -734,6 +734,13 @@ class MainWindow(QWidget):
         the Stream Deck, hotkeys) would show until someone opened the window again."""
         self.layout_page.on_leave()
         self.editor_page.on_leave()
+        dialog = getattr(self, "ai_dialog", None)
+        if dialog is not None:
+            try:
+                if dialog.solo_button.isChecked():
+                    dialog.solo_button.setChecked(False)  # (its "Try it on the lights" ends too)
+            except RuntimeError:  # closed and gone
+                pass
 
     def _back_in_sight(self) -> None:
         if self._page == "editor":

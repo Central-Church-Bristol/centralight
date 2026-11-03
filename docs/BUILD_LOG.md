@@ -47,6 +47,52 @@ Run all the tests (about five minutes, including the layout check at every scali
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
 
+## A second look at the fixes (3 Nov, morning)
+
+Two more reviewers then checked the fixes themselves, looking for anything they broke. They found more, mostly in
+how automations behave around restarts. Each fix again has a test in `tests\test_review_fixes.py`. Fixed:
+
+**Automations and Blackout**
+- After an unattended restart, an automation could lift a Blackout that someone had clicked (e.g. Blackout after
+  the evening service, then a Windows Update restart in the night). Now CentraLight remembers whether a Blackout
+  came from quitting with "Turn lights off". Only that one gives way, and only to a real run of a timed automation
+  (e.g. Sunday 09:00), never to "CentraLight starts" or a "when it stops" step.
+- An automation that ended while CentraLight was closed ran its "when it stops" steps at the next start, even days
+  later. Now that only happens if CentraLight was closed in the last 10 minutes.
+- "Key lights → 0 %" counted as bringing the lights up. Fixed.
+- An "Any" automation that matched through something other than the clock (a variable, say) ran again after a
+  short sleep. Fixed.
+- A new automation could take over a deleted one's state (they get the same id), so it didn't run, or showed the
+  loop-guard badge. Now only the same automation brought back by Undo gets its state back.
+- A "feed lost" automation fired at every start while Media Background Pane's feed was still connecting. Now
+  automations about NDI feeds wait until the feeds have reported (at most 3 s).
+- A sound condition could be true at once when its automation was turned back on in silence. Fixed.
+- "At 10:30 do this, then 2 minutes later that" lost its second step when a short time range ended. Now a stop
+  cancels the waiting steps only if there's a "when it stops" to do instead.
+
+**The lights and the files**
+- Removing the top light (or undoing adding one) made CentraLight stop sending its channels, so the real light could
+  hold its last colour. Now the packet only grows during a session: a removed light gets zeros.
+- If a file was put back exactly as CentraLight had written it (an editor's undo, a copy restored), the change was
+  ignored. Fixed.
+- A delete made while a save was failing never happened, and after one failure every save waited 5 s instead of
+  1.5 s. Fixed. A lasting failure now goes in the log once every ten minutes, not at every retry.
+- Smaller: a broken video can't cut short the startup wait for the screen feed; an NDI thread that's restarting
+  doesn't hold up stopping it; the watcher never reads more than 2 MB of a file.
+
+**The window**
+- My mouse-wheel fix still let a real wheel change number boxes and drop-downs: Qt gives them focus from the wheel
+  before any check runs, and my tests had used a made-up wheel event that skips that step. One notch over an
+  automation's "Days of the week" box could have turned it into a December-only automation. Now number boxes and
+  drop-downs only take focus from a click (or Tab), and a test uses a real wheel.
+- The Editor started redrawing again after any change, even in the tray. Now it stays idle until you come back.
+- A wheel step on an Editor slider left the drag "open", so the next drag rewrote the old keyframe. Fixed.
+- Minimising (or hiding to the tray) now also ends the AI window's "Try it on the lights".
+- The Layout tab's coloured territories weren't redrawn after a drag. Fixed.
+- The Dashboard's Ctrl+Y could redo an older, unrelated step. Now it only redoes what its Ctrl+Z undid.
+- The double-click guard on Blackout and the overlay buttons is now 0.35 s, so a quick correction of an accidental
+  click still works.
+
 ## A review of the whole app (3 Nov, after M9)
 
 Five reviewers (separate Claude agents, read-only, one per area: the lights path, automations and the remote, the

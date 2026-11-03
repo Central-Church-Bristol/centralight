@@ -114,6 +114,7 @@ class NdiDiscovery:
         self._lock = threading.Lock()
         self._sources: list[tuple[str, str]] = []  # (ndi name, url)
         self._running = False
+        self._restart_wait = threading.Event()
         self._thread: threading.Thread | None = None
         self.changed = threading.Event()
 
@@ -121,11 +122,13 @@ class NdiDiscovery:
         if self._running:
             return
         self._running = True
+        self._restart_wait = threading.Event()
         self._thread = threading.Thread(target=self._run, name="ndi-discovery", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._running = False
+        self._restart_wait.set()
         if self._thread is not None:
             self._thread.join(3.0)
 
@@ -149,7 +152,9 @@ class NdiDiscovery:
             self._run_once()
             if not (self._running and self._failed):
                 return
-            time.sleep(RESTART_AFTER_ERROR)
+            self._restart_wait.wait(RESTART_AFTER_ERROR)  # (stop() ends the wait at once)
+            if not self._running:
+                return
 
     def _run_once(self) -> None:
         finder = None
@@ -205,6 +210,7 @@ class NdiReceiver:
         self._arrivals: deque[float] = deque(maxlen=120)
         self._seq = 0
         self._running = False
+        self._restart_wait = threading.Event()
         self._thread: threading.Thread | None = None
         self.connects = 0  # how many times a receiver was created (for tests and diagnostics)
 
@@ -212,11 +218,13 @@ class NdiReceiver:
         if self._running:
             return
         self._running = True
+        self._restart_wait = threading.Event()
         self._thread = threading.Thread(target=self._run, name=f"ndi-{self.wanted[:24]}", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._running = False
+        self._restart_wait.set()  # (a restart after an error doesn't hold this up)
         if self._thread is not None and self._thread is not threading.current_thread():
             self._thread.join(3.0)
         self._set(state=STOPPED)
@@ -247,7 +255,9 @@ class NdiReceiver:
             self._run_once()
             if not (self._running and self._failed):
                 return
-            time.sleep(RESTART_AFTER_ERROR)
+            self._restart_wait.wait(RESTART_AFTER_ERROR)  # (stop() ends the wait at once)
+            if not self._running:
+                return
 
     def _run_once(self) -> None:
         ndi = None

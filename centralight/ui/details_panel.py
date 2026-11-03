@@ -172,6 +172,8 @@ class DetailsPanel(QScrollArea):
         if (input_id, element_id, shape_id) == (self.input_id, self.element_id, self.shape_id):
             return
         self._finish_typing()  # an edit half typed belongs to what's showing now
+        self._gesture_t.clear()  # (a drag that began on what was showing is over)
+        self._gesture += 1
         self.input_id, self.element_id, self.shape_id = input_id, element_id, shape_id
         self.refresh(self.show_data)
 

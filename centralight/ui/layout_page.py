@@ -945,6 +945,7 @@ class LayoutPage(QWidget):
         self._drag_spots.clear()
         self.document.end_drag(f"Move {self.lights_label(moved)}")
         self._update_labels()
+        self._update_territory(self.show_data)  # (skipped during the drag)
 
     def lights_label(self, fixture_ids) -> str:
         """'SlimPAR 103' for one light, '3 lights' for more (for undo step names)."""
@@ -955,6 +956,7 @@ class LayoutPage(QWidget):
         self._dragging = False
         self._drag_spots.clear()
         self.document.end_drag("")
+        self._update_territory(self.show_data)
 
     # ------------------------------------------------------------ selection
 

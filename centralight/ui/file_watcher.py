@@ -19,7 +19,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QFileSystemWatcher, QObject, QTimer, Signal
 
-from ..files import loads_json_bytes, written_by_us
+from ..files import forget_written, loads_json_bytes, written_by_us
 from ..log import log_exception, log_info
 from ..model import Show
 from ..show_io import AUTOMATIONS_DIR, INPUTS_DIR, MAX_INPUT_BYTES, InputFileError, automation_from_dict, parse_input_bytes
@@ -126,7 +126,8 @@ class FolderWatcher(QObject):
     def _read(self, path: Path) -> bytes | None:
         """The file's bytes, or None if it can't be read just now (it's checked again next time)."""
         try:
-            return path.read_bytes()
+            with path.open("rb") as handle:
+                return handle.read(MAX_INPUT_BYTES + 1)  # (no more: a file that big is refused anyway)
         except OSError:
             self._stamps.pop(path, None)  # e.g. another program is still writing it: try again at the next check
             return None
@@ -147,6 +148,7 @@ class FolderWatcher(QObject):
             if input_id in self.problems:
                 self._set_problem(input_id, "")
             return
+        forget_written(path)
         try:
             inp, warnings = parse_input_bytes(raw, path)
         except InputFileError as exc:
@@ -183,6 +185,7 @@ class FolderWatcher(QObject):
         order = show.input_order if input_id in show.inputs else show.input_order + (input_id,)
         new_show = show.with_inputs({**show.inputs, input_id: inp}, order)
         verb = "Changed" if current is not None else "Added"
+        document.forget_wrote("input", input_id)
         document.note_on_disk(inputs={input_id: inp})
         if document.apply(new_show, f"{verb} outside CentraLight: {inp.name}"):
             log_info(f"inputs\\{path.name} {verb.lower()} outside CentraLight" + (f" ({'; '.join(warnings)})" if warnings else ""))
@@ -203,6 +206,7 @@ class FolderWatcher(QObject):
         raw = self._read(path)
         if raw is None or written_by_us(path, raw):  # (CentraLight's own save, byte for byte)
             return
+        forget_written(path)
         try:
             if len(raw) > MAX_INPUT_BYTES:
                 raise InputFileError("the file is too big")
@@ -218,6 +222,7 @@ class FolderWatcher(QObject):
         show = document.show
         order = show.automation_order if automation.id in show.automation_order else show.automation_order + (automation.id,)
         verb = "Changed" if current is not None else "Added"
+        document.forget_wrote("automation", automation.id)
         document.note_on_disk(automations={automation.id: automation})
         if document.apply(show.with_automations({**show.automations, automation.id: automation}, order),
                           f"{verb} outside CentraLight: {automation.name}"):

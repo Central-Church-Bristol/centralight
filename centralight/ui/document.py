@@ -200,8 +200,9 @@ class Autosaver:
         self._jobs: queue.Queue[SaveJob | None] = queue.Queue()
         self._idle = threading.Event()
         self._idle.set()
-        self.errors: list[str] = []
+        self.errors: deque[str] = deque(maxlen=20)  # the latest few failures (the window shows them)
         self.results: queue.SimpleQueue[tuple[str, str, str]] = queue.SimpleQueue()  # (kind, id, why); ("ok", "", "")
+        self._logged: dict[tuple[str, str], float] = {}  # (kind, id) -> when its failure was last written to the log
         self._thread = threading.Thread(target=self._run, name="autosave", daemon=True)
         self._thread.start()
 
@@ -237,7 +238,10 @@ class Autosaver:
                     step()
                 except Exception as exc:  # disk full, a file locked by another program, read-only...
                     failed = True
-                    log_exception(f"autosave ({kind} {item_id})", exc)
+                    now = time.monotonic()
+                    if now - self._logged.get((kind, str(item_id)), -1e9) > 600:  # (once in ten minutes, not every retry)
+                        self._logged[(kind, str(item_id))] = now
+                        log_exception(f"autosave ({kind} {item_id})", exc)
                     self.errors.append(str(exc))
                     self.results.put((kind, str(item_id), str(exc) or type(exc).__name__))
             if not failed:
@@ -269,8 +273,15 @@ class ShowDocument(QObject):
         self._save_timer.setInterval(save_delay_ms)
         self._save_timer.timeout.connect(self.flush)
         self._saving_paused = False
+        self._newest_undone: list[QUndoStack] = []  # the histories the Dashboard's undo took steps from, in order
         self._retry_show = False  # show.json couldn't be written: write it again next time
-        self._retry_deletes: dict[str, set[str]] = {"input": set(), "layout": set(), "automation": set()}
+        # inputs, layouts and automations whose file couldn't be written or removed: saved again next time, as they
+        # are then (written if they're still in the show, removed if not)
+        self._retry: dict[str, set[str]] = {"input": set(), "layout": set(), "automation": set()}
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setSingleShot(True)
+        self._retry_timer.setInterval(RETRY_SAVE_MS)
+        self._retry_timer.timeout.connect(self.flush)
         self.problem = ""
         self._results = QTimer(self)
         self._results.setInterval(1000)
@@ -320,6 +331,11 @@ class ShowDocument(QObject):
         now = time.monotonic()
         return any(now - when <= OWN_SAVE_MEMORY_S and kept == version
                    for when, kept in self._recent_writes.get((kind, item_id), ()))
+
+    def forget_wrote(self, kind: str, item_id: str) -> None:
+        """Someone else's version of this item has been taken: CentraLight's own earlier saves of it no longer count
+        as "ours" (so if the file is put back to one of them, that's a change too)."""
+        self._recent_writes.pop((kind, item_id), None)
 
     def _wrote(self, kind: str, item_id: str, version: Any) -> None:
         self._recent_writes.setdefault((kind, item_id), deque(maxlen=8)).append((time.monotonic(), version))
@@ -411,7 +427,7 @@ class ShowDocument(QObject):
             self._save_timer.start()
 
     def _pending_retries(self) -> bool:
-        return self._retry_show or any(self._retry_deletes.values())
+        return self._retry_show or any(self._retry.values())
 
     def _check_saves(self) -> None:
         """Every second: did the autosave thread manage? A file it couldn't write is put back as unsaved and tried
@@ -438,7 +454,7 @@ class ShowDocument(QObject):
             self._set_problem(f"Couldn't {verb} {what}{more}: {why}\nCentraLight tries again every {RETRY_SAVE_MS // 1000} s. "
                               "Is the file open in another program, or the disk full?")
             if not self._saving_paused:
-                self._save_timer.start(RETRY_SAVE_MS)
+                self._retry_timer.start()  # (its own timer: the 1.5 s autosave keeps its pace)
         elif ok and self.problem and self._show is self._saved and not self._pending_retries():
             log_info("Saving works again")
             self._set_problem("")
@@ -449,21 +465,11 @@ class ShowDocument(QObject):
             self.save_problem.emit(text)
 
     def _mark_unsaved(self, failures: list[tuple[str, str, str]]) -> None:
-        saved = self._saved
-        inputs, automations = dict(saved.inputs), dict(saved.automations)
-        layouts = list(saved.layouts)
         for kind, item_id, _why in failures:
-            if kind == "input":
-                inputs.pop(item_id, None)  # (so the next save writes it again)
-            elif kind == "layout":
-                layouts = [lay for lay in layouts if lay.id != item_id]
-            elif kind == "automation":
-                automations.pop(item_id, None)
-            elif kind == "show":
+            if kind == "show":
                 self._retry_show = True
-            elif kind.startswith("delete-"):
-                self._retry_deletes.setdefault(kind[len("delete-"):], set()).add(item_id)
-        self._saved = replace(saved, inputs=frozen_map(inputs), automations=frozen_map(automations), layouts=tuple(layouts))
+            else:
+                self._retry.setdefault(kind.replace("delete-", ""), set()).add(item_id)
 
     # ------------------------------------------------------------ saving
 
@@ -472,19 +478,25 @@ class ShowDocument(QObject):
         self._save_timer.stop()
         if self._autosaver is None or (self._show is self._saved and not self._pending_retries()):
             return
+        self._retry_timer.stop()
         old, new = self._saved, self._show
         show_data = show_to_dict(new)
         changed_show = show_to_dict(old) != show_data or self._retry_show
-        retry = {kind: set(ids) for kind, ids in self._retry_deletes.items()}
+        retry = {kind: set(ids) for kind, ids in self._retry.items()}
         self._retry_show = False
-        self._retry_deletes = {"input": set(), "layout": set(), "automation": set()}
-        inputs = tuple(inp for input_id, inp in new.inputs.items() if old.inputs.get(input_id) != inp)
-        deleted = tuple(dict.fromkeys([i for i in old.inputs if i not in new.inputs] + [i for i in retry["input"] if i not in new.inputs]))
+        self._retry = {"input": set(), "layout": set(), "automation": set()}
+        # what changed, plus whatever couldn't be saved last time (written if it's in the show now, removed if not)
+        inputs = tuple(inp for input_id, inp in new.inputs.items()
+                       if old.inputs.get(input_id) != inp or input_id in retry["input"])
+        deleted = tuple(dict.fromkeys([i for i in old.inputs if i not in new.inputs]
+                                      + [i for i in retry["input"] if i not in new.inputs]))
         old_layouts = {lay.id: lay for lay in old.layouts}
         new_ids = {lay.id for lay in new.layouts}
-        layouts = tuple(lay for lay in new.layouts if old_layouts.get(lay.id) != lay)
-        deleted_layouts = tuple(dict.fromkeys([i for i in old_layouts if i not in new_ids] + [i for i in retry["layout"] if i not in new_ids]))
-        automations = tuple(a for aid, a in new.automations.items() if old.automations.get(aid) != a)
+        layouts = tuple(lay for lay in new.layouts if old_layouts.get(lay.id) != lay or lay.id in retry["layout"])
+        deleted_layouts = tuple(dict.fromkeys([i for i in old_layouts if i not in new_ids]
+                                              + [i for i in retry["layout"] if i not in new_ids]))
+        automations = tuple(a for aid, a in new.automations.items()
+                            if old.automations.get(aid) != a or aid in retry["automation"])
         deleted_automations = tuple(dict.fromkeys([i for i in old.automations if i not in new.automations]
                                                   + [i for i in retry["automation"] if i not in new.automations]))
         self._saved = new
@@ -523,17 +535,17 @@ class ShowDocument(QObject):
                     best = (seq, stack)
         if best is None:
             return False
-        self._newest_undone = best[1]
+        self._newest_undone.append(best[1])
         best[1].undo()
         return True
 
     def redo_newest(self) -> bool:
-        """Redo what undo_newest() last undid (or the active history's next step)."""
-        stack = getattr(self, "_newest_undone", None)
-        if stack is not None and stack.canRedo():
-            stack.redo()
-            return True
-        self.redo()
+        """Redo what undo_newest() undid, newest first (and nothing else: no older step from another history)."""
+        while self._newest_undone:
+            stack = self._newest_undone.pop()
+            if stack.canRedo():
+                stack.redo()
+                return True
         return False
 
     def wait_saved(self, timeout: float = 5.0) -> bool:

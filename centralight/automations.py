@@ -88,6 +88,7 @@ LOOP_RUNS = 5  # more than this many runs...
 LOOP_WINDOW = 30.0  # ...in this many seconds pauses an automation
 STARTUP_WINDOW = 600.0  # "The PC starts": CentraLight started within 10 minutes of Windows
 NOT_LOOKING = 120.0  # seconds between two checks that mean CentraLight wasn't looking (asleep, off, stuck)
+RECENT = 600.0  # a match that ended while CentraLight was closed runs its "when it stops" only if it closed this recently
 QUIET_HOLD = 2.0  # seconds of quiet before a sound condition counts as stopped (a gap between songs isn't)
 REMEMBER_REMOVED = 3600.0  # a deleted automation's state is kept this long, so Undo doesn't run it again
 TIMED_KINDS = ("time", "days", "dates", "sun")  # conditions that depend only on the clock
@@ -346,6 +347,7 @@ class Situation:
     events: frozenset[str] = frozenset()  # app_started, pc_startup, pc_woke happening now
     previous_local: datetime | None = None  # local time at the last check (to spot clock changes)
     previous_now: float | None = None  # wall clock at the last check (a clock change moves local time, not this)
+    ndi_known: bool = True  # False just after starting, while the NDI feeds connect ("feed lost" isn't true yet)
 
 
 def _in_range(start: int, end: int, minutes: int) -> bool:
@@ -420,6 +422,8 @@ def timed_continuous(automation: Automation, start: datetime, end: datetime) -> 
     def true_at(moment: datetime) -> bool:
         return AutomationRunner().matches(probe, Situation(now=0.0, local=moment))[0]  # fresh: no memory
 
+    if automation.logic == "any" and not true_at(start):
+        return True  # it matched through its other conditions, not the clock: the clock says nothing about it
     first_day = start.replace(hour=0, minute=0, second=0, microsecond=0)
     for moment in change_moments(timed, first_day, (end - first_day).days + 1):
         if start < moment <= end and not true_at(moment):
@@ -555,7 +559,10 @@ class AutomationRunner:
         self._audio_quiet: dict[tuple[str, int], float] = {}  # (automation, condition) -> when it went quiet
         self._last_local: datetime | None = None
         self._last_now: float | None = None
-        self._removed: dict[str, tuple[AutomationState, float]] = {}  # deleted automations' states (for Undo)
+        self._removed: dict[str, tuple[AutomationState, float, Automation | None]] = {}  # deleted ones (for Undo)
+        self._definitions: dict[str, Automation] = {}  # each automation as last checked
+        self._results: dict[str, list[bool]] = {}  # each automation's conditions at the last check
+        self._stopped_at: float | None = None  # when the last CentraLight saved its state (from live.json)
 
     # --- saving and restoring (live.json)
 
@@ -573,12 +580,13 @@ class AutomationRunner:
             ],
         }
 
-    def restore(self, data: Mapping[str, Any] | None, now: float) -> None:
+    def restore(self, data: Mapping[str, Any] | None, now: float, saved_at: float | None = None) -> None:
         """Pick up where the last run left off. An automation that was matched stays matched (so a restart in the
         middle of a service doesn't run it again over what someone chose since), unless the clock says its
         occurrence ended meanwhile: the first check sees to that, and catches up a new one."""
         if not isinstance(data, Mapping):
             return
+        self._stopped_at = saved_at if isinstance(saved_at, (int, float)) and saved_at > 0 else None
         self.paused = bool(data.get("paused", False))
         since = data.get("paused_since")
         self.paused_since = float(since) if isinstance(since, (int, float)) and self.paused else None
@@ -722,6 +730,7 @@ class AutomationRunner:
             return False, []
         day = range_day(automation.conditions, situation.local)
         results = [self._condition_safely(automation, i, c, situation, day) for i, c in enumerate(automation.conditions)]
+        self._results[automation.id] = results
         true = [describe_condition(c) for c, r in zip(automation.conditions, results) if r]
         combined = all(results) if automation.logic == "all" else any(results)
         return combined, true
@@ -739,33 +748,46 @@ class AutomationRunner:
         now_actions: list[tuple[str, dict]] = []
         known = set(show.automations)
         for aid in [a for a in self.states if a not in known]:  # deleted: kept a while, in case Undo brings it back
-            self._removed[aid] = (self.states.pop(aid), situation.now)
+            self._removed[aid] = (self.states.pop(aid), situation.now, self._definitions.pop(aid, None))
             self._drop_pending(aid, everything=True)
-        for aid in [a for a, (_s, when) in self._removed.items() if situation.now - when > REMEMBER_REMOVED]:
+            self._forget_sound(aid)
+        for aid in [a for a, entry in self._removed.items() if situation.now - entry[1] > REMEMBER_REMOVED]:
             del self._removed[aid]
         for automation in show.ordered_automations():
             if automation.id not in self.states and automation.id in self._removed:
-                self.states[automation.id] = self._removed.pop(automation.id)[0]
+                old_state, _when, definition = self._removed.pop(automation.id)
+                if definition == automation:  # the same automation back (Undo): its state comes back too
+                    self.states[automation.id] = old_state
+            self._definitions[automation.id] = automation
             state = self.states.setdefault(automation.id, AutomationState())
             if not automation.enabled or state.tripped:
                 state.matched = False  # turned on again later while true = it runs then
                 state.restored = False
                 self._drop_pending(automation.id)
+                self._forget_sound(automation.id)
                 continue
+            if not situation.ndi_known and any(c.get("type") == "ndi" for c in automation.conditions):
+                continue  # just started: the feeds are still connecting, so "feed lost" isn't true (nor false) yet
             matched, true = self.matches(automation, situation)
-            start = state.since if state.restored else away_since
-            state.restored = False
-            if matched and state.matched and start is not None:
+            restored, state.restored = state.restored, False
+            start = state.since if restored else away_since
+            if matched and state.matched and start is not None and not self._kept_by_untimed(automation):
                 start_local = situation.local - timedelta(seconds=max(0.0, situation.now - start))
                 if not timed_continuous(automation, start_local, situation.local):
                     state.matched = False  # a new occurrence began while CentraLight wasn't looking: it runs again
+            if restored and state.matched and not matched and (
+                    self._stopped_at is None or situation.now - self._stopped_at > RECENT):
+                state.matched = False  # it ended while CentraLight was closed, a while ago: no "when it stops" now
+                state.since = situation.now
+                continue
             if matched == state.matched:
                 continue
             state.matched = matched
             state.since = situation.now
-            if matched or not any(c.get("type") in EVENTS for c in automation.conditions):
-                # what was waiting belonged to the run (or the stop) that's over. (An event such as "CentraLight
-                # starts" only lasts a moment: its stop a second later mustn't cancel the run's delayed actions.)
+            if matched or (automation.on_end and not any(c.get("type") in EVENTS for c in automation.conditions)):
+                # A new run replaces whatever was waiting. A stop cancels the run's waiting actions only when there's
+                # a "when it stops" to do instead: without one, "at 10:30 do this, then later that" carries on. (An
+                # event such as "CentraLight starts" only lasts a moment: its stop never cancels anything.)
                 self._drop_pending(automation.id)
             if self.paused:
                 continue  # paused: keep track quietly, run nothing
@@ -773,8 +795,22 @@ class AutomationRunner:
                 now_actions += self._run(automation, list(automation.actions), mono_now, situation.now, "ran", ", ".join(true))
             elif automation.on_end:
                 now_actions += self._run(automation, list(automation.on_end), mono_now, situation.now, "stopped matching",
-                                         count=False)
+                                         count=False, phase="end")
         return now_actions
+
+    def _kept_by_untimed(self, automation: Automation) -> bool:
+        """An "any" automation that's true through something other than the clock right now (a variable, an input
+        on Base...): a sleep or a restart doesn't make it a new occurrence."""
+        if automation.logic != "any":
+            return False
+        results = self._results.get(automation.id) or []
+        return any(r for c, r in zip(automation.conditions, results) if c.get("type") not in TIMED_KINDS)
+
+    def _forget_sound(self, automation_id: str) -> None:
+        """A sound condition starts afresh when its automation is turned on again (not from how loud it was then)."""
+        for table in (self._audio_since, self._audio_quiet):
+            for key in [k for k in table if k[0] == automation_id]:
+                del table[key]
 
     def _drop_pending(self, automation_id: str, everything: bool = False) -> None:
         """Forget an automation's waiting actions (Run now's stay, unless `everything`)."""
@@ -783,10 +819,13 @@ class AutomationRunner:
 
     def run_now(self, automation: Automation, mono_now: float, wall_now: float) -> list[tuple[str, dict]]:
         """The Run now button (and the API): its actions, whatever the conditions."""
-        return self._run(automation, list(automation.actions), mono_now, wall_now, "run by hand", count=False, why="by hand")
+        return self._run(automation, list(automation.actions), mono_now, wall_now, "run by hand", count=False, why="by hand",
+                         phase="by hand")
 
     def _run(self, automation: Automation, actions: list, mono_now: float, wall_now: float, what: str,
-             detail: str = "", count: bool = True, why: str = "conditions") -> list[tuple[str, dict]]:
+             detail: str = "", count: bool = True, why: str = "conditions", phase: str = "run") -> list[tuple[str, dict]]:
+        """phase ("run", "end" or "by hand") goes with each action as "_phase": the engine lets only a real run lift
+        a Blackout left from before a restart."""
         state = self.states.setdefault(automation.id, AutomationState())
         if count:
             state.runs.append(mono_now)
@@ -806,6 +845,7 @@ class AutomationRunner:
         for action in actions:
             if not isinstance(action, Mapping):
                 continue
+            action = {**dict(action), "_phase": phase}
             delay = action.get("delay", 0)
             delay = float(delay) if isinstance(delay, (int, float)) and not isinstance(delay, bool) else 0.0
             if delay > 0:

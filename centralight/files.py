@@ -27,6 +27,13 @@ def note_written(path: Path, data: bytes) -> None:
         _written[_key(path)] = hashlib.sha1(data).hexdigest()
 
 
+def forget_written(path: Path) -> None:
+    """Someone else has written this file since: if it's later put back exactly as CentraLight wrote it (an editor's
+    undo, a restored copy), that's a change too."""
+    with _written_lock:
+        _written.pop(_key(path), None)
+
+
 def written_by_us(path: Path, data: bytes) -> bool:
     """True if ``data`` is exactly what CentraLight itself last wrote to ``path``: its own save, not an outside
     change (comparing the bytes, not the loaded result, which can differ from what's in memory)."""

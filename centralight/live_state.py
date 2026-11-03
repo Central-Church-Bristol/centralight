@@ -27,6 +27,7 @@ class LiveState:
     show: str = ""  # show folder this belongs to
     master: float = 1.0
     blackout: bool = False
+    blackout_by_quit: bool = False  # the Blackout came from quitting with "Turn lights off" (not a person's click)
     house: dict[str, HouseSetting] = field(default_factory=dict)
     base: dict[str, Any] | None = None  # {"input": id, "time": seconds}
     overlays: list[dict[str, Any] | None] = field(default_factory=lambda: [None, None, None, None])
@@ -39,6 +40,7 @@ class LiveState:
             "show": self.show,
             "master": self.master,
             "blackout": self.blackout,
+            "blackout_by_quit": self.blackout_by_quit,
             "house": {k: {"level": v.level, "on": v.on} for k, v in self.house.items()},
             "base": self.base,
             "overlays": self.overlays,
@@ -53,6 +55,7 @@ class LiveState:
         state.show = str(data.get("show") or "")
         state.master = _unit(data.get("master"), 1.0)
         state.blackout = bool(data.get("blackout", False))
+        state.blackout_by_quit = state.blackout and bool(data.get("blackout_by_quit", False))
         house = data.get("house") or {}
         if isinstance(house, dict):
             for key, value in house.items():

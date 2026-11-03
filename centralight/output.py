@@ -246,12 +246,14 @@ class DmxOutputThread:
 
     def set_trim(self, size: int) -> None:
         """The show's lights now need `size` channels (a light was added, or moved up): send that many from now on,
-        straight away and without reopening the port. Outputs that always send all 512 aren't affected."""
+        straight away and without reopening the port. It only grows: a light removed from the show keeps being sent
+        zeros (rather than holding its last colour because nothing reaches it any more). Outputs that always send
+        all 512 aren't affected."""
         with self._cond:
             changed = False
             for name in ("_spec", "_next_spec"):
                 spec = getattr(self, name)
-                if spec is not None and spec.trim is not None and spec.trim != size:
+                if spec is not None and spec.trim is not None and size > spec.trim:
                     setattr(self, name, replace(spec, trim=max(1, int(size))))
                     changed = True
             if changed:

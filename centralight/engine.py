@@ -34,6 +34,7 @@ import numpy as np
 
 from .automations import (
     EVALUATE_EVERY,
+    EVENTS,
     GUI_ACTIONS,
     STARTUP_WINDOW,
     AutomationRunner,
@@ -109,7 +110,8 @@ def _brings_lights_up(command: Any) -> bool:
     if isinstance(command, SendToOverlay):
         return getattr(command, "state", None) != "off"
     if isinstance(command, SetHouse):
-        return command.on is True or (command.on is None and (command.level or 0.0) > 0.0)
+        level_up = command.level is None or command.level > 0.0
+        return (command.on is True and level_up) or (command.on is None and (command.level or 0.0) > 0.0)
     return False
 
 
@@ -277,7 +279,8 @@ class Engine:
         self._blackout_ramp = Ramp(1.0 if live.blackout else 0.0)
         # a Blackout from before the restart (e.g. quit with "Turn lights off") gives way to an automation that
         # brings the lights up, so an unattended Sunday morning isn't left dark
-        self._blackout_restored = bool(live.blackout)
+        self._blackout_restored = bool(live.blackout and live.blackout_by_quit)  # (never one a person clicked)
+        self._blackout_by_quit = self._blackout_restored
         self._house: dict[str, _House] = {}
         self._house_driven: dict[str, str] = {}  # house light id -> the input that set it
         self._sync_house(live.house)
@@ -290,7 +293,7 @@ class Engine:
         self._local_time = local_time
         self._uptime = uptime
         self._runner = AutomationRunner()
-        self._runner.restore(live.automations, wall())
+        self._runner.restore(live.automations, wall(), saved_at=live.saved_at)
         self._first_check = True
         self._woke = False
         self._last_wake: float | None = None
@@ -378,6 +381,7 @@ class Engine:
                 log_exception("engine final tick", exc)
         if lights_off:
             self._blackout = True
+            self._blackout_by_quit = True  # (an automation after the restart may lift this one, not a clicked one)
         return self.live_state()
 
     @property
@@ -401,6 +405,7 @@ class Engine:
             show=self.show.folder,
             master=self._master.target,
             blackout=self._blackout,
+            blackout_by_quit=self._blackout and self._blackout_by_quit,
             house={fid: HouseSetting(h.level.target, h.on) for fid, h in self._house.items()},
             base=base,
             overlays=overlays,
@@ -535,6 +540,7 @@ class Engine:
         elif isinstance(command, SetBlackout):
             target = (not self._blackout) if command.on is None else bool(command.on)
             self._blackout_restored = False  # someone (or an automation) has taken charge of it
+            self._blackout_by_quit = False
             if target != self._blackout or command.instant:
                 self._blackout = target
                 self._blackout_ramp.set(1.0 if target else 0.0, 0.0 if command.instant else BLACKOUT_FADE, now)
@@ -636,9 +642,13 @@ class Engine:
         ran = False
         if events or key != self._auto_key or runner.wants_check(now):
             self._auto_key = key
+            # just after starting, the NDI feeds are still connecting: until they report (or STARTUP_HOLD has
+            # passed) "feed lost" isn't true yet, so automations about feeds wait
+            ndi_known = now >= self._hold_until or (bool(self._ndi_sending) and all(self._ndi_sending.values()))
             situation = Situation(
                 now=wall, local=self._local_time(wall), base=base, overlays=overlays, variables=self._ctx.globals,
                 ndi=dict(self._ndi_sending), blackout=self._blackout, audio=dict(self._ctx.audio), events=frozenset(events),
+                ndi_known=ndi_known,
             )
             self._first_check = False
             self._woke = False
@@ -651,12 +661,14 @@ class Engine:
         return ran
 
     def _do_action(self, who: str, action: dict, now: float) -> None:
+        action = dict(action)
+        phase = action.pop("_phase", "")
         try:
-            self._do_action_now(who, action, now)
+            self._do_action_now(who, action, now, phase)
         except Exception as exc:  # a wrong value in an automation's file must never stop the engine
             log_exception(f"automation {who}: doing {action.get('do')!r}", exc)
 
-    def _do_action_now(self, who: str, action: dict, now: float) -> None:
+    def _do_action_now(self, who: str, action: dict, now: float, phase: str = "") -> None:
         if action.get("do") in GUI_ACTIONS:
             name = self.show.automations[who].name if who in self.show.automations else who
             self.gui_requests.put((name, action))
@@ -665,7 +677,11 @@ class Engine:
         if command is None:
             log_info(f"Automation {who}: couldn't {describe_action(action, self.show)} (is it still there?)", key=f"automation-skip-{who}")
             return
-        if self._blackout and self._blackout_restored and _brings_lights_up(command):
+        automation = self.show.automations.get(who)
+        timed = automation is not None and any(c.get("type") not in EVENTS for c in automation.conditions)
+        if self._blackout and self._blackout_restored and phase == "run" and timed and _brings_lights_up(command):
+            # a lights-off quit's Blackout gives way to a real run of an automation (e.g. Sunday 09:00), not to
+            # "CentraLight starts" or a "when it stops" step
             log_info(f"Automation {who}: lifting the Blackout left from before CentraLight restarted")
             self._apply(SetBlackout(on=False), now)
         self._apply(command, now)
