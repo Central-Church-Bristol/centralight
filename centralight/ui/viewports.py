@@ -4,7 +4,11 @@
   show). Layer / Mask: the mask view tints whatever the element's mask hides in red.
   For a Paint element its shapes have handles: drag the middle to move, a corner to
   resize (Shift keeps the proportions), the round knob to rotate (Shift snaps to 15°).
-  The Rectangle and Ellipse tools draw new shapes (Shift: square / circle).
+  The Rectangle and Ellipse tools draw new shapes (Shift: square / circle). The painting tools
+  (brush, eraser, bucket, gradient, light colour) paint on a Paint element's strokes; in Mask
+  mode, Show and Hide paint the element's mask. The eyedropper picks the brush colour. An
+  Image, Video or NDI element's picture has a gizmo: drag it to move, a corner to scale, the
+  knob to turn it.
 - Result: the whole input, with a strip underneath showing each light's colour,
   worked out exactly as the engine does it.
 
@@ -14,19 +18,34 @@ Both have a Lights toggle that shows or hides the dots, rings and names.
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Mapping
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFontMetrics, QImage, QPainter, QPen, QPixmap, QTransform
-from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolTip, QVBoxLayout, QWidget
+from PySide6.QtGui import QBrush, QColor, QFontMetrics, QIcon, QImage, QPainter, QPen, QPixmap, QPolygonF, QTransform
+from PySide6.QtWidgets import (
+    QButtonGroup,
+    QColorDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QToolButton,
+    QToolTip,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..model import PATCH_RADIUS, Show
 from ..output import RGB, to_byte
+from ..assets import ASSET_H, ASSET_W
 from ..params import evaluate, expression_of
-from ..step_names import shape_name
-from . import theme
+from ..step_names import element_name, shape_name
+from . import icons, theme
 from .light_view import rgb_colour
+from .widgets import Fader, FlowLayout
 
 HANDLE = 6.0  # handle half-size in pixels
 ROTATE_GAP = 22.0  # how far the rotation knob sits above the shape, in pixels
@@ -187,14 +206,25 @@ class ViewportCanvas(QWidget):
         return best[1] if best else None
 
 
+PAINT_TOOLS = ("brush", "eraser", "bucket", "gradient", "light")  # paint on a Paint element's strokes
+MASK_TOOLS = ("show", "hide")  # paint an element's mask
+BRUSH_TOOLS = ("brush", "eraser", "show", "hide")
+PAINT_VERBS = {"brush": "brush stroke", "eraser": "eraser", "bucket": "bucket fill", "gradient": "gradient",
+               "light": "light colour", "show": "mask: show", "hide": "mask: hide"}
+
+
 class SelectedViewport(ViewportCanvas):
-    """The selected element alone, with shape handles and the shape tools."""
+    """The selected element alone, with shape handles, the shape and painting tools, and (for pictures) a gizmo to
+    move, scale and turn them."""
 
     shape_selected = Signal(str)
     shapes_changing = Signal(str, str, dict)  # element id, shape id, {setting: value} (live while dragging)
     shapes_changed = Signal(str)  # undo text, when a drag ends
     shape_drawn = Signal(str, dict)  # shape type, {x, y, w, h}
     drag_started = Signal()
+    painted = Signal(str, object, str)  # "strokes" or "mask", the painting.Canvas, what was done (for undo)
+    colour_picked = Signal(object)  # (r, g, b) from the eyedropper
+    transform_changing = Signal(str, dict)  # element id, {"transform.x": ...} (live while dragging the gizmo)
 
     def __init__(self, show: Show, parent: QWidget | None = None) -> None:
         super().__init__(show, checkerboard=True, parent=parent)
@@ -203,10 +233,26 @@ class SelectedViewport(ViewportCanvas):
         self.element: Mapping | None = None
         self.selected_shape = ""
         self.time = 0.0  # the element's own time at the playhead (keyframed shapes are drawn there)
+        self.folder = ""  # the show folder (for painted pictures)
+        self.brush_size = 24.0  # radius, in the 640x360 picture's pixels
+        self.brush_softness = 0.5
+        self.brush_colour: tuple[float, float, float] = (1.0, 1.0, 1.0)
+        self.load_picture = lambda _what: None  # the Editor gives: "strokes" / "mask" -> the picture there now
         self._drag: dict | None = None
         self._draw: tuple[QPointF, QPointF] | None = None
+        self._session: dict | None = None  # painting: {"what", "tool", "canvas", "start"}
+        self._preview: QImage | None = None
+        self._preview_is_mask = False
+        self._preview_at = 0.0
+        self._preview_until = 0.0
+        self._pointer: QPointF | None = None
+        self._preview_ctx = None
+        self.setMouseTracking(True)
 
     def set_element(self, element: Mapping | None, selected_shape: str | None) -> None:
+        if self._session is not None and (element is None or self.element is None or element.get("id") != self.element.get("id")):
+            self._session = None
+            self._preview = None
         self.element = element
         self.selected_shape = selected_shape or ""
         mask = element.get("mask") if element is not None else None
@@ -262,7 +308,59 @@ class SelectedViewport(ViewportCanvas):
 
     # ------------------------------------------------------------ drawing
 
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._pointer = None
+        self.update()
+        super().leaveEvent(event)
+
     def paint_overlay(self, painter: QPainter, canvas: QRectF) -> None:
+        if self._preview is not None:  # what's being painted, until the renderer catches up
+            painter.save()
+            painter.setClipRect(canvas)
+            if self._checker is not None:  # start clean: the renderer's own (older) picture and tint are under here
+                painter.fillRect(canvas, self._checker)
+            if self._preview_is_mask:
+                if self._image is not None and not self._image.isNull():
+                    painter.drawImage(canvas, self._image)
+                painter.drawImage(canvas, self._preview)
+            else:
+                painter.drawImage(canvas, self._preview)
+            if self._lights:
+                self._paint_lights(painter, canvas)
+            painter.restore()
+        tool = self.painting_tool()
+        if tool in BRUSH_TOOLS and self._pointer is not None and canvas.contains(self._pointer):
+            radius = self.brush_size * canvas.width() / ASSET_W
+            pen = QPen(QColor("#FFFFFF"), 1, Qt.PenStyle.DashLine)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(self._pointer, radius, radius)
+        if self._session is not None and self._session["tool"] == "gradient" and "end" in self._session:
+            pen = QPen(QColor(theme.ACCENT), 1.5)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            start, end = self._session["start"], self._session["end"]
+            if self._session.get("radial"):
+                radius = math.hypot(end.x() - start.x(), end.y() - start.y())
+                painter.drawEllipse(start, radius, radius)
+            painter.drawLine(start, end)
+        if self._is_picture() and self.tool == "select" and not self.mask_mode:
+            points = self.picture_corners()
+            fill = QColor(theme.ACCENT if self._picture_editable() else theme.TEXT_3)
+            pen = QPen(fill, 1.4)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPolygon(QPolygonF([points[k] for k in ("tl", "tr", "br", "bl")]))
+            top_mid = (points["tl"] + points["tr"]) / 2
+            painter.drawLine(top_mid, points["rotate"])
+            painter.setPen(QPen(QColor(theme.ACCENT_TEXT), 1))
+            painter.setBrush(fill)
+            for key in ("tl", "tr", "br", "bl"):
+                p = points[key]
+                painter.drawRect(QRectF(p.x() - HANDLE / 2 - 1, p.y() - HANDLE / 2 - 1, HANDLE + 2, HANDLE + 2))
+            painter.drawEllipse(points["rotate"], HANDLE * 0.9, HANDLE * 0.9)
         if self.mask_mode:
             return
         for shape in self.shapes():
@@ -311,10 +409,262 @@ class SelectedViewport(ViewportCanvas):
 
     # ------------------------------------------------------------ mouse
 
+    # ------------------------------------------------------------ painting
+
+    def painting_tool(self) -> str:
+        """The tool that paints right now ("" = none): strokes on a Paint element, or the mask's brushes."""
+        if self.element is None:
+            return ""
+        if self.mask_mode:
+            return self.tool if self.tool in MASK_TOOLS else ""
+        return self.tool if self.tool in PAINT_TOOLS and self._is_paint() else ""
+
+    def to_picture(self, point: QPointF, what: str) -> tuple[float, float]:
+        """A point on the view -> pixels of the 640x360 picture being painted. Masks are on the screen; strokes
+        are the element's own picture, so its move / scale / turn is undone first."""
+        fx, fy = self.to_fraction(point)
+        x, y = fx * ASSET_W, fy * ASSET_H
+        if what == "mask" or self.element is None:
+            return x, y
+        t = self.time
+        cx = evaluate((self.element.get("transform") or {}).get("x", 0.5), t, 0.5) * ASSET_W
+        cy = evaluate((self.element.get("transform") or {}).get("y", 0.5), t, 0.5) * ASSET_H
+        scale = max(1e-4, evaluate((self.element.get("transform") or {}).get("scale", 1.0), t, 1.0))
+        angle = math.radians(evaluate((self.element.get("transform") or {}).get("rotation", 0.0), t, 0.0))
+        dx, dy = x - cx, y - cy
+        cos_a, sin_a = math.cos(-angle), math.sin(-angle)
+        rx, ry = dx * cos_a - dy * sin_a, dx * sin_a + dy * cos_a
+        return rx / scale + ASSET_W / 2, ry / scale + ASSET_H / 2
+
+    def _start_painting(self, tool: str, point: QPointF) -> None:
+        from ..painting import Canvas
+
+        what = "mask" if tool in MASK_TOOLS else "strokes"
+        start = self.load_picture(what)
+        self._session = {"what": what, "tool": tool, "canvas": Canvas(mask=what == "mask", start=start), "start": point}
+        canvas = self._session["canvas"]
+        x, y = self.to_picture(point, what)
+        if tool in BRUSH_TOOLS:
+            mode = {"brush": "paint", "eraser": "erase"}.get(tool, tool)
+            canvas.stroke_to(x, y, self.brush_size, self.brush_softness, self.brush_colour, mode=mode)
+        elif tool == "bucket":
+            canvas.bucket(x, y, self.brush_colour)
+            self._finish_painting()
+            return
+        elif tool == "light":
+            area = self._light_area(point)
+            if area is None:
+                self._session = None
+                return
+            canvas.fill_area(area, self.brush_colour)
+            self._finish_painting()
+            return
+        self._update_preview(force=True)
+
+    def _light_area(self, point: QPointF):
+        """The patch of the (element's own) picture that the light under the pointer follows, or None."""
+        import cv2
+        import numpy as np
+
+        from ..sampler import Sampler
+
+        fx, fy = self.to_fraction(point)
+        sampler = Sampler(self._show.fixtures, ASSET_W, ASSET_H)
+        px, py = int(min(ASSET_W - 1, max(0, fx * ASSET_W))), int(min(ASSET_H - 1, max(0, fy * ASSET_H)))
+        index = int(sampler.owner[py, px])
+        if index < 0:
+            return None
+        area = (sampler.owner == index).astype(np.uint8)
+        transform = self.element.get("transform") if self.element is not None else None
+        if hasattr(transform, "get") and transform:  # the patch, seen in the element's own picture
+            t = self.time
+            matrix = cv2.getRotationMatrix2D((ASSET_W / 2.0, ASSET_H / 2.0), -evaluate(transform.get("rotation", 0.0), t, 0.0),
+                                             max(1e-4, evaluate(transform.get("scale", 1.0), t, 1.0)))
+            matrix[0, 2] += (evaluate(transform.get("x", 0.5), t, 0.5) - 0.5) * ASSET_W
+            matrix[1, 2] += (evaluate(transform.get("y", 0.5), t, 0.5) - 0.5) * ASSET_H
+            area = cv2.warpAffine(area, cv2.invertAffineTransform(matrix), (ASSET_W, ASSET_H), flags=cv2.INTER_NEAREST)
+        return area > 0
+
+    def _continue_painting(self, point: QPointF, modifiers) -> None:
+        session = self._session
+        tool = session["tool"]
+        if tool in BRUSH_TOOLS:
+            x, y = self.to_picture(point, session["what"])
+            mode = {"brush": "paint", "eraser": "erase"}.get(tool, tool)
+            session["canvas"].stroke_to(x, y, self.brush_size, self.brush_softness, self.brush_colour, mode=mode)
+            self._update_preview()
+        elif tool == "gradient":
+            session["end"] = point
+            session["radial"] = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+            self.update()
+
+    def _finish_painting(self, point: QPointF | None = None, modifiers=None) -> None:
+        session = self._session
+        if session is None:
+            return
+        canvas = session["canvas"]
+        if session["tool"] == "gradient":
+            end = point if point is not None else session.get("end", session["start"])
+            x0, y0 = self.to_picture(session["start"], "strokes")
+            x1, y1 = self.to_picture(end, "strokes")
+            if math.hypot(x1 - x0, y1 - y0) < 2:
+                self._session = None
+                self._preview = None
+                self.update()
+                return
+            radial = bool(modifiers & Qt.KeyboardModifier.ShiftModifier) if modifiers is not None else session.get("radial", False)
+            canvas.gradient(x0, y0, x1, y1, self.brush_colour, radial=radial)
+        canvas.end_stroke()
+        if canvas.changed:
+            # show the finished picture until the renderer has drawn it from the new file
+            self._update_preview(force=True)
+            self._preview_until = time.monotonic() + 0.4
+            self._session = None
+            self.painted.emit(session["what"], canvas, PAINT_VERBS.get(session["tool"], "painting"))
+        else:
+            self._session = None
+            self._preview = None
+        self.update()
+
+    def drop_preview(self) -> None:
+        """The view now has a picture drawn from the show as it is (e.g. drawn on the spot): no preview needed."""
+        if self._session is None:
+            self._preview = None
+            self._preview_until = 0.0
+            self.update()
+
+    def _update_preview(self, force: bool = False) -> None:
+        """Show the picture being painted straight away (at most ~30 times a second)."""
+        import numpy as np
+
+        now = time.monotonic()
+        if not force and now - self._preview_at < 1 / 30:
+            return
+        self._preview_at = now
+        session = self._session
+        if session is None or self.element is None:
+            return
+        canvas = session["canvas"]
+        self._preview_is_mask = session["what"] == "mask"
+        if session["what"] == "mask":
+            self._preview = mask_tint(np.clip(canvas.data * 255.0 + 0.5, 0, 255).astype(np.uint8))
+        else:
+            from ..elements import RenderContext, finish_layer, render_paint
+
+            if self._preview_ctx is None:
+                self._preview_ctx = RenderContext(ASSET_W, ASSET_H)
+            ctx = self._preview_ctx
+            ctx.folder = self.folder
+            ctx.time = self.time
+            strokes = np.ascontiguousarray(canvas.data.transpose(2, 0, 1))
+            layer = render_paint(self.element, ctx, strokes_layer=strokes)
+            if layer is not None:
+                layer = finish_layer(self.element, layer, ctx)
+                rgba = np.clip(layer.transpose(1, 2, 0) * 255.0 + 0.5, 0, 255).astype(np.uint8)
+                self._preview = rgba_image(np.ascontiguousarray(rgba))
+        self.update()
+
+    def set_image(self, image: QImage | None, tint: QImage | None = None) -> None:
+        if self._session is None and time.monotonic() >= self._preview_until:
+            self._preview = None  # the renderer has caught up with the painting
+        super().set_image(image, tint)
+
+    def _pick_colour(self, point: QPointF) -> None:
+        image = self._preview or self._image
+        if image is None or image.isNull():
+            return
+        fx, fy = self.to_fraction(point)
+        x = int(min(image.width() - 1, max(0, fx * image.width())))
+        y = int(min(image.height() - 1, max(0, fy * image.height())))
+        colour = image.pixelColor(x, y)
+        if colour.alpha() == 0:
+            return
+        alpha = colour.alphaF()  # the view's pictures are premultiplied: straight colour, please
+        self.colour_picked.emit(tuple(min(1.0, c / alpha) for c in (colour.redF(), colour.greenF(), colour.blueF())))
+
+    # ------------------------------------------------------------ the picture gizmo (Image, Video, NDI)
+
+    def _is_picture(self) -> bool:
+        return self.element is not None and self.element.get("kind") in ("image", "video", "ndi")
+
+    def picture_corners(self) -> dict[str, QPointF]:
+        """The picture's outline on the view (after its move / scale / turn), its corners and its turn handle."""
+        canvas = self.canvas_rect()
+        transform = self.element.get("transform") if self.element is not None else None
+        transform = transform if hasattr(transform, "get") else {}
+        t = self.time
+        cx = canvas.left() + evaluate(transform.get("x", 0.5), t, 0.5) * canvas.width()
+        cy = canvas.top() + evaluate(transform.get("y", 0.5), t, 0.5) * canvas.height()
+        scale = evaluate(transform.get("scale", 1.0), t, 1.0)
+        rotation = evaluate(transform.get("rotation", 0.0), t, 0.0)
+        hw, hh = canvas.width() * scale / 2, canvas.height() * scale / 2
+        mapping = self._transform(QPointF(cx, cy), rotation)
+        points = {key: mapping.map(QPointF(sx * hw, sy * hh)) for key, (sx, sy) in
+                  {"tl": (-1, -1), "tr": (1, -1), "br": (1, 1), "bl": (-1, 1)}.items()}
+        points["rotate"] = mapping.map(QPointF(0.0, -hh - ROTATE_GAP))
+        points["centre"] = QPointF(cx, cy)
+        return points
+
+    def _picture_editable(self) -> bool:
+        transform = self.element.get("transform") if self.element is not None else None
+        transform = transform if hasattr(transform, "get") else {}
+        return not any(expression_of(transform.get(key)) for key in ("x", "y", "scale", "rotation"))
+
+    def _begin_picture_drag(self, point: QPointF) -> bool:
+        if not self._is_picture() or self.tool != "select" or self.mask_mode:
+            return False
+        points = self.picture_corners()
+        mode = None
+        for key in ("rotate", "tl", "tr", "br", "bl"):
+            p = points[key]
+            if math.hypot(p.x() - point.x(), p.y() - point.y()) <= HANDLE + 4:
+                mode = key
+                break
+        if mode is None:
+            outline = QPolygonF([points[k] for k in ("tl", "tr", "br", "bl")])
+            if not outline.containsPoint(point, Qt.FillRule.OddEvenFill):
+                return False
+            mode = "move"
+        if not self._picture_editable():
+            QToolTip.showText(self.mapToGlobal(point.toPoint()), "A formula places this picture: change it in the details panel", self)
+            return True
+        transform = self.element.get("transform") if hasattr(self.element.get("transform"), "get") else {}
+        t = self.time
+        self._drag = {"picture": True, "mode": mode, "start": point, "centre": points["centre"],
+                      "x": evaluate(transform.get("x", 0.5), t, 0.5), "y": evaluate(transform.get("y", 0.5), t, 0.5),
+                      "scale": evaluate(transform.get("scale", 1.0), t, 1.0),
+                      "distance": max(4.0, math.hypot(point.x() - points["centre"].x(), point.y() - points["centre"].y()))}
+        self.drag_started.emit()
+        return True
+
+    def _picture_values(self, point: QPointF, shift: bool) -> dict:
+        drag = self._drag
+        canvas = self.canvas_rect()
+        centre: QPointF = drag["centre"]
+        if drag["mode"] == "move":
+            delta = point - drag["start"]
+            return {"transform.x": drag["x"] + delta.x() / canvas.width(), "transform.y": drag["y"] + delta.y() / canvas.height()}
+        if drag["mode"] == "rotate":
+            angle = math.degrees(math.atan2(point.y() - centre.y(), point.x() - centre.x())) + 90.0
+            if shift:
+                angle = round(angle / 15.0) * 15.0
+            return {"transform.rotation": round(((angle + 180.0) % 360.0) - 180.0, 2)}
+        distance = math.hypot(point.x() - centre.x(), point.y() - centre.y())
+        return {"transform.scale": round(min(4.0, max(0.05, drag["scale"] * distance / drag["distance"])), 4)}
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() != Qt.MouseButton.LeftButton:
             return super().mousePressEvent(event)
         point = event.position()
+        if self.tool == "dropper" and self.element is not None:
+            self._pick_colour(point)
+            return
+        tool = self.painting_tool()
+        if tool:
+            self._start_painting(tool, point)
+            return
+        if self._begin_picture_drag(point):
+            return
         if self.mask_mode:
             light = self.light_at(point)
             if light is not None:
@@ -359,6 +709,15 @@ class SelectedViewport(ViewportCanvas):
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         point = event.position()
+        self._pointer = point
+        if self._session is not None:
+            self._continue_painting(point, event.modifiers())
+            return
+        if self.painting_tool() in BRUSH_TOOLS:
+            self.update()  # the brush's outline follows the pointer
+        if self._drag is not None and self._drag.get("picture"):
+            self.transform_changing.emit(str(self.element.get("id")), self._picture_values(point, bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)))
+            return
         if self._draw is not None:
             self._draw = (self._draw[0], self._constrained(self._draw[0], point, event.modifiers()))
             self.update()
@@ -372,6 +731,15 @@ class SelectedViewport(ViewportCanvas):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if self._session is not None:
+            self._finish_painting(event.position(), event.modifiers())
+            return
+        if self._drag is not None and self._drag.get("picture"):
+            mode = self._drag["mode"]
+            self._drag = None
+            name = element_name(self.element) if self.element is not None else "picture"
+            self.shapes_changed.emit(f"{'Move' if mode == 'move' else 'Turn' if mode == 'rotate' else 'Resize'} {name}")
             return
         if self._draw is not None:
             start, end = self._draw
@@ -434,6 +802,19 @@ class SelectedViewport(ViewportCanvas):
         return {"x": fx, "y": fy, "w": max(width, 2.0) / canvas.width(), "h": max(height, 2.0) / canvas.height()}
 
     def _update_cursor(self, point: QPointF) -> None:
+        if self.painting_tool() or self.tool == "dropper":
+            self.setCursor(Qt.CursorShape.CrossCursor)
+            return
+        if self._is_picture() and self.tool == "select" and not self.mask_mode:
+            points = self.picture_corners()
+            for key in ("rotate", "tl", "tr", "br", "bl"):
+                p = points[key]
+                if math.hypot(p.x() - point.x(), p.y() - point.y()) <= HANDLE + 4:
+                    self.setCursor(Qt.CursorShape.CrossCursor if key == "rotate" else Qt.CursorShape.SizeFDiagCursor)
+                    return
+            outline = QPolygonF([points[k] for k in ("tl", "tr", "br", "bl")])
+            self.setCursor(Qt.CursorShape.SizeAllCursor if outline.containsPoint(point, Qt.FillRule.OddEvenFill) else Qt.CursorShape.ArrowCursor)
+            return
         if self.mask_mode:
             self.setCursor(Qt.CursorShape.PointingHandCursor if self.light_at(point) else Qt.CursorShape.ArrowCursor)
             return
@@ -547,52 +928,139 @@ class ViewportPanel(QFrame):
         self.lights_toggled.emit(on)
 
 
+def _tool_icon(draw, tip: str) -> QToolButton:
+    button = QToolButton()
+    button.setObjectName("ToolIcon")
+    button.setCheckable(True)
+    button.setIcon(icons.line_icon(draw, theme.TEXT_2, theme.ACCENT_TEXT))
+    button.setToolTip(tip)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    return button
+
+
 class SelectedPanel(ViewportPanel):
     mode_changed = Signal(bool)  # mask mode on?
 
     def __init__(self, canvas: SelectedViewport, parent: QWidget | None = None) -> None:
         super().__init__("Selected", canvas, parent)
         self.layer = _toggle("Layer", "The element itself", True)
-        self.mask = _toggle("Mask", "What the element's mask hides (red). Click a light's dot to tick or untick it.")
+        self.mask = _toggle("Mask", "What the element's mask hides (red). Click a light's dot to tick or untick it, "
+                                    "or paint with Show and Hide.")
         modes = QButtonGroup(self)
         modes.setExclusive(True)
         modes.addButton(self.layer)
         modes.addButton(self.mask)
         self.mask.toggled.connect(self._mask_mode)
-        self.select_tool = _toggle("Select", "Select, move, resize and rotate shapes", True)
+        self.select_tool = _toggle("Select", "Select, move, resize and rotate shapes (or the picture of an Image, Video or NDI element)", True)
         self.rect_tool = _toggle("Rectangle", "Draw a rectangle (Shift: square)")
         self.ellipse_tool = _toggle("Ellipse", "Draw an ellipse (Shift: circle)")
-        tools = QButtonGroup(self)
-        tools.setExclusive(True)
-        for button, tool in ((self.select_tool, "select"), (self.rect_tool, "rect"), (self.ellipse_tool, "ellipse")):
-            tools.addButton(button)
+        self.brush_tool = _tool_icon(icons.draw_brush, "Brush: paint on this Paint element")
+        self.eraser_tool = _tool_icon(icons.draw_eraser, "Eraser: rub out painting")
+        self.bucket_tool = _tool_icon(icons.draw_bucket, "Bucket: fill an area of the same colour")
+        self.gradient_tool = _tool_icon(icons.draw_gradient, "Gradient: drag from where the colour starts to where it's gone (Shift: round)")
+        self.light_tool = _tool_icon(icons.draw_bulb, "Light colour: click a light's dot to fill the patch it follows")
+        self.dropper_tool = _tool_icon(icons.draw_dropper, "Eyedropper: pick the brush colour from the picture")
+        self.lights_tool = _toggle("Lights", "Click a light's dot to tick or untick it", True)
+        self.show_tool = _toggle("Show", "Paint where the element shows")
+        self.hide_tool = _toggle("Hide", "Paint where the element is hidden")
+        self.tools = QButtonGroup(self)
+        self.tools.setExclusive(True)
+        self._layer_tools = ((self.select_tool, "select"), (self.rect_tool, "rect"), (self.ellipse_tool, "ellipse"),
+                             (self.brush_tool, "brush"), (self.eraser_tool, "eraser"), (self.bucket_tool, "bucket"),
+                             (self.gradient_tool, "gradient"), (self.light_tool, "light"), (self.dropper_tool, "dropper"))
+        self._mask_tools = ((self.lights_tool, "lights"), (self.show_tool, "show"), (self.hide_tool, "hide"))
+        for button, tool in self._layer_tools + self._mask_tools:
+            self.tools.addButton(button)
             button.toggled.connect(lambda on, t=tool: on and self._tool(t))
         self.toolbar.insertWidget(1, self.layer)
         self.toolbar.insertWidget(2, self.mask)
-        tools_row = QHBoxLayout()  # a second row, so the panel stays narrow enough for small windows
-        tools_row.setSpacing(6)
-        for button in (self.select_tool, self.rect_tool, self.ellipse_tool):
+        tools_box = QWidget()
+        tools_row = FlowLayout(tools_box, spacing=6)  # wraps onto a second line when the panel is narrow
+        for button, _tool in self._layer_tools + self._mask_tools:
             tools_row.addWidget(button)
-        tools_row.addStretch(1)
-        self.layout_.insertLayout(1, tools_row)
+        self.layout_.insertWidget(1, tools_box)
+        # the brush's size, softness and colour (shown while a painting tool is picked)
+        self.size = Fader()
+        self.size.setRange(1, 120)
+        self.size.setValue(round(canvas.brush_size))
+        self.size.setToolTip("Brush size")
+        self.size.setMinimumWidth(60)
+        self.size.valueChanged.connect(lambda value: setattr(canvas, "brush_size", float(value)))
+        self.softness = Fader()
+        self.softness.setRange(0, 100)
+        self.softness.setValue(round(canvas.brush_softness * 100))
+        self.softness.setToolTip("How soft the brush's edge is")
+        self.softness.setMinimumWidth(60)
+        self.softness.valueChanged.connect(lambda value: setattr(canvas, "brush_softness", value / 100.0))
+        self.colour = QToolButton()
+        self.colour.setObjectName("BrushColour")
+        self.colour.setToolTip("Brush colour")
+        self.colour.clicked.connect(self._choose_colour)
+        self.options = QWidget()
+        options = QHBoxLayout(self.options)
+        options.setContentsMargins(0, 0, 0, 0)
+        options.setSpacing(6)
+        size_label = QLabel("Size")
+        size_label.setObjectName("RowDetail")
+        soft_label = QLabel("Soft")
+        soft_label.setObjectName("RowDetail")
+        options.addWidget(size_label)
+        options.addWidget(self.size, 1)
+        options.addWidget(soft_label)
+        options.addWidget(self.softness, 1)
+        options.addWidget(self.colour)
+        self.layout_.insertWidget(2, self.options)
+        canvas.colour_picked.connect(self.set_brush_colour)
+        self.set_brush_colour(canvas.brush_colour)
+        self._paint_element = False
+        self._sync_tools()
+
+    def set_brush_colour(self, rgb) -> None:
+        canvas: SelectedViewport = self.canvas  # type: ignore[assignment]
+        canvas.brush_colour = tuple(float(c) for c in rgb)
+        swatch = QPixmap(18, 18)
+        swatch.fill(rgb_colour(canvas.brush_colour))
+        self.colour.setIcon(QIcon(swatch))
+
+    def _choose_colour(self) -> None:
+        canvas: SelectedViewport = self.canvas  # type: ignore[assignment]
+        chosen = QColorDialog.getColor(rgb_colour(canvas.brush_colour), self, "Brush colour")
+        if chosen.isValid():
+            self.set_brush_colour((chosen.redF(), chosen.greenF(), chosen.blueF()))
 
     def _mask_mode(self, on: bool) -> None:
         canvas: SelectedViewport = self.canvas  # type: ignore[assignment]
         canvas.mask_mode = on
-        for button in (self.select_tool, self.rect_tool, self.ellipse_tool):
-            button.setEnabled(not on and canvas._is_paint())
+        (self.lights_tool if on else self.select_tool).setChecked(True)
+        self._sync_tools()
         canvas.update()
         self.mode_changed.emit(on)
 
     def _tool(self, tool: str) -> None:
         canvas: SelectedViewport = self.canvas  # type: ignore[assignment]
         canvas.tool = tool
+        self._sync_tools()
+        canvas.update()
+
+    def _sync_tools(self) -> None:
+        mask = self.mask.isChecked()
+        paint = self._paint_element
+        for button, tool in self._layer_tools:
+            button.setVisible(not mask)
+            button.setEnabled(paint or tool in ("select", "dropper"))
+        for button, _tool in self._mask_tools:
+            button.setVisible(mask)
+        canvas: SelectedViewport = self.canvas  # type: ignore[assignment]
+        self.options.setVisible(canvas.tool in BRUSH_TOOLS + ("bucket", "gradient", "light"))
+        self.colour.setVisible(canvas.tool in ("brush", "bucket", "gradient", "light"))
 
     def set_paint_tools(self, enabled: bool) -> None:
-        for button in (self.select_tool, self.rect_tool, self.ellipse_tool):
-            button.setEnabled(enabled and not self.mask.isChecked())
-        if not enabled:
+        """Shapes and painting are for Paint elements (Select and the eyedropper work for them all)."""
+        self._paint_element = enabled
+        canvas: SelectedViewport = self.canvas  # type: ignore[assignment]
+        if not enabled and canvas.tool in ("rect", "ellipse") + PAINT_TOOLS:
             self.select_tool.setChecked(True)
+        self._sync_tools()
 
 
 class ResultPanel(ViewportPanel):

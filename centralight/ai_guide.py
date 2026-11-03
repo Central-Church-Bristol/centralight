@@ -161,13 +161,21 @@ def input_schema(show: Show) -> dict[str, Any]:
         properties = {
             "id": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$", "description": "Unique within the input, e.g. E1"},
             "kind": {"const": kind, "description": label},
-            "mask": {"type": "object", "description": "Lights this element leaves alone",
-                     "properties": {"exclude": {"type": "array", "items": {"enum": lights}, "uniqueItems": True}}},
+            "mask": {"type": "object", "description": "What this element leaves alone: lights, and a painted mask",
+                     "properties": {"exclude": {"type": "array", "items": {"enum": lights}, "uniqueItems": True},
+                                    "paint": {"type": "string", "pattern": "^masks/[0-9a-f]{12}\\.png$",
+                                              "description": "A mask painted in the Editor (white shows, black hides)"}}},
+            "start": {"type": "number", "minimum": 0, "description": "Timed inputs: when it starts (seconds of the input)"},
+            "end": {"type": "number", "minimum": 0, "description": "Timed inputs: when it ends"},
+            "in": {"$ref": "#/$defs/element_transition", "description": "Timed inputs: how it appears"},
+            "out": {"$ref": "#/$defs/element_transition", "description": "Timed inputs: how it goes"},
             **_nested(element_specs(kind)),
         }
         if kind == "paint":
             properties["shapes"] = {"type": "array", "items": {"type": "object", "required": ["id", "type"],
                                                                "properties": {"id": {"type": "string"}, **_nested(SHAPE)}}}
+            properties["strokes"] = {"type": "string", "pattern": "^paint/[0-9a-f]{12}\\.png$",
+                                     "description": "Brush painting made in the Editor (between the fill and the shapes)"}
         element_kinds.append({"type": "object", "required": ["id", "kind"], "properties": properties})
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -182,7 +190,9 @@ def input_schema(show: Show) -> dict[str, Any]:
             "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$", "description": "Lower case, digits and hyphens; also the file name"},
             "name": {"type": "string", "description": "Shown on its Dashboard tile"},
             "colour": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$", "description": "Its tile's colour tag"},
-            "infinite": {"type": "boolean", "description": "true (the default): plays until something replaces it"},
+            "infinite": {"type": "boolean", "description": "true (the default): plays until something replaces it; false: timed"},
+            "length": {"type": "number", "exclusiveMinimum": 0, "description": "Timed inputs: how long it lasts, in seconds"},
+            "end": {"enum": ["hold", "loop", "stop"], "description": "Timed inputs: what happens at the end"},
             "transition": {"type": "object", "description": "How it appears when sent to Base or switched on in an overlay",
                            "properties": _nested(TRANSITION)},
             "hotkey": {"type": "string", "description": "A key that sends it to Base, e.g. F5"},
@@ -198,6 +208,9 @@ def input_schema(show: Show) -> dict[str, Any]:
                        "items": {"type": "array", "items": {"oneOf": element_kinds}}},
         },
         "$defs": {
+            "element_transition": {"type": "object", "properties": {
+                "kind": {"enum": [k for k in TRANSITION_KINDS if k != "cut"]},
+                "duration": {"type": "number", "exclusiveMinimum": 0}}},
             "keyframes": {"type": "object", "required": ["keys"], "properties": {
                 "keys": {"type": "array", "items": {"type": "array", "minItems": 2, "maxItems": 3,
                                                     "description": "[seconds, value, \"smooth\" | \"linear\" | \"hold\"]"}},
@@ -325,6 +338,11 @@ def guide_text(show: Show, full: bool = True) -> str:
         "`file`: a video inside the show folder, e.g. `media/candles.mp4`. It loops for as long as the element lasts; "
         "`speed` plays it faster or slower.",
         _table(_spec_rows(tuple(s for s in element_specs("video") if s.path in ("file", "speed", "blur", "transform.fit")))),
+        "### Painting (made in the Editor)",
+        "A Paint element can have `strokes`: `paint/<code>.png`, brush painting made in the Editor, drawn between its "
+        "fill and its shapes. Any element can have a painted mask, `\"mask\": {\"paint\": \"masks/<code>.png\"}` (white "
+        "shows the element, black hides it), as well as `exclude`. These files are made by CentraLight: keep them as "
+        "they are when you edit an input, and don't make up new names.",
         "`blur` (NDI, Image and Video): every light follows the same small patch of the picture around its dot; blur makes "
         "the lights average more of this element's picture, for calmer colours (100 % = the whole picture's average). "
         "It only softens this element, so a sharp Paint shape on another track stays sharp.",

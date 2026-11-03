@@ -241,6 +241,28 @@ QToolButton#TileIcon {
     border-radius: 6px;
     padding: 1px;
 }
+QToolButton#ToolIcon {
+    background: transparent;
+    border: 1px solid @border;
+    border-radius: 6px;
+    padding: 3px;
+}
+QToolButton#ToolIcon:hover {
+    border-color: @border_strong;
+}
+QToolButton#ToolIcon:checked {
+    background: @accent;
+    border-color: @accent;
+}
+QToolButton#ToolIcon:disabled {
+    border-color: transparent;
+}
+QToolButton#BrushColour {
+    background: transparent;
+    border: 1px solid @border_strong;
+    border-radius: 6px;
+    padding: 2px;
+}
 QToolButton#KeyButton {
     background: transparent;
     border: 1px solid transparent;

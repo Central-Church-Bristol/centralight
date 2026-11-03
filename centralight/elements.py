@@ -28,7 +28,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from .compositor import blur, direction_ramp, from_image, radial_ramp, scale_alpha, solid_layer, transparent, warp
+from .compositor import blur, direction_ramp, from_image, over, radial_ramp, scale_alpha, solid_layer, transparent, warp
 from .ndi_source import SourceFrame
 from .params import evaluate, is_dynamic
 
@@ -179,7 +179,9 @@ def _fit_of(element: Mapping[str, Any]) -> str:
 # ---------------------------------------------------------------- paint
 
 
-def render_paint(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | None:
+def render_paint(element: Mapping[str, Any], ctx: RenderContext, strokes_layer: np.ndarray | None = None) -> np.ndarray | None:
+    """Fill, then brush strokes, then shapes. strokes_layer: strokes being painted right now (the Editor's live
+    preview), instead of the element's strokes file."""
     t = ctx.time
     width, height = ctx.width, ctx.height
     fill = element.get("fill")
@@ -201,6 +203,13 @@ def render_paint(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray |
         layer[3].fill(1.0)
     else:
         layer = transparent(height, width)
+    strokes = element.get("strokes")  # brush strokes, bucket fills and gradients painted in the Editor
+    if strokes_layer is not None:
+        layer = over(layer, strokes_layer)
+    elif isinstance(strokes, str) and strokes:
+        painted = painted_layer(media_path(ctx.folder, strokes), ctx)
+        if painted is not None:
+            layer = over(layer, painted)
     shapes = element.get("shapes")
     if isinstance(shapes, Sequence) and not isinstance(shapes, str):
         for shape in shapes:
@@ -419,6 +428,11 @@ def _finish_element(element: Mapping[str, Any], ctx: RenderContext, use_mask: bo
     layer = render_content(element, ctx)
     if layer is None:
         return None
+    return finish_layer(element, layer, ctx, use_mask)
+
+
+def finish_layer(element: Mapping[str, Any], layer: np.ndarray, ctx: RenderContext, use_mask: bool = False) -> np.ndarray:
+    """An element's own picture made ready to blend: moved / scaled / turned, blurred, its opacity, its mask."""
     t = ctx.time
     x = param(element, "transform.x", t, 0.5)
     y = param(element, "transform.y", t, 0.5)
@@ -440,14 +454,75 @@ def _finish_element(element: Mapping[str, Any], ctx: RenderContext, use_mask: bo
 
 
 def element_keep(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | None:
-    """The element's mask (1 = show, 0 = hidden), or None for no mask."""
+    """The element's mask (1 = show, 0 = hidden), or None for no mask: the lights it leaves alone, times the
+    mask painted in the Editor (white shows, black hides)."""
     mask = element.get("mask")
-    if not _is_map(mask) or ctx.sampler is None:
+    if not _is_map(mask):
         return None
+    keep = None
     excluded = mask.get("exclude")
-    if isinstance(excluded, Sequence) and not isinstance(excluded, str) and excluded:
-        return ctx.sampler.keep([str(e) for e in excluded])
-    return None
+    if ctx.sampler is not None and isinstance(excluded, Sequence) and not isinstance(excluded, str) and excluded:
+        keep = ctx.sampler.keep([str(e) for e in excluded])
+    painted = mask.get("paint")
+    if isinstance(painted, str) and painted:
+        grey = painted_mask(media_path(ctx.folder, painted), ctx)
+        if grey is not None:
+            keep = grey if keep is None else keep * grey
+    return keep
+
+
+_painted: _LRU = _LRU(64, 64_000_000)
+
+
+def _painted_key(path: Path, ctx: RenderContext, what: str):
+    try:
+        return (what, str(path), path.stat().st_mtime_ns, ctx.width, ctx.height)
+    except OSError:
+        return None
+
+
+def painted_layer(path: Path | None, ctx: RenderContext) -> np.ndarray | None:
+    """Brush strokes (paint/<code>.png) as a layer this size (remembered)."""
+    import cv2
+
+    from .assets import load_strokes
+
+    key = _painted_key(path, ctx, "strokes") if path is not None else None
+    if key is None:
+        return None
+    cached = _painted.get_fresh(key)
+    if cached is not None:
+        return cached
+    image = load_strokes(path)
+    if image is None:
+        return None
+    if image.shape[:2] != (ctx.height, ctx.width):
+        image = cv2.resize(image, (ctx.width, ctx.height), interpolation=cv2.INTER_AREA)
+    layer = from_image(np.ascontiguousarray(image))
+    _painted.put(key, layer)
+    return layer
+
+
+def painted_mask(path: Path | None, ctx: RenderContext) -> np.ndarray | None:
+    """A painted mask (masks/<code>.png) as 0-1 at this size (remembered)."""
+    import cv2
+
+    from .assets import load_mask
+
+    key = _painted_key(path, ctx, "mask") if path is not None else None
+    if key is None:
+        return None
+    cached = _painted.get_fresh(key)
+    if cached is not None:
+        return cached
+    grey = load_mask(path)
+    if grey is None:
+        return None
+    if grey.shape != (ctx.height, ctx.width):
+        grey = cv2.resize(grey, (ctx.width, ctx.height), interpolation=cv2.INTER_AREA)
+    keep = grey.astype(np.float32) * np.float32(1.0 / 255.0)
+    _painted.put(key, keep)
+    return keep
 
 
 def blend_mode(element: Mapping[str, Any]) -> str:

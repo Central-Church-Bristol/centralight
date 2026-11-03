@@ -99,7 +99,8 @@ def main() -> int:
                 if key == "editor":  # the Editor: an element (with a shape), the NDI element (Blur), the Input tab, the
                     # Globals tab, then a timed input (its timeline, an element with keyframes, its Input tab)
                     window.editor_page.open_input("stage-shapes")
-                    states = ["editor-element", "editor-ndi", "editor-input", "editor-globals", "editor-timed", "editor-timed-input"]
+                    states = ["editor-element", "editor-brush", "editor-ndi", "editor-mask", "editor-input", "editor-globals",
+                              "editor-timed", "editor-timed-input"]
                 for state in states:
                     window.show_page(key)
                     if state == "editor-timed":
@@ -113,9 +114,16 @@ def main() -> int:
                     elif state == "editor-element":
                         window.editor_page.select_element("E2")
                         window.editor_page._shape_from_viewport("S1")
+                    elif state == "editor-brush":  # a painting tool picked: its size, softness and colour show
+                        window.editor_page.selected_panel.brush_tool.setChecked(True)
                     elif state == "editor-ndi":
+                        window.editor_page.selected_panel.select_tool.setChecked(True)
                         window.editor_page.select_element("E1")
+                    elif state == "editor-mask":  # Mask mode, painting with Hide
+                        window.editor_page.selected_panel.mask.setChecked(True)
+                        window.editor_page.selected_panel.hide_tool.setChecked(True)
                     elif state == "editor-input":
+                        window.editor_page.selected_panel.layer.setChecked(True)
                         window.editor_page.select_element("")
                         window.editor_page.details.widget().findChild(QTabWidget).setCurrentIndex(0)
                     elif state == "editor-globals":

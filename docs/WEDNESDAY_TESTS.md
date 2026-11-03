@@ -208,6 +208,18 @@ Worship blue.
       lights follow the video. Try **Speed** and **Blur**. While it plays, glance at Task Manager: CentraLight should
       stay small (note the CPU %).
 
+## 14d. Painting and masks
+
+- [ ] Editor → open **Warm white** → click its Paint element. In the Selected view pick the **Brush**, choose a
+      colour and size under the tools, and paint across the top lights: the lights there take the colour as soon
+      as you let go (if Warm white is on Base). Ctrl+Z takes the stroke away; Ctrl+Shift+Z puts it back.
+- [ ] Try the **Eraser**, the **Bucket** (click an empty area), the **Gradient** (drag across) and **Light colour**
+      (click a light's dot: just that light changes).
+- [ ] **Mask** (top of the Selected view) → **Hide**, paint over half the picture: that half of the element is gone
+      (red in the view). **Show** paints it back.
+- [ ] Click Follow screen's NDI element → **Select**: drag the picture, drag a corner to make it smaller, drag the
+      knob to turn it. The lights follow. Ctrl+Z puts it back.
+
 ## 15. Always running: the tray, a second launch, sleep
 
 - [ ] Close the window (✕): CentraLight keeps running in the tray by the clock (a message says so the first time);

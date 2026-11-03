@@ -353,3 +353,76 @@ def draw_key(painter: QPainter, rect: QRectF, colour: QColor, on: bool) -> None:
     painter.setBrush(colour if on else Qt.BrushStyle.NoBrush)
     painter.drawPath(path)
 
+
+def draw_brush(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) -> None:
+    """A brush: a handle and a rounded tip."""
+    r = _square(rect, 0.16)
+    painter.setPen(_pen(colour, r, 0.11))
+    painter.drawLine(QPointF(r.right(), r.top()), QPointF(r.left() + r.width() * 0.45, r.top() + r.height() * 0.55))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(colour)
+    tip = QPainterPath()
+    tip.moveTo(r.left() + r.width() * 0.42, r.top() + r.height() * 0.5)
+    tip.quadTo(r.left() + r.width() * 0.58, r.top() + r.height() * 0.72, r.left() + r.width() * 0.45, r.bottom())
+    tip.quadTo(r.left(), r.bottom(), r.left(), r.bottom() - r.height() * 0.05)
+    tip.quadTo(r.left() + r.width() * 0.22, r.top() + r.height() * 0.62, r.left() + r.width() * 0.42, r.top() + r.height() * 0.5)
+    painter.drawPath(tip)
+
+
+def draw_eraser(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) -> None:
+    """A tilted block, half filled."""
+    r = _square(rect, 0.16)
+    painter.save()
+    painter.translate(r.center())
+    painter.rotate(-40)
+    w, h = r.width() * 0.95, r.height() * 0.5
+    block = QRectF(-w / 2, -h / 2, w, h)
+    painter.setPen(_pen(colour, r, 0.09))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRoundedRect(block, h * 0.18, h * 0.18)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(colour)
+    painter.drawRoundedRect(QRectF(-w / 2, -h / 2, w * 0.38, h), h * 0.18, h * 0.18)
+    painter.restore()
+
+
+def draw_bucket(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) -> None:
+    """A tipped paint pot and a drop."""
+    r = _square(rect, 0.16)
+    painter.save()
+    painter.translate(r.left() + r.width() * 0.42, r.top() + r.height() * 0.5)
+    painter.rotate(-35)
+    w, h = r.width() * 0.55, r.height() * 0.6
+    painter.setPen(_pen(colour, r, 0.09))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRect(QRectF(-w / 2, -h / 2, w, h))
+    painter.restore()
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(colour)
+    painter.drawEllipse(QPointF(r.right() - r.width() * 0.1, r.bottom() - r.height() * 0.18), r.width() * 0.12, r.width() * 0.12)
+
+
+def draw_gradient(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) -> None:
+    """A square filling from one side."""
+    r = _square(rect, 0.16)
+    painter.setPen(_pen(colour, r, 0.09))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRect(r)
+    painter.setPen(Qt.PenStyle.NoPen)
+    for i in range(4):
+        shade = QColor(colour)
+        shade.setAlphaF(1.0 - i * 0.25)
+        painter.setBrush(shade)
+        painter.drawRect(QRectF(r.left() + r.width() * i / 4, r.top(), r.width() / 4 + 0.5, r.height()))
+
+
+def draw_dropper(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) -> None:
+    """An eyedropper."""
+    r = _square(rect, 0.16)
+    painter.setPen(_pen(colour, r, 0.11))
+    painter.drawLine(QPointF(r.left() + r.width() * 0.1, r.bottom() - r.height() * 0.1),
+                     QPointF(r.left() + r.width() * 0.62, r.top() + r.height() * 0.38))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(colour)
+    painter.drawEllipse(QPointF(r.right() - r.width() * 0.22, r.top() + r.height() * 0.22), r.width() * 0.2, r.width() * 0.2)
+

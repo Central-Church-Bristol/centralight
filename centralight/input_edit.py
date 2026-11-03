@@ -570,6 +570,21 @@ def set_shape_values_at(show: Show, input_id: str, element_id: str, shape_id: st
     return show
 
 
+def set_element_values_at(show: Show, input_id: str, element_id: str, values: dict[str, Any], t: float) -> Show:
+    """Several settings of an element at once (the transform gizmo): keyframed ones get a key at element time
+    t, the others change (keeping an expression, whose `value` they are)."""
+    from .schema import get_path
+
+    for path, value in values.items():
+        found = find_element(show.inputs[input_id], element_id)
+        if found is None:
+            return show
+        raw = thaw(get_path(found[2], path, None))
+        value = round(value, 4) if isinstance(value, float) else value
+        show = set_element_value(show, input_id, element_id, path, with_key(raw, t, value) if is_keyframed(raw) else with_base_value(raw, value))
+    return show
+
+
 def remove_shape(show: Show, input_id: str, element_id: str, shape_id: str) -> Show:
     shapes = [s for s in _shapes(show, input_id, element_id) if s.get("id") != shape_id]
     return set_element_value(show, input_id, element_id, "shapes", shapes or None)

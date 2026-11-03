@@ -30,7 +30,10 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QStacked
 from ..commands import SendToBase, SetSolo
 from ..editor_render import EditorRenderer
 from ..engine import EngineFrame
-from ..input_edit import add_shape, find_element, set_excluded, set_shape_values_at
+from ..assets import MASKS_DIR, PAINT_DIR, load_mask, load_strokes, save_asset
+from ..elements import media_path
+from ..input_edit import add_shape, find_element, set_element_value, set_element_values_at, set_excluded, set_shape_values_at
+from ..log import log_exception
 from ..model import END_LOOP, Input, Show, element_span
 from ..settings import Settings
 from ..step_names import element_name, lights_change_name
@@ -180,6 +183,9 @@ class EditorPage(QWidget):
         self.selected_canvas.shapes_changed.connect(self.document.end_drag)
         self.selected_canvas.shape_drawn.connect(self._shape_drawn)
         self.selected_canvas.light_clicked.connect(self._toggle_light)
+        self.selected_canvas.load_picture = self._picture_now
+        self.selected_canvas.painted.connect(self._painted)
+        self.selected_canvas.transform_changing.connect(self._picture_dragged)
         self.selected_panel.mode_changed.connect(lambda _on: self._request())
         self.palette.element_clicked.connect(self.timeline.add_to_first_empty)
         self.palette.transition_clicked.connect(self.timeline.set_transition_kind)
@@ -277,6 +283,7 @@ class EditorPage(QWidget):
     def _sync_selected_view(self) -> None:
         element = self._element()
         self.selected_canvas.time = self.element_time()
+        self.selected_canvas.folder = self.show_data.folder
         self.selected_canvas.set_element(element, self.shape_id)
         self.selected_panel.set_paint_tools(element is not None and element.get("kind") == "paint")
 
@@ -385,6 +392,43 @@ class EditorPage(QWidget):
             self.selected_panel.select_tool.setChecked(True)
             self._shape_from_viewport(shape_id)
 
+    # ------------------------------------------------------------ painting
+
+    def _picture_now(self, what: str):
+        """The selected element's painted strokes or mask as they are now (None: nothing painted yet)."""
+        element = self._element()
+        if element is None:
+            return None
+        if what == "mask":
+            mask = element.get("mask")
+            name = mask.get("paint") if hasattr(mask, "get") else None
+            path = media_path(self.show_data.folder, name) if isinstance(name, str) else None
+            return load_mask(path) if path is not None else None
+        name = element.get("strokes")
+        path = media_path(self.show_data.folder, name) if isinstance(name, str) else None
+        return load_strokes(path) if path is not None else None
+
+    def _painted(self, what: str, canvas, verb: str) -> None:
+        """A stroke (or fill) ended: save the picture as a new file and point the element at it (one undo step;
+        undo goes back to the file before, exactly)."""
+        element = self._element()
+        folder = self.show_data.folder
+        if element is None or not folder or self.show_data.read_only:
+            return
+        try:
+            name = save_asset(folder, MASKS_DIR if what == "mask" else PAINT_DIR, canvas.to_asset())
+        except (OSError, ValueError) as exc:
+            log_exception("saving painting", exc)
+            return
+        path = "mask.paint" if what == "mask" else "strokes"
+        self.document.apply(set_element_value(self.show_data, self.input_id, self.element_id, path, name),
+                            f"{element_name(element)}: {verb}")
+
+    def _picture_dragged(self, element_id: str, values: dict) -> None:
+        """The gizmo on an Image, Video or NDI element (keyframed settings get a key at the playhead)."""
+        if self.input_id:
+            self.document.preview(set_element_values_at(self.show_data, self.input_id, element_id, values, self.element_time()))
+
     def _toggle_light(self, light_id: str) -> None:
         element = self._element()
         if element is None:
@@ -447,6 +491,7 @@ class EditorPage(QWidget):
         if picture is not None:
             self._renderer.pictures.put(picture)
             self._poll_picture()
+            self.selected_canvas.drop_preview()
 
     def on_enter(self) -> None:
         self._entered = True

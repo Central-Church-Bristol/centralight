@@ -19,8 +19,8 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M5 AI inputs | **done** (3 Nov, 01:55) |
 | Layout positions only + Blur (your change of 3 Nov) | **done** (3 Nov, 02:17) |
 | M6 Timed mode + keyframes (+ video) | **done** (3 Nov, 02:38) |
-| M7 Painting and masks | next |
-| M8 Audio variables | not started |
+| M7 Painting and masks | **done** (3 Nov, 02:50) |
+| M8 Audio variables | next |
 | M9 Polish (launcher .exe, Diagnostics) | not started |
 
 Run all the tests (about three minutes, including the layout check at every scaling) from the CentraLight folder:
@@ -43,6 +43,28 @@ Run all the tests (about three minutes, including the layout check at every scal
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## M7 Painting and masks — done
+
+What's there (the Editor's Selected view and its tools):
+
+- **Painting on a Paint element**: Brush, Eraser, Bucket (fills the area of the same colour around where you click),
+  Gradient (drag from where the colour starts to where it's gone; Shift for a round one) and Light colour (click a
+  light's dot: the patch of picture it follows is filled, so that light gets exactly that colour). Size, softness
+  and colour sit under the tools while one of them is picked; the Eyedropper picks the colour from the picture.
+  Painting sits between the element's fill and its shapes, and follows the element if it's moved or turned.
+- **Painting a mask** (Mask mode, any element): Show and Hide brushes. A painted mask works together with the
+  ticked lights (Lights, as before: click a dot to tick or untick it).
+- What you paint shows straight away while you paint (erasing too), drawn by the same code as the lights.
+- **Each stroke (or fill) is one undo step, and undo is exact**: a finished stroke is saved as a new picture file in
+  the show folder (`paint\<code>.png` or `masks\<code>.png`, named after its contents and never overwritten), and
+  undo just goes back to the file from before. They're in the backups too, and survive a restart.
+- **A gizmo for pictures** (Image, Video and NDI elements, Select tool): drag the picture to move it, a corner to
+  scale it, the knob to turn it (Shift: 15° steps). Keyframed settings get a keyframe at the playhead.
+- The AI guide and `input.schema.json` describe painted strokes and masks (and now also the timed settings).
+- Measured: with the biggest brush (120 px) on a busy Paint element, each pointer move including the live preview
+  takes well under 1/30 s (a test checks it). The engine runs on its own thread, so painting doesn't hold up the
+  lights.
 
 ## M6 Timed mode, keyframes and video — done
 
@@ -475,6 +497,8 @@ Problems the tests found and that are fixed:
   fade, give the last element an out transition.
 - **The Editor's playhead plays** when you open an input, so expressions and videos move as before; pause it to
   put keyframes at a moment.
+- **Painting undo** keeps whole pictures (each stroke a new file named after its contents) rather than the plan's
+  32×32 tiles: it's exact by design, fits the undo history every other edit uses, and a 640×360 picture is small.
 
 ## Problems
 
