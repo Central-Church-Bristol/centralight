@@ -23,7 +23,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M8 Audio variables | **done** (3 Nov, 03:13) |
 | M9 Polish (launcher .exe, Diagnostics) | **done** (3 Nov, 03:54) |
 | A review of the whole app (five reviewers, 46 problems) | **done** (3 Nov: part 1 at 05:21, part 2 at 06:00; 522 tests pass) |
-| Reviews of those fixes (three more rounds, each checking the one before) | **done** (3 Nov, 08:30; 560 tests pass) |
+| Reviews of those fixes (four more rounds, each checking the one before) | **done** (3 Nov, 09:50; 563 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -47,6 +47,22 @@ Run all the tests (about five minutes, including the layout check at every scali
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## A fifth look (3 Nov, morning)
+
+A fifth reviewer checked the fourth round and found one gap, fixed with two tests that fail without it:
+- **The quit's own time is kept in live.json.** The Blackout rule compares a time range with the moment of the
+  "Turn lights off" quit, but CentraLight took that moment from live.json's last save, which the minute save keeps
+  moving. So if CentraLight restarted (a crash, Windows updates, someone restarting it) after Sunday's service range
+  had begun but before its feed came, the range counted as "already on at the quit" and the service stayed dark.
+  Now the quit's time is saved, and carried through later saves, restarts and quits until the Blackout is lifted.
+- It also spotted that the new optional Wednesday check (step 18) didn't say to set the day: a new automation
+  starts as "Sun, 09:00–12:00". Fixed (found here too).
+- **One full test run crashed** (Windows stopped Python, in a window test that passed 25 times on its own and in every
+  other full run). The likeliest cause was in the tests, not the app: their helper for letting Qt catch up never
+  freed the widgets Qt had been asked to delete, so old windows from earlier tests could linger, hidden, with their
+  timers still running. It now frees them as the app's own event loop does. A suspected app-side cause (Python
+  freeing a widget Qt was still using) turned out not to happen with this Qt version; a test now checks that.
 
 ## A fourth look (3 Nov, morning)
 
@@ -639,6 +655,10 @@ Measured (Simulated output, so no lights):
   memory stayed flat (121 MB at the start, 124 MB at the end; the second half averaged only 0.4 MB more than
   the first), and the session log has no errors. The CPU was a little over the 3 %-of-one-core target; M9 brought
   it down to about 1 % (see M9).
+- **A second 3-hour soak** (finished 3 Nov 09:02): the app as it was at 06:00 (after M9 and the first review's
+  fixes) followed a 960×540, 24 fps test feed for 180 minutes. CPU averaged 1.2 % of one core (0.08 % of the PC;
+  worst minute 1.9 %), memory stayed flat (141 MB at the start and at the end, peak 143 MB; the second half no
+  higher than the first), and the session log has no errors.
 
 ### Media Background Pane is only sending one picture per connection
 

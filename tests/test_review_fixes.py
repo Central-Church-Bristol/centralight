@@ -1792,5 +1792,79 @@ class FourthReviewFilesTests(unittest.TestCase):
 
 
 
+# ---------------------------------------------------------------- the fifth review
+
+class FifthReviewAutomationTests(AutomationEngineTestCase):
+    quit_lights_off = ThirdReviewAutomationTests.quit_lights_off
+    make_fed = FourthReviewAutomationTests.make_fed
+    restart = FourthReviewAutomationTests.restart
+    seconds = FourthReviewAutomationTests.seconds
+
+    def minute_save(self) -> LiveState:
+        live = self.engine.live_state()
+        live.saved_at = self.clocks.wall
+        return LiveState.from_dict(json.loads(json.dumps(live.to_dict())))
+
+    def blacked_out_on_sunday_morning(self) -> Engine:
+        service = automation("service", SUNDAY_MORNING + [FEED], WELCOME)
+        self.make_fed(_dt(2026, 11, 7, 22, 0), [service])
+        self.run_until(_dt(2026, 11, 7, 22, 1))
+        live = self.quit_lights_off()  # "Turn lights off" on Saturday at 22:01
+        self.clocks.advance(10 * 3600 + 44 * 60)  # the PC is switched on at 08:45 on Sunday: blacked out
+        engine = self.restart(live)
+        self.run_until(_dt(2026, 11, 8, 9, 3), step=10.0)
+        self.assertTrue(engine._blackout)
+        return engine
+
+    def feed_at_ten_past(self) -> None:
+        self.run_until(_dt(2026, 11, 8, 9, 10), step=10.0)
+        self.feeds.sending[MBP] = True  # Media Background Pane is started at 09:10
+        self.seconds(3)
+        self.assertEqual(len(self.runs("service")), 1)
+
+    def test_a_restart_during_the_service_keeps_the_real_quit_time(self) -> None:
+        self.blacked_out_on_sunday_morning()
+        live = self.minute_save()  # live.json's minute save at 09:03...
+        self.clocks.advance(60)  # ...and CentraLight restarts at 09:04 (a crash, say), before the feed is there
+        engine = self.restart(live)
+        self.feed_at_ten_past()
+        self.assertFalse(engine._blackout)  # the range began after the real quit (Saturday), not the last save
+
+    def test_a_second_lights_off_quit_keeps_the_first_ones_time(self) -> None:
+        self.blacked_out_on_sunday_morning()
+        self.clocks.advance(60)
+        live = self.quit_lights_off()  # Windows restarts for updates at 09:04, quitting with "Turn lights off" again
+        self.clocks.advance(60)
+        engine = self.restart(live)
+        self.feed_at_ten_past()
+        self.assertFalse(engine._blackout)
+
+
+
+class ThrownAwayWidgetsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = qt_app()
+
+    def test_a_thrown_away_widget_lives_until_qt_frees_it(self) -> None:
+        import gc
+
+        import shiboken6
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QComboBox, QWidget
+
+        from centralight.ui.widgets import discard
+
+        panel = QWidget()
+        combo = QComboBox(panel)  # e.g. a drop-down whose own change rebuilt the page it's on
+        discard(panel)
+        del panel
+        gc.collect()  # Python's garbage collector can run at any moment...
+        self.assertTrue(shiboken6.isValid(combo))  # ...but it never frees a widget Qt may still be busy with
+        self.app.sendPostedEvents(None, QEvent.Type.DeferredDelete)  # back in Qt's event loop
+        self.assertFalse(shiboken6.isValid(combo))  # freed then
+
+
+
 if __name__ == "__main__":
     unittest.main()

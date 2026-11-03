@@ -274,9 +274,10 @@ Worship blue.
       Sunday 09:00–12:30 after a quit on Saturday, so an unattended Sunday morning isn't left dark. "CentraLight
       starts", a feed coming back or a whole day such as "Sundays" never lifts it, and a Blackout someone clicks is
       never lifted by an automation.)
-- [ ] Optional, to see that happen: Automation tab → **+ New automation** → **Time of day** starting two minutes from
-      now, for five minutes → **Send an input to Base**: Warm white. Straight away, quit with **Turn lights off** and
-      start again: when the time range begins, the lights come back by themselves. Delete the automation afterwards.
+- [ ] Optional, to see that happen: Automation tab → **+ New automation** → change **Days of the week** to today and
+      **Time of day** to start two minutes from now, for five minutes → **+ Add an action ▾ → Send an input to Base**:
+      Warm white. Straight away, quit with **Turn lights off** and start again: when the time range begins, the
+      lights come back by themselves. Delete the automation afterwards.
 
 ## 19. If the lights behave oddly
 

@@ -42,5 +42,9 @@ def qt_app(brand_fonts: bool = True):
 
 
 def process(app, rounds: int = 3) -> None:
+    """Let Qt catch up, as its event loop would: events, then the widgets waiting to be freed (deleteLater)."""
+    from PySide6.QtCore import QEvent
+
     for _ in range(rounds):
         app.processEvents()
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)

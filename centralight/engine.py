@@ -281,9 +281,10 @@ class Engine:
         # brings the lights up, so an unattended Sunday morning isn't left dark
         self._blackout_restored = bool(live.blackout and live.blackout_by_quit)  # (never one a person clicked)
         self._blackout_by_quit = self._blackout_restored
-        # when that quit was (if live.json doesn't say, at least before this start): only a time range that begins
-        # after it lifts the Blackout
-        self._quit_at = (live.saved_at if live.saved_at > 0 else wall()) if self._blackout_restored else None
+        # when that quit was (an older live.json only says when it was last saved; failing that, at least before this
+        # start): only a time range that begins after it lifts the Blackout
+        quit_at = live.blackout_quit_at if live.blackout_quit_at > 0 else live.saved_at if live.saved_at > 0 else wall()
+        self._quit_at: float | None = quit_at if self._blackout_restored else None
         self._house: dict[str, _House] = {}
         self._house_driven: dict[str, str] = {}  # house light id -> the input that set it
         self._sync_house(live.house)
@@ -388,6 +389,8 @@ class Engine:
             self._blackout = True
             # an automation after the restart may lift a quit's Blackout, never one someone had clicked before
             self._blackout_by_quit = was_by_quit if was_dark else True
+            if not was_dark:
+                self._quit_at = self._wall()  # a new quit Blackout (one left from an earlier quit keeps that quit's time)
         return self.live_state()
 
     @property
@@ -412,6 +415,7 @@ class Engine:
             master=self._master.target,
             blackout=self._blackout,
             blackout_by_quit=self._blackout and self._blackout_by_quit,
+            blackout_quit_at=(self._quit_at or 0.0) if self._blackout and self._blackout_by_quit else 0.0,
             house={fid: HouseSetting(h.level.target, h.on) for fid, h in self._house.items()},
             base=base,
             overlays=overlays,
