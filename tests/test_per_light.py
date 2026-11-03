@@ -485,6 +485,27 @@ class LightsFirstTests(unittest.TestCase):
             folder.cleanup()
 
 
+class QuickTableTests(unittest.TestCase):
+    """Every NDI and video frame is shrunk for the lights: by halving, OpenCV's quickest way (it was most of the CPU
+    the app used after M10). A still picture keeps the one-step shrink, with more detail."""
+
+    def test_moving_pictures_are_halved_and_average_the_same(self) -> None:
+        from centralight.light_elements import _frame_table
+
+        frame = (np.random.default_rng(5).random((540, 960, 3)) * 255).astype(np.uint8)
+        quick, still = AreaTable(frame, quick=True), AreaTable(frame)
+        self.assertEqual((quick.width, quick.height), (240, 135))
+        self.assertEqual((still.width, still.height), (320, 180))
+        ctx = lights_ctx([light("a", 0.3, 0.4), light("b", 0.8, 0.7), light("c", 0.05, 0.1)])
+        for area in (0.25, 0.5, 1.0):
+            np.testing.assert_allclose(light_picture({"kind": "ndi", "area": area}, ctx, quick),
+                                       light_picture({"kind": "ndi", "area": area}, ctx, still), atol=1.5 / 255)
+        sources = StubSources()
+        sources.put("Media Background Pane", frame)
+        table = _frame_table({"kind": "ndi", "source": "Media Background Pane"}, lights_ctx([light("a", 0.5, 0.5)], sources))
+        self.assertEqual(table.width, 240)  # (the NDI frame took the quick way)
+
+
 class M10ReviewTests(unittest.TestCase):
     """What a review of M10 found."""
 

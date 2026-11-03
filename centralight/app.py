@@ -36,12 +36,21 @@ def _prepare_windows_shell() -> None:
         pass
 
 
-def show_to_open(settings: Settings, live: LiveState | None) -> Path:
-    """The show that was loaded last (live.json says which), else the one Settings names, else Central Church."""
-    for candidate in (live.show if live is not None else "", settings.show_folder):
+def show_to_open(settings: Settings, live: LiveState | None, root: Path | None = None) -> Path:
+    """The show that was loaded last (live.json says which), else the one Settings names, else Central Church; if
+    none of those is there any more (deleted, say), the first show there is; only with no show at all is Central
+    Church made afresh."""
+    from .shows import list_shows
+
+    for candidate in (live.show if live is not None else "", settings.show_folder, str(default_show_dir())):
         if candidate and (Path(candidate) / SHOW_FILE).is_file():
             return Path(candidate)
-    return Path(settings.show_folder) if settings.show_folder else default_show_dir()
+    shows = list_shows(root if root is not None else shows_root())
+    if shows:
+        log_info(f"The last show ({(live.show if live is not None else '') or settings.show_folder}) isn't there any more, "
+                 f"so “{shows[0].name}” opens")
+        return Path(shows[0].folder)
+    return default_show_dir()
 
 
 def open_global_automations(root: Path | None = None) -> Show:

@@ -33,6 +33,7 @@ from .model import (
     END_HOLD,
     GLOBAL_TYPES,
     ID_PATTERN,
+    is_safe_id,
     ROLE_COLOUR,
     ROLE_HOUSE,
     ROLES,
@@ -181,9 +182,10 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
         raise InputFileError(f"this input was made by a newer CentraLight (version {version})")
 
     input_id = data.get("id", expected_id)
-    if not isinstance(input_id, str) or not ID_PATTERN.match(input_id):
+    if not is_safe_id(input_id):
         raise InputFileError(
-            f'"id" must be lower-case letters, digits and dashes (like "pillars-pulse"), not {input_id!r}'
+            f'"id" must be lower-case letters, digits and dashes (like "pillars-pulse"), and not a name Windows keeps '
+            f'for a device (like com3 or aux), not {input_id!r}'
         )
     if expected_id is not None and input_id != expected_id:
         raise InputFileError(f'the file is called "{expected_id}.json" but its "id" is "{input_id}"; they must match')
@@ -381,7 +383,7 @@ def layout_from_dict(data: Any, expected_id: str | None = None) -> tuple[Layout,
     if isinstance(version, int) and not isinstance(version, bool) and version > LAYOUT_VERSION:
         raise InputFileError("it was saved by a newer CentraLight")
     layout_id = data.get("id", expected_id)
-    if not isinstance(layout_id, str) or not ID_PATTERN.match(layout_id):
+    if not is_safe_id(layout_id):
         raise InputFileError(f"bad id {layout_id!r}")
     if expected_id is not None and layout_id != expected_id:
         raise InputFileError(f'its id "{layout_id}" doesn\'t match the file name "{expected_id}.json"')
@@ -504,7 +506,7 @@ def automation_from_dict(data: Any, expected_id: str | None = None, scope: str =
     if isinstance(version, int) and not isinstance(version, bool) and version > AUTOMATION_VERSION:
         raise InputFileError("it was saved by a newer CentraLight")
     automation_id = data.get("id", expected_id)
-    if not isinstance(automation_id, str) or not ID_PATTERN.match(automation_id):
+    if not is_safe_id(automation_id):
         raise InputFileError(f"bad id {automation_id!r}")
     if expected_id is not None and automation_id != expected_id:
         raise InputFileError(f'its id "{automation_id}" doesn\'t match the file name "{expected_id}.json"')

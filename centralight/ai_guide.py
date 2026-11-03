@@ -28,7 +28,7 @@ from .elements import media_path
 from .expressions import AUDIO_NAMES, FUNCTIONS, ExpressionError, compile_expression
 from .files import json_text, write_atomic
 from .log import log_info
-from .model import ROLE_COLOUR, TRACK_COUNT, TRANSITION_KINDS, Input, Show, slugify
+from .model import ROLE_COLOUR, TRACK_COUNT, TRANSITION_KINDS, Input, Show, is_device_name, slugify
 from .schema import (
     BLEND_MODES,
     ELEMENT_KINDS,
@@ -671,7 +671,9 @@ def check_input_data(data: Any, show: Show, existing_id: str | None = None) -> t
         while new_id in show.inputs:
             new_id = f"{base}-{n}"
             n += 1
-        if wanted and new_id != wanted:
+        if wanted and is_device_name(wanted):
+            notes.append(f'"{wanted}" is a name Windows keeps for a device, so this one is "{new_id}".')
+        elif wanted and new_id != wanted:
             notes.append(f'There\'s already an input called "{wanted}", so this one is "{new_id}".')
         data["id"] = new_id
     try:

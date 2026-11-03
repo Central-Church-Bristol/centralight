@@ -447,9 +447,10 @@ class ShowFolderTests(FilesCase):
 
     def test_names_that_windows_cant_use_make_safe_folders(self) -> None:
         self.assertEqual(new_folder(self.root, 'Carols: "Nine Lessons"?').name, "Carols Nine Lessons")
-        self.assertEqual(new_folder(self.root, "CON").name, "CON show")
+        self.assertEqual(new_folder(self.root, "CON").name, "Show CON")
         (self.root / "Morning").mkdir()
         self.assertEqual(new_folder(self.root, "Morning").name, "Morning 2")
+        self.assertEqual(new_folder(self.root, "_Rehearsal").name, "Rehearsal")  # (the list of shows skips "_" folders)
 
 
 class GlobalAutomationFileTests(FilesCase):
@@ -556,10 +557,13 @@ class ShowPickerTests(WindowCase):
             window.ask_new_show()
         self.assertEqual(window.document.show.name, "Evening")
         self.assertEqual(list(window.document.show.inputs), ["follow-screen"])
-        with mock.patch.object(QInputDialog, "getText", return_value=("Evening copy", True)):
+        with mock.patch.object(QInputDialog, "getText", return_value=("Evening copy", True)), \
+                mock.patch.object(QMessageBox, "information"):
             window.ask_duplicate_show()
+        self.assertEqual(window.document.show.name, "Evening")  # (the copy doesn't open by itself)
+        copy_folder = self.root / "Evening copy"
+        self.assertTrue(window.load_show(str(copy_folder)))
         self.assertEqual(window.document.show.name, "Evening copy")
-        copy_folder = Path(window.document.show.folder)
         with mock.patch.object(QInputDialog, "getText", return_value=("Sunday evening", True)):
             window.ask_rename_show()
         window.document.flush()
@@ -714,6 +718,226 @@ class ShowRouteTests(FilesCase):
         self.assertEqual(engine.gui_requests.get_nowait(), ("Stream Deck", {"do": "load_show", "folder": str(self.root / "Evening")}))
         status, reply = get("/api/show/christmas")
         self.assertEqual(status, 404)
+
+
+# ---------------------------------------------------------------- what a review of M12 found
+
+
+class M12ReviewEngineTests(EngineCase):
+    def test_a_fade_to_black_then_a_show_load_still_ends_black(self) -> None:
+        from centralight.commands import ToBlack
+
+        morning = a_show("Morning", MORNING, [solid("red", RED)])
+        evening = a_show("Evening", EVENING, [solid("green", GREEN)])
+        self.make(morning)
+        self.send(SendToBase("red", cut=True))
+        self.send(ToBlack(2.0, everything=True))
+        self.send(LoadShow(evening))  # 25 ms into the fade
+        self.run_for(0.5)
+        self.assertGreater(self.colours()["slimpar-101"][0], 0.3)  # still fading...
+        self.run_for(2.0)
+        frame = self.engine.frames.get()
+        self.assertEqual(frame.colours["slimpar-101"], (0.0, 0.0, 0.0))  # ...to black, not frozen part of the way
+        self.assertTrue(frame.colour_black)
+        self.assertEqual(frame.base, "Black")
+
+    def test_a_global_automations_actions_after_load_a_show_happen_in_that_show(self) -> None:
+        both = automation("both", [{"type": "time", "from": "10:00", "to": "10:30"}],
+                          [{"do": "load_show", "show": "evening"}, {"do": "master", "level": 0.5}])
+        morning = a_show("Morning", MORNING, [solid("red", RED)])
+        evening = a_show("Evening", EVENING, [solid("green", GREEN)])
+        self.make(morning, global_automations=globals_of(both))
+        self.assertAlmostEqual(self.engine._master.target, 1.0)  # Master waits for Evening to load...
+        self.send(LoadShow(evening, automation=True))
+        self.assertAlmostEqual(self.engine._master.target, 0.5)  # ...and then happens
+        self.make(morning, global_automations=globals_of(both))
+        self.send(ShowLoadFailed())  # (if it can't load, the rest happen anyway, in the show that's loaded)
+        self.assertAlmostEqual(self.engine._master.target, 0.5)
+
+    def test_this_show_is_loaded_and_load_a_show_take_a_name_too(self) -> None:
+        dim = automation("dim", [{"type": "loaded_show", "show": "Evening"}], [{"do": "master", "level": 0.3}])
+        again = automation("again", [{"type": "time", "from": "10:00", "to": "11:00"}], [{"do": "load_show", "show": "Morning"}])
+        morning = a_show("Morning", MORNING, [solid("red", RED)])
+        self.make(morning, global_automations=globals_of(dim, again))
+        self.run_for(1.5)
+        self.assertTrue(self.engine.gui_requests.empty())  # "Morning" is the loaded show: nothing to load
+        self.assertIsNone(self.engine._pending_load)
+        self.send(LoadShow(a_show("Evening", EVENING, [solid("green", GREEN)])))
+        self.run_for(1.5)
+        self.assertAlmostEqual(self.engine._master.target, 0.3)  # "Evening", by its name
+
+    def test_while_a_show_loads_the_automations_arent_checked_every_tick(self) -> None:
+        load = automation("load", [{"type": "time", "from": "10:00", "to": "10:30"}], [{"do": "load_show", "show": "evening"}])
+        self.make(a_show("Morning", MORNING, [solid("red", RED)]), global_automations=globals_of(load))
+        self.assertIsNotNone(self.engine._pending_load)
+        checks = []
+        real = self.engine._global_runner.check
+        self.engine._global_runner.check = lambda *args: (checks.append(1), real(*args))[1]
+        self.run_for(2.0)  # 80 ticks
+        self.assertLessEqual(len(checks), 3)  # about once a second, not 40 times
+
+    def test_a_crash_soon_after_the_pc_started_carries_on(self) -> None:
+        from tests.test_automations import uk_epoch
+
+        morning = a_show("Morning", MORNING, [solid("red", RED)])
+        start = datetime(2026, 11, 8, 10, 1)
+        live = LiveState(show=MORNING, base={"input": "red", "time": 30.0}, saved_at=uk_epoch(start) - 60.0)
+        self.make(morning, live, uptime=540.0, start=start)  # the PC started at 09:52; CentraLight ran, and crashed at 10:00
+        self.assertEqual(self.engine.frames.get().base, "Red")  # it carries on: not "the PC has just started"
+        self.make(morning, LiveState(show=MORNING, base={"input": "red", "time": 30.0}, saved_at=1.0), uptime=540.0, start=start)
+        self.assertEqual(self.engine.frames.get().base, "Black")  # (last saved before the PC started: it's a PC start)
+
+    def test_going_back_to_a_show_doesnt_run_its_automations_again(self) -> None:
+        sunday = automation("sunday", [{"type": "days", "days": ["sun"]}, {"type": "time", "from": "09:00", "to": "12:30"}],
+                            [{"do": "master", "level": 0.2}])
+        morning = a_show("Morning", MORNING, [solid("red", RED)], [sunday])
+        evening = a_show("Evening", EVENING, [solid("green", GREEN)])
+        self.make(morning)  # Sunday 10:00: it runs
+        self.assertAlmostEqual(self.engine._master.target, 0.2)
+        self.send(SetMaster(1.0, 0.0))  # someone chose otherwise
+        self.send(LoadShow(evening))
+        self.run_for(1.5)
+        self.send(LoadShow(morning))  # back to Morning, the same morning
+        self.run_for(1.5)
+        self.assertAlmostEqual(self.engine._master.target, 1.0)  # it isn't run again over what they chose
+        self.send(LoadShow(evening))
+        live = LiveState.from_dict(json.loads(json.dumps(self.engine.live_state().to_dict())))
+        self.assertEqual(len(live.show_automations), 1)  # (Morning's, kept for next time)
+        self.clocks.advance(60)
+        self.engine = Engine(evening, FakeOutput(), live, clock=lambda: self.clocks.mono, wall=lambda: self.clocks.wall,
+                             local_time=uk_local, uptime=lambda: 86400.0)  # a restart, the same morning
+        self.engine.tick()
+        self.send(LoadShow(morning))
+        self.run_for(1.5)
+        self.assertAlmostEqual(self.engine._master.target, 1.0)
+
+
+class M12ReviewFileTests(FilesCase):
+    def test_device_names_never_reach_the_disk(self) -> None:
+        from centralight.model import is_device_name, slugify
+        from centralight.show_io import InputFileError, input_from_dict
+
+        looked_at = []
+        real_exists = Path.exists
+
+        def watched(path, *args, **kwargs):
+            looked_at.append(path.name)
+            if is_device_name(path.name):  # (Windows would open the device: COM3 is the Eurolite)
+                raise AssertionError(f"looked at a device name: {path}")
+            return real_exists(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "exists", watched):
+            for name in ("Aux.Service", "COM3", "com3.x", "Con ", "LPT1.show", "nul"):
+                folder = new_folder(self.root, name)
+                self.assertFalse(is_device_name(folder.name), folder)
+        self.assertTrue(looked_at)
+        self.assertEqual(new_folder(self.root, "Aux.Service").name, "Show Aux.Service")
+        for name in ("COM3", "aux", "Con", "lpt9"):
+            self.assertFalse(is_device_name(slugify(name)), name)  # input, layout and automation ids (file names)
+        with self.assertRaises(InputFileError):
+            input_from_dict({"id": "com3", "name": "x", "tracks": [[], [], [], []]})
+
+    def test_the_last_show_gone_opens_another_show_rather_than_a_new_one(self) -> None:
+        from centralight.app import show_to_open
+        from centralight.settings import Settings
+
+        create_show(self.root / "Evening", "Evening")
+        gone = str(self.root / "Gone")
+        folder = show_to_open(Settings(show_folder=gone), LiveState(show=gone), root=self.root)
+        self.assertEqual(folder, self.root / "Evening")
+
+
+class M12ReviewWindowTests(WindowCase):
+    def test_a_show_asked_for_while_a_dialog_is_open_loads_when_it_closes(self) -> None:
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        morning = create_show(self.root / "Morning", "Morning")
+        create_show(self.root / "Evening", "Evening")
+        window, engine = self.make(morning)
+        dialog = QWidget()
+        engine.gui_requests.put(("Stream Deck", {"do": "load_show", "folder": str(self.root / "Evening")}))
+        with mock.patch.object(QApplication, "activeModalWidget", return_value=dialog):
+            window._do_engine_requests()
+        self.assertEqual(window.document.show.name, "Morning")  # (a question was open: it stays about Morning)
+        window._do_engine_requests()  # the dialog has closed
+        self.assertEqual(window.document.show.name, "Evening")
+
+    def test_duplicate_doesnt_open_the_copy(self) -> None:
+        from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+        morning = create_show(self.root / "Morning", "Morning")
+        window, _engine = self.make(morning)
+        with mock.patch.object(QInputDialog, "getText", return_value=("Evening", True)), \
+                mock.patch.object(QMessageBox, "information") as told:
+            window.ask_duplicate_show()
+        self.assertEqual(window.document.show.name, "Morning")  # its automations don't run as it opens: it doesn't open
+        self.assertIn("Evening", [s.name for s in window.list_shows()])
+        self.assertIn("Load it from the Show menu", told.call_args[0][2])
+
+    def test_a_deleted_shows_history_doesnt_come_back(self) -> None:
+        import shutil
+
+        from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+        from centralight.ui.document import SCOPE_SHOW
+
+        morning = create_show(self.root / "Morning", "Morning")
+        create_show(self.root / "Evening", "Evening")
+        window, _engine = self.make(morning)
+        window.load_show(str(self.root / "Evening"))
+        window.document.apply(replace(window.document.show, name="Evening, renamed"), "Rename")
+        window.load_show(str(self.root / "Morning"))
+        real_delete = delete_show
+        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes), \
+                mock.patch("centralight.ui.main_window.delete_show",
+                           lambda folder, loaded: real_delete(folder, loaded, trash=lambda p: shutil.rmtree(p))):
+            window.ask_delete_show(str(self.root / "Evening"))
+        with mock.patch.object(QInputDialog, "getText", return_value=("Evening", True)):
+            window.ask_new_show()  # a new show in the same folder
+        self.assertEqual(Path(window.document.show.folder), self.root / "Evening")
+        self.assertFalse(window.document.stack(SCOPE_SHOW).canUndo())  # the deleted show's history went with it
+
+    def test_a_save_that_fails_stays_with_its_own_show(self) -> None:
+        morning = create_show(self.root / "Morning", "Morning")
+        create_show(self.root / "Evening", "Evening")
+        window, _engine = self.make(morning)
+        target = self.root / "Morning" / "inputs" / "follow-screen.json"
+        target.unlink()
+        target.mkdir()  # (now it can't be written)
+        inp = window.document.show.inputs["follow-screen"]
+        window.document.apply(window.document.show.with_inputs({"follow-screen": replace(inp, name="Renamed")}), "Rename")
+        window.load_show(str(self.root / "Evening"))
+        window.document.wait_saved()
+        window.document._check_saves()  # (what the saves said, as the window's timer would read it a second later)
+        self.assertEqual(window.document.problem, "")  # not blamed on Evening...
+        self.assertEqual(window.document._retry, {"input": set(), "layout": set(), "automation": set()})
+        self.assertTrue((self.root / "Evening" / "inputs" / "follow-screen.json").is_file())  # ...nor tried there
+
+    def test_global_automations_save_problems_show_in_the_header(self) -> None:
+        morning = create_show(self.root / "Morning", "Morning")
+        window, _engine = self.make(morning)
+        window.global_document._set_problem("Couldn't save _Global automations\\x.json: disk full")
+        self.assertIn("disk full", window._save_problem())
+        self.assertTrue(window.header.chips["files"].isVisibleTo(window.header))
+
+    def test_notes_for_lights_of_another_show_are_kept(self) -> None:
+        from centralight.notes import load_notes, save_notes
+
+        morning = create_show(self.root / "Morning", "Morning")
+        template = morning.fixture("slimpar-101")
+        evening = replace(morning, name="Evening", fixtures=morning.fixtures + (
+            replace(template, id="slimpar-201", name="SlimPAR 201", address=200),))
+        evening = replace(evening, folder=str(self.root / "Evening"))
+        (self.root / "Evening").mkdir()
+        save_whole_show(evening)
+        notes = Path(self._tmp.name) / "fixture_map.csv"
+        save_notes(evening, {"SlimPAR 201": "by the organ", "SlimPAR 101": "front left"}, notes)
+        window, _engine = self.make(load_show(self.root / "Evening"))
+        window.load_show(str(self.root / "Morning"))  # SlimPAR 201 isn't in Morning
+        window.layout_page._table_edited("slimpar-101", "where", "front right")
+        kept = load_notes(notes)
+        self.assertEqual(kept.get("SlimPAR 201"), "by the organ")
+        self.assertEqual(kept.get("SlimPAR 101"), "front right")
 
 
 if __name__ == "__main__":

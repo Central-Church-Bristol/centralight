@@ -45,7 +45,7 @@ from ..commands import (
 )
 from .. import startup
 from ..automations import update_automation, upcoming
-from ..global_automations import GLOBAL_NAME
+from ..global_automations import GLOBAL_DIR, GLOBAL_NAME
 from ..layouts import switch_layout
 from ..engine import EngineFrame
 from ..input_edit import delete_input, duplicate_input, new_input
@@ -58,7 +58,17 @@ from ..paths import shows_root as default_shows_root
 from ..settings import QUIT_ASK, QUIT_OFF, Settings
 from ..show_io import ShowError, backup_show
 from ..show_io import load_show as read_show
-from ..shows import ShowInfo, delete_show, duplicate_show, find_show, list_shows, new_show, same_folder, unique_name
+from ..shows import (
+    ShowInfo,
+    delete_show,
+    duplicate_show,
+    find_show,
+    list_shows,
+    new_show,
+    read_show_name,
+    same_folder,
+    unique_name,
+)
 from . import icons
 from .bridge import EngineBridge
 from .dashboard import DashboardPage
@@ -153,9 +163,15 @@ class MainWindow(QWidget):
         self.global_document = ShowDocument(globals_, engine, save_files=save_files, kind=KIND_GLOBAL,
                                             undo_group=self.document.undo_group)
         self.global_document.save_problem.connect(lambda _text: self._update_files_chip())
-        # files that couldn't be read when the show opened, and other warnings (they used to go only to the log)
+        # files that couldn't be read when the show opened, and other warnings (they used to go only to the log); the
+        # global automations' too
+        self._global_problems = [f"{GLOBAL_DIR}\\{warning}" for warning in globals_.warnings]
+        if globals_.read_only and globals_.folder:
+            self._global_problems.append(f"The global automations in {globals_.folder} couldn't be opened, so they "
+                                         "won't run or be saved this time (the session log says why).")
         self._load_problems = [f"inputs\\{input_id}.json couldn't be read: {error}" for input_id, error in show.input_errors.items()]
-        self._load_problems += list(show.warnings)
+        self._load_problems += list(show.warnings) + self._global_problems
+        self._waiting_loads: list[tuple[str, dict]] = []  # shows asked for while a dialog was open (loaded after it)
 
         self.setObjectName("Root")
         self.setWindowIcon(icons.app_icon())
@@ -415,7 +431,7 @@ class MainWindow(QWidget):
         if self.watcher is not None:
             self.watcher.start(show)
         self._load_problems = [f"inputs\\{input_id}.json couldn't be read: {error}" for input_id, error in show.input_errors.items()]
-        self._load_problems += list(show.warnings)
+        self._load_problems += list(show.warnings) + self._global_problems
         self._update_files_chip()
         self.header.set_show_name(show.name, show.folder)
         if self._page == "editor" and not self.editor_page.input_id:
@@ -432,6 +448,13 @@ class MainWindow(QWidget):
             self._guide_timer.start()
             if show.folder and not show.read_only:
                 self._backup_timer.start()
+
+    def _load_safely(self, who: str, action: Mapping[str, Any]) -> None:
+        try:
+            self._load_requested(who, action)
+        except Exception as exc:  # (never let one request stop the rest)
+            log_exception("loading a show", exc)
+            self.engine.submit(ShowLoadFailed())
 
     def _load_requested(self, who: str, action: Mapping[str, Any]) -> None:
         """A global automation (a show id) or the Stream Deck (a folder) asks for a show."""
@@ -476,9 +499,10 @@ class MainWindow(QWidget):
             return
         name, ok = QInputDialog.getText(
             self, "Duplicate show", f"Name for the copy of “{show.name}”:\n\n(Everything in it is copied, media too. Its "
-            "inputs keep their ids, so Stream Deck keys work in both. The copy opens straight away.)",
+            "inputs keep their ids, so Stream Deck keys work in both. It doesn't open by itself: load it from the Show "
+            "menu when you want it.)",
             text=unique_name(self.shows_root(), f"{show.name} copy"))
-        if not ok or not name.strip():
+        if not ok or not name.strip() or not same_folder(self.document.show.folder, show.folder):
             return
         self.document.flush()
         self.document.wait_saved()
@@ -488,7 +512,10 @@ class MainWindow(QWidget):
             log_exception("copying the show", exc)
             QMessageBox.warning(self, "Duplicate show", f"CentraLight couldn't copy the show:\n{exc}")
             return
-        self.load_show(str(folder))
+        if self._save_files:
+            self._guide_timer.start()  # (the global automations' guide lists the shows)
+        QMessageBox.information(self, "Duplicate show", f"Copied as “{read_show_name(folder)}”.\n\nLoad it from the "
+                                "Show menu when you want it.")
 
     def ask_rename_show(self) -> None:
         if self._locked or self.document.read_only:
@@ -497,10 +524,11 @@ class MainWindow(QWidget):
         name, ok = QInputDialog.getText(
             self, "Rename show", "New name for this show:\n\n(Its folder keeps its name, so Stream Deck keys that load it "
             "keep working.)", text=show.name)
-        if not ok or not name.strip():
+        if not ok or not name.strip() or not same_folder(self.document.show.folder, show.folder):
             return
         from dataclasses import replace
 
+        show = self.document.show
         new_name = unique_name(self.shows_root(), name, ignore=show.folder)
         if new_name != show.name:
             self.document.apply(replace(show, name=new_name), f"Rename show {show.name} → {new_name}")
@@ -522,6 +550,7 @@ class MainWindow(QWidget):
             log_exception("deleting a show", exc)
             QMessageBox.warning(self, "Delete show", f"CentraLight couldn't delete the show:\n{exc}")
             return
+        self.document.forget_show(folder)  # (its undo histories: a show made later in the same folder starts afresh)
         if self._save_files:
             self._guide_timer.start()  # (the global automations' guide lists the shows)
 
@@ -569,8 +598,12 @@ class MainWindow(QWidget):
         else:
             self._active_document().redo()
 
+    def _save_problem(self) -> str:
+        """What couldn't be saved (the show's files, or the global automations'), or ""."""
+        return self.document.problem or self.global_document.problem
+
     def _update_files_chip(self) -> None:
-        problem = self.document.problem
+        problem = self._save_problem()
         if problem:
             self.header.set_chip("files", STATE_ERROR, "Not saved", problem)
         elif self._load_problems:
@@ -580,13 +613,14 @@ class MainWindow(QWidget):
             self.header.set_chip("files", None)
 
     def _show_file_problems(self) -> None:
-        text = self.document.problem or ("When the show opened, CentraLight couldn't use everything in its files:\n\n"
+        text = self._save_problem() or ("When the show opened, CentraLight couldn't use everything in its files:\n\n"
                                          + "\n".join(f"• {p}" for p in self._load_problems)
                                          + "\n\nWhat it couldn't read was left out. Fix the file (or ask the AI that wrote it), "
                                          "and CentraLight picks it up by itself.")
         QMessageBox.information(self, "Files", text)
-        if not self.document.problem:
+        if not self._save_problem():
             self._load_problems = []  # seen: the chip goes
+            self._global_problems = []
             self._update_files_chip()
 
     def _show_changed(self, show: Show) -> None:
@@ -871,7 +905,14 @@ class MainWindow(QWidget):
             self.header.set_chip("automations", STATE_OK, "Automations on", f"{self._next_run_text}\nClick to pause them all.")
 
     def _do_engine_requests(self) -> None:
-        """Things automations or the Stream Deck asked for that change the show (the window does those)."""
+        """Things automations or the Stream Deck asked for that change the show (the window does those). A show asked
+        for while a dialog is open (a question, a name to type, a file to pick) loads when it closes: what the dialog
+        was about stays in its own show."""
+        dialog_open = QApplication.activeModalWidget() is not None
+        if self._waiting_loads and not dialog_open:
+            waiting, self._waiting_loads = self._waiting_loads, []
+            for who, action in waiting:
+                self._load_safely(who, action)
         requests = getattr(self.engine, "gui_requests", None)
         while requests is not None:
             try:
@@ -879,11 +920,11 @@ class MainWindow(QWidget):
             except queue.Empty:
                 return
             if action.get("do") == "load_show":
-                try:
-                    self._load_requested(who, action)
-                except Exception as exc:  # (never let one request stop the rest)
-                    log_exception("loading a show", exc)
-                    self.engine.submit(ShowLoadFailed())
+                if dialog_open:
+                    log_info(f"{who}: the show loads when the dialog that's open is closed", key="load-waits-for-dialog")
+                    self._waiting_loads.append((who, action))
+                else:
+                    self._load_safely(who, action)
                 continue
             document = self.global_document if action.get("_scope") == "global" else self.document
             show = document.show

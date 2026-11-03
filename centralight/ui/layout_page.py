@@ -681,6 +681,10 @@ class LayoutPage(QWidget):
         if key == self._shown_key:
             return  # nothing this tab shows has changed (e.g. an edit in the Editor)
         self._shown_key = key
+        for fx in show.fixtures:  # (another show's lights, loaded: their notes are in the file under their names)
+            if fx.id not in self.notes and fx.name in self._other_notes:
+                self.notes[fx.id] = self._other_notes.pop(fx.name)
+                self._noted_names.setdefault(fx.id, fx.name)
         read_only = show.read_only
         self.read_only_hint.setVisible(read_only)
         for widget in (self.add_button, self.remove_button, self.shuffle_button, self.align_button, self.photo_button, self.clear_photo_button):
@@ -1095,8 +1099,12 @@ class LayoutPage(QWidget):
 
     def _save_notes(self, show: Show) -> None:
         by_name = dict(self._other_notes)
+        here = {fx.id for fx in show.fixtures}
+        for fixture_id, where in self.notes.items():  # (lights of another show: their notes stay, under their names)
+            if where and fixture_id not in here and fixture_id in self._noted_names:
+                by_name.setdefault(self._noted_names[fixture_id], where)
         by_name.update({fx.name: self.notes[fx.id] for fx in show.fixtures if self.notes.get(fx.id)})
-        self._noted_names = {fx.id: fx.name for fx in show.fixtures}
+        self._noted_names = {**self._noted_names, **{fx.id: fx.name for fx in show.fixtures}}
         try:
             if self._notes_path:
                 save_notes(show, by_name, self._notes_path)
@@ -1152,8 +1160,9 @@ class LayoutPage(QWidget):
         self.document.apply(move_lights(self.show_data, spots), f"{title} ({len(items)} lights)")
 
     def _choose_photo(self) -> None:
+        folder = self.show_data.folder
         path, _ = QFileDialog.getOpenFileName(self, "Photo of the room", str(Path.home() / "Pictures"), "Images (*.jpg *.jpeg *.png *.bmp *.webp)")
-        if path:
+        if path and self.show_data.folder == folder:  # (another show loaded meanwhile: the photo was for the other one)
             self.set_room_photo(Path(path))
 
     def set_room_photo(self, source: Path) -> bool:

@@ -21,12 +21,11 @@ from .elements import media_path
 from .files import read_json, write_json_atomic
 from .global_automations import GLOBAL_DIR
 from .log import log_info
-from .model import Show, slugify
+from .model import Show, is_device_name, slugify
 from .show_io import BACKUPS_DIR, SHOW_FILE, ShowError, save_whole_show
 
 NAME_LIMIT = 60  # characters in a show's name (and its folder's)
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')  # characters a Windows folder name can't have
-_RESERVED = {"con", "prn", "aux", "nul", *(f"com{n}" for n in range(1, 10)), *(f"lpt{n}" for n in range(1, 10))}
 
 
 @dataclass(frozen=True)
@@ -110,10 +109,12 @@ def unique_name(root: Path, name: str, ignore: str | Path = "") -> str:
 
 
 def new_folder(root: Path, name: str) -> Path:
-    """A new, unused folder for a show called name (made safe for Windows; its id unused too)."""
-    base = _UNSAFE.sub("", clean_name(name)).strip(" .") or "Show"
-    if base.casefold() in _RESERVED:
-        base = f"{base} show"
+    """A new, unused folder for a show called name, made safe for Windows before anything on disk is looked at: no
+    character Windows can't have, no leading "_" (the global automations' folder starts with one, and the list of
+    shows leaves such folders out), and never a device's name ("COM3.x" would be the Eurolite's port)."""
+    base = _UNSAFE.sub("", clean_name(name)).strip(" .").lstrip("_").strip(" .") or "Show"
+    if is_device_name(base):
+        base = f"Show {base}"
     taken_ids = {s.id for s in list_shows(root)} | {slugify(GLOBAL_DIR, "show")}
     candidate, n = base, 2
     while (Path(root) / candidate).exists() or slugify(candidate, "show") in taken_ids:
@@ -184,7 +185,10 @@ def to_recycle_bin(path: Path) -> None:
                     ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
 
     fo_delete = 0x0003
-    flags = 0x0040 | 0x0010 | 0x0004 | 0x0400  # allow undo (the Recycle Bin), no "are you sure?", no progress, no error box
+    # to the Recycle Bin (allow undo), without its own "are you sure?" (CentraLight asked), a progress window or an
+    # error box; but if something can't go to the Recycle Bin (too big, a network drive), Windows asks before it would
+    # be deleted for good ("want nuke warning")
+    flags = 0x0040 | 0x0010 | 0x0004 | 0x0400 | 0x4000
     operation = SHFILEOPSTRUCTW(None, fo_delete, str(path) + "\0", None, flags, False, None, None)  # (ends in two nulls)
     result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(operation))
     if result != 0 or operation.fAnyOperationsAborted:

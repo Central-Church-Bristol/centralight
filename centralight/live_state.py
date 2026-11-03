@@ -38,6 +38,7 @@ class LiveState:
     globals: dict[str, Any] = field(default_factory=dict)  # the loaded show's variables
     show_globals: dict[str, dict[str, Any]] = field(default_factory=dict)  # other shows' variables, by folder
     automations: dict[str, Any] = field(default_factory=dict)  # the show's: paused, each one's state, history
+    show_automations: dict[str, dict[str, Any]] = field(default_factory=dict)  # other shows' automations, by folder
     global_automations: dict[str, Any] = field(default_factory=dict)  # the global ones' state and history
     saved_at: float = 0.0
 
@@ -54,6 +55,7 @@ class LiveState:
             "globals": self.globals,
             "show_globals": self.show_globals,
             "automations": self.automations,
+            "show_automations": self.show_automations,
             "global_automations": self.global_automations,
             "saved_at": self.saved_at,
         }
@@ -67,12 +69,16 @@ class LiveState:
         others = dict(self.show_globals)
         if self.show and self.globals:
             others[self.show] = dict(self.globals)
+        runners = dict(self.show_automations)
+        if self.show and self.automations:
+            runners[self.show] = dict(self.automations)
+        automations = dict(_pop_folder(runners, folder))
+        automations.update({"paused": bool(self.automations.get("paused", False)),
+                            "paused_since": self.automations.get("paused_since")})
         return LiveState(show=folder, master=self.master, quit_dark=self.quit_dark, quit_at=self.quit_at,
                          house=dict(self.house), globals=dict(_pop_folder(others, folder)), show_globals=others,
-                         global_automations=dict(self.global_automations),
-                         automations={"paused": bool(self.automations.get("paused", False)),
-                                      "paused_since": self.automations.get("paused_since")},
-                         saved_at=self.saved_at)
+                         global_automations=dict(self.global_automations), automations=automations,
+                         show_automations=runners, saved_at=self.saved_at)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> LiveState:
@@ -109,6 +115,9 @@ class LiveState:
         state.automations = dict(automations) if isinstance(automations, dict) else {}
         global_automations = data.get("global_automations")
         state.global_automations = dict(global_automations) if isinstance(global_automations, dict) else {}
+        runners = data.get("show_automations")
+        if isinstance(runners, dict):
+            state.show_automations = {str(k): dict(v) for k, v in runners.items() if isinstance(v, dict)}
         saved = data.get("saved_at", 0.0)
         state.saved_at = float(saved) if isinstance(saved, (int, float)) and not isinstance(saved, bool) else 0.0
         if blacked_out:  # it was blacked out then: it starts black now (nothing playing, house lights off, levels kept)

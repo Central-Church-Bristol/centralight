@@ -412,6 +412,7 @@ class Situation:
     ndi_known: bool = True  # False just after starting: a feed that isn't sending yet may still be connecting
     quit_dark_since: float | None = None  # wall time of a "Turn lights off" quit whose hold is still on, else None
     show: str = ""  # the loaded show's id (for the global automations' "This show is loaded")
+    show_names: frozenset[str] = frozenset()  # ...and what else it can be called: its folder's name, its name (any case)
 
 
 def _in_range(start: int, end: int, minutes: int) -> bool:
@@ -778,7 +779,11 @@ class AutomationRunner:
         elif kind == "audio":
             result = self._audio_true(automation, index, cond, situation)
         elif kind == "loaded_show":
-            result = bool(situation.show) and situation.show == cond.get("show")
+            from .model import slugify
+
+            wanted = str(cond.get("show") or "").strip()
+            names = situation.show_names | ({situation.show} if situation.show else set())
+            result = bool(wanted) and (wanted in names or wanted.casefold() in names or slugify(wanted, "show") in names)
         else:
             result = False
         return result != bool(cond.get("invert", False))

@@ -264,10 +264,10 @@ A show is everything above (inputs, show variables, automations, the lights and 
 in `Documents\CentraLight Shows`. Changes save by themselves: there's no Save.
 
 - [ ] Send Follow screen (or anything colourful) to Base and put an input in an overlay.
-- [ ] **Show: Central Church ▾** → **Duplicate “Central Church”…** → call it **Evening** → OK. The copy opens straight
-      away (**Show: Evening**), and the lights don't change: they hold what they showed, overlay included. The
-      Dashboard says **Base: frozen (from Central Church)**; the overlays are off; Festoon, Key lights and Master are
-      as they were.
+- [ ] **Show: Central Church ▾** → **Duplicate “Central Church”…** → call it **Evening** → OK. It says where the copy
+      is; it doesn't open by itself. **Show: Central Church ▾** → **Evening**: the header says **Show: Evening**, and
+      the lights don't change: they hold what they showed, overlay included. The Dashboard says **Base: frozen (from
+      Central Church)**; the overlays are off; Festoon, Key lights and Master are as they were.
 - [ ] Send any input: it comes in from the held colours with its own transition.
 - [ ] **Show: Evening ▾** → **Central Church**: the lights hold again until you send something. In each show, Ctrl+Z
       only undoes that show's changes.

@@ -27,6 +27,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M10 Per-light colours (your change of 3 Nov) | **done** (3 Nov, 10:31; 570 tests pass; engine 0.16 ms a tick) |
 | M11 Cut to black / Fade to black (your change of 3 Nov), and a look at M10 (five fixes) | **done** (3 Nov, 11:20; 587 tests pass) |
 | M12 Shows + global automations (your change of 3 Nov) | **done** (3 Nov, 12:25; 620 tests pass) |
+| A look at M12 (fourteen findings), and less CPU for video | **done** (3 Nov, 13:25; 635 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -51,6 +52,51 @@ Run all the tests (about five minutes, including the layout check at every scali
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
 
+## A look at M12 (3 Nov, 13:00)
+
+A reviewer checked M12 and found fourteen things. Each one that could be fixed is fixed, with a test that fails
+without the fix:
+- **Names Windows keeps for devices.** On Windows 10 a file or folder called "COM3" (or "COM3.anything", "AUX",
+  "CON"...) is a device: COM3 is the Eurolite's port. A show called "Aux.Service" made CentraLight look for a folder
+  that Windows took to be the port COM1 (the PC's own serial port), and it hung. That was the reviewer's test, in a
+  scratch folder, not COM3. Now a show's folder never gets such a name ("Show Aux.Service"), and no input, layout or
+  automation id can be one either (an input called "COM3" gets the id `com3-input`; a file or an AI reply with such
+  an id is refused). That last part was there before M12 too.
+- **Fade to black, then a show loading** (a global automation doing both, say) froze the lights a moment into the
+  fade, so they stayed lit. Now a fade to black carries on to black when a show loads.
+- **A global automation's actions after "Load a show"** (the Key lights, Master...) now wait until that show has
+  loaded, so they happen in it.
+- **A question on screen while a show loads** (Delete input?, a layout's new name, "Load the changed file?", a file
+  to pick...): what you answered could land in the newly loaded show. Now a show asked for by an automation or the
+  Stream Deck while a dialog is open loads when the dialog closes, and the file pickers check the show is still the
+  same one.
+- **Saving around a load:** a file that couldn't be saved in the old show could be blamed on (or retried in) the
+  new one. Now everything is saved, and waited for, before the switch; anything that still couldn't be saved is
+  reported in the log as the old show's.
+- **A deleted show's undo history** came back if a new show was made in the same folder. It goes with the show now.
+- **Starting within 10 minutes of the PC starting** after a crash counted as the PC starting (everything black). Now
+  it's only a PC start if CentraLight hasn't run since the PC started; a crash and reopen carries on as it was.
+- **Duplicate** opened the copy straight away, so its automations ran (a time range under way, "When this show
+  loads") and could change the lights mid-service. Now the copy doesn't open by itself.
+- **Going back to a show** ran its automations' catch-up again (e.g. "Sunday 09:00–12:30" a second time over what
+  someone had chosen). Each show's automations now carry on where they were when it was last loaded (kept while
+  CentraLight runs, and in live.json).
+- **The global automations' save problems** weren't shown in the header. They are now, and so are problems reading
+  them when CentraLight starts.
+- **A show called "_Rehearsal"** got a folder the list of shows leaves out (the global automations' folder starts
+  with "_"). Show folders don't start with "_" now.
+- **Delete** now asks Windows to warn before anything would be deleted for good instead of going to the Recycle
+  Bin (a folder too big for it, say).
+- **Notes about lights** that aren't in the loaded show were dropped from `fixture_map.csv` at the next note change.
+  They're kept now.
+- **"This show is loaded" and "Load a show"** accept a show's name as well as its id.
+- **If the last show's folder has gone,** CentraLight opens one of the other shows instead of making a new one
+  there.
+- **While a show was loading,** the global automations were checked 40 times a second (for up to 5 s). Once a
+  second now.
+- Not changed: two show folders whose names differ only in punctuation ("Sunday Morning", "Sunday_Morning") share
+  an id; CentraLight never makes such a pair itself.
+
 ## M12 Shows and global automations — done (3 Nov)
 
 Your change of 3 Nov: shows you can make, copy and load (a morning and an evening one, say), and automations that
@@ -61,8 +107,8 @@ belong to the app rather than a show.
 - **The show picker**, after the tabs: **Show: Central Church ▾**. It lists the shows (the loaded one ticked) and has
   **New show…** (this show's lights and layouts, "Follow screen", nothing else), **Duplicate…** (the whole folder,
   media included; every id stays, so Stream Deck keys work in both), **Rename…** and **Delete a show** (asks, then
-  the folder goes to the Recycle Bin; the loaded show can't be deleted). A new or copied show opens straight away.
-  Lock stops the picker too.
+  the folder goes to the Recycle Bin; the loaded show can't be deleted). A new show opens straight away; a copy
+  doesn't (load it from the picker). Lock stops the picker too.
 - **Loading a show never sends an input**, whoever loads it. The lights freeze on what they show: Base and the
   overlays become one still look on Base (the overlays are cleared), held until one of the new show's inputs is sent,
   which comes in from it with its own transition. The Dashboard says **Base: frozen (from Morning)**. The old show
@@ -879,10 +925,14 @@ Problems the tests found and that are fixed:
 - **M12 choices** (all easy to change):
   - **Renaming a show** changes the name you see, not its folder: its Stream Deck id (from the folder's name) keeps
     working. New and copied shows get a folder named after them.
-  - **A new or copied show opens straight away** (it's what you'd do next), with the usual freeze.
+  - **A new show opens straight away** (it's what you'd do next, and it has no automations); **a copy doesn't**, as
+    its automations would run as it opened.
   - **Loading a show's automations:** like CentraLight starting, they're checked straight away with catch-up, so at
     10:00 on a Sunday a show whose automation says "Sunday 09:00–12:30 → Warm welcome" sends Warm welcome when it
-    loads. Loading the show itself never sends anything.
+    first loads. Loading the show itself never sends anything. Going back to a show you left carries on where its
+    automations were, so what already ran in a time range doesn't run again. For "always do this when the show
+    loads", use "When this show loads".
+  - **A show asked for while a dialog is open** (by an automation or the Stream Deck) loads when the dialog closes.
   - **After a "Turn lights off" quit,** loading a show by hand takes charge (its "When this show loads" automations
     can light things); a global automation loading one does too if its own time range began after the quit
     (e.g. Sunday 08:30), and otherwise doesn't (e.g. "CentraLight starts").

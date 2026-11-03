@@ -1037,7 +1037,7 @@ class DetailsPanel(QScrollArea):
             return
         pattern = "Pictures (*.jpg *.jpeg *.png *.bmp *.webp *.gif)" if kind == "image" else "Videos (*.mp4 *.mov *.m4v *.avi *.mkv *.webm *.wmv)"
         path, _ = QFileDialog.getOpenFileName(self, "Choose a file", str(Path.home() / "Pictures"), pattern)
-        if path:
+        if path and self.show_data.folder == folder:  # (another show loaded meanwhile: the file was for the other one)
             self.use_file(Path(path))
 
     def use_file(self, source: Path) -> None:

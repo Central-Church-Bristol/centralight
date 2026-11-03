@@ -82,10 +82,28 @@ def has_finished(inp: Any, elapsed: float) -> bool:
     return not inp.infinite and inp.end == END_STOP and elapsed >= inp.length
 
 
+# Names Windows keeps for devices, with any extension: a file called "com3.json" (or a folder "COM3.x") is the serial
+# port COM3, where the Eurolite is. No file or folder CentraLight makes may have one.
+DEVICE_NAMES = frozenset({"con", "prn", "aux", "nul", "conin$", "conout$", "clock$"}
+                         | {f"{kind}{n}" for kind in ("com", "lpt") for n in "0123456789¹²³"})
+
+
+def is_device_name(name: str) -> bool:
+    """Would Windows take this file or folder name for a device? (Its part before the first dot, trailing spaces and
+    dots ignored, any case: "COM3", "aux.json", "Con .txt".)"""
+    return str(name).split(".")[0].rstrip(" .").casefold() in DEVICE_NAMES
+
+
+def is_safe_id(value: object) -> bool:
+    """An id that can be a file name: lower-case letters, digits and hyphens, and not a device name."""
+    return isinstance(value, str) and bool(ID_PATTERN.match(value)) and not is_device_name(value)
+
+
 def slugify(text: str, fallback: str = "input") -> str:
-    """'Pillars pulse!' -> 'pillars-pulse' (a safe id and file name)."""
+    """'Pillars pulse!' -> 'pillars-pulse' (a safe id and file name; 'COM3' -> 'com3-input', never a device's name)."""
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return (slug or fallback)[:64].strip("-") or fallback
+    slug = (slug or fallback)[:64].strip("-") or fallback
+    return slug if not is_device_name(slug) else f"{slug}-{fallback}"[:64]
 
 
 END_EPSILON = 1e-6  # seconds: "hold" shows the input this close to its end (elements end at the length)

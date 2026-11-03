@@ -463,10 +463,11 @@ class ShowDocument(QObject):
         """Another show: the old one's changes are saved first, and its histories kept for when it's loaded again
         (while CentraLight runs). The engine loads it (the lights freeze on what they show), then the window follows.
         automation: a global automation asked for it (not a person)."""
-        self.flush()
-        if self._autosaver is not None and self._pending_retries():
-            log_info(f"Some changes to {self._show.folder} couldn't be saved before another show loaded "
-                     "(they're in the session log; the show's backups have earlier copies)")
+        if self._saving_paused:  # ("Load the changed file?" was up: that file stays as it is on disk, as when closing)
+            self._saving_paused = False
+            if self._asked_input is not None:
+                self._leave_on_disk(self._asked_input)
+        self._settle_saves()
         self._drag_start = None
         self._save_timer.stop()
         self._retry_timer.stop()
@@ -628,6 +629,26 @@ class ShowDocument(QObject):
             order = self._show.input_order
         self._show = self._show.with_inputs(inputs, order)
         self._retry["input"].discard(input_id)
+
+    def _settle_saves(self, timeout: float = 5.0) -> None:
+        """Save everything that's waiting, and wait for it, before another show loads: a file that couldn't be written
+        is tried once more, then reported (it's the old show's: it mustn't be retried, or blamed, in the new one)."""
+        if self._autosaver is None:
+            return
+        for _attempt in range(2):
+            self.flush()
+            self._autosaver.wait(timeout)
+            self._check_saves()
+            if not self._pending_retries():
+                return
+        log_info(f"These couldn't be saved in {self._show.folder} before another show loaded: {self.problem} "
+                 "(the show's backups have earlier copies)")
+
+    def forget_show(self, folder: str) -> None:
+        """A show was deleted: its undo histories go with it (a show made later in the same folder starts afresh)."""
+        for stack in (self._other_stacks.pop(folder_key(folder), None) or {}).values():
+            self.undo_group.removeStack(stack)
+            stack.deleteLater()
 
     def undo_newest(self) -> bool:
         """The Dashboard's Ctrl+Z: the newest change to the show or to any input (an AI's change to an input goes in

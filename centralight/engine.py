@@ -317,7 +317,10 @@ class Engine:
         self._quit_dark = bool(live.quit_dark)
         quit_at = live.quit_at if live.quit_at > 0 else live.saved_at if live.saved_at > 0 else wall()
         self._quit_at: float | None = quit_at if self._quit_dark else None
-        self._pc_start = bool(started_by_windows) or uptime() < STARTUP_WINDOW  # (the "The PC starts" test)
+        # "The PC starts": Windows started CentraLight at sign-in, or it starts within 10 minutes of the PC starting and
+        # didn't run since then (a crash and reopen at 10:01 after a 09:52 start carries on, as any reopening does)
+        booted_at = wall() - uptime()
+        self._pc_start = bool(started_by_windows) or (uptime() < STARTUP_WINDOW and not live.saved_at > booted_at)
         self._house: dict[str, _House] = {}
         self._house_driven: dict[str, str] = {}  # house light id -> the input that set it
         house = live.house
@@ -337,6 +340,10 @@ class Engine:
         self._uptime = uptime
         self._runner = AutomationRunner()
         self._runner.restore(live.automations, wall(), saved_at=live.saved_at)
+        self._saved_at = live.saved_at
+        self._other_runners: dict[str, AutomationRunner] = {}  # other shows' automations, as they were left
+        self._other_runner_data: dict[str, dict] = {_folder_key(k): dict(v) for k, v in live.show_automations.items()}
+        self._after_load: list[tuple[str, dict]] = []  # global actions waiting for the show they loaded
         self.global_automations = global_automations if global_automations is not None else Show(name="Global automations")
         self._global_runner = AutomationRunner()
         self._global_runner.restore(live.global_automations, wall(), saved_at=live.saved_at)
@@ -472,6 +479,7 @@ class Engine:
             globals=saveable(self._globals),
             show_globals={k: dict(v) for k, v in self._show_globals.items()},
             automations=self._runner.to_dict(),
+            show_automations={**self._other_runner_data, **{k: r.to_dict() for k, r in self._other_runners.items()}},
             global_automations=self._global_runner.to_dict(),
         )
 
@@ -750,10 +758,13 @@ class Engine:
             self._swap_show(command.show)
         elif isinstance(command, LoadShow):
             self._load_show(command.show, now)
+            self._after_load_done(now)  # (a global automation's actions after "Load a show": in the show it loaded)
         elif isinstance(command, RequestShow):
             self.gui_requests.put((command.who, {"do": "load_show", "folder": command.folder}))
         elif isinstance(command, ShowLoadFailed):
             self._pending_load = None
+            self._after_load_done(now)
+            self._auto_key = None
         elif isinstance(command, SetGlobalAutomations):
             self.global_automations = command.automations
             self.sources.set_keep(self._ndi_names())
@@ -832,7 +843,16 @@ class Engine:
         show_events = frozenset(self._show_events)
         ran = False
         situation = None
-        if events or show_events or key != self._auto_key or self._runner.wants_check(now) or self._global_runner.wants_check(now):
+        if self._pending_load is not None and now >= self._pending_load[1]:
+            log_info(f"The show “{self._pending_load[0]}” a global automation asked for didn't load: the loaded show's "
+                     "automations carry on")
+            self._pending_load = None
+            ran = self._after_load_done(now) or ran
+            self._auto_key = None  # (the show's automations are checked now)
+        pending = self._pending_load is not None
+        # (while a show is loading, its "When this show loads" waits for it: it doesn't make a check every tick)
+        if (events or (show_events and not pending) or key != self._auto_key or (self._runner.wants_check(now) and not pending)
+                or self._global_runner.wants_check(now)):
             self._auto_key = key
             # just after starting (or a show loading), the NDI feeds are still connecting: until one sends (or
             # FEED_WAIT has passed) "feed lost" isn't true yet, so an automation about it waits
@@ -841,29 +861,20 @@ class Engine:
                 ndi=dict(self._ndi_sending), colour_black=colour_black, audio=dict(self._ctx.audio), events=frozenset(events),
                 ndi_known=now >= self._feeds_until,
                 quit_dark_since=self._quit_at if self._quit_dark else None,
-                show=show_id(self.show.folder),
+                show=show_id(self.show.folder), show_names=self._show_names(),
             )
             self._first_check = False
             self._woke = False
             # the global automations first (one may load another show)...
             for who, action in self._global_runner.check(self.global_automations, situation, now):
-                self._do_action(who, action, now, "global")
+                self._global_action(who, action, now)
                 ran = True
         for who, action in self._global_runner.due(now):
-            self._do_action(who, action, now, "global")
+            self._global_action(who, action, now)
             ran = True
         # ...then the show's own, unless a global automation is loading another show: that one's run when it's loaded
         if self._pending_load is not None:
-            if now < self._pending_load[1]:
-                return ran
-            log_info(f"The show “{self._pending_load[0]}” a global automation asked for didn't load: the loaded show's "
-                     "automations carry on")
-            self._pending_load = None
-            situation = situation or Situation(now=wall, local=self._local_time(wall), base=base, overlays=overlays,
-                                               variables=self._ctx.globals, ndi=dict(self._ndi_sending),
-                                               colour_black=colour_black, audio=dict(self._ctx.audio),
-                                               ndi_known=now >= self._feeds_until, show=show_id(self.show.folder),
-                                               quit_dark_since=self._quit_at if self._quit_dark else None)
+            return ran
         if situation is not None:
             self._show_events.difference_update(show_events)
             for who, action in self._runner.check(self.show, replace(situation, events=show_events), now):
@@ -873,6 +884,32 @@ class Engine:
             self._do_action(who, action, now)
             ran = True
         return ran
+
+    def _global_action(self, who: str, action: dict, now: float) -> None:
+        """A global automation's action. While a show it asked for is loading, its other actions wait for it, so they
+        happen in that show (its Festoon and Key lights, say), in their order."""
+        if self._pending_load is not None and action.get("do") != "load_show":
+            self._after_load.append((who, action))
+            return
+        self._do_action(who, action, now, "global")
+
+    def _after_load_done(self, now: float) -> bool:
+        """The show a global automation asked for has loaded (or couldn't): the actions that waited for it now."""
+        waiting, self._after_load = self._after_load, []
+        for who, action in waiting:
+            self._global_action(who, action, now)
+        return bool(waiting)
+
+    def _show_names(self) -> frozenset[str]:
+        """What a global automation can call the loaded show: its id, its folder's name and its name (any case)."""
+        folder = str(self.show.folder or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+        names = {show_id(self.show.folder), folder.casefold(), self.show.name.casefold(), slugify(self.show.name, "show")}
+        return frozenset(name for name in names if name)
+
+    def _is_loaded(self, wanted: str) -> bool:
+        wanted = str(wanted or "").strip()
+        names = self._show_names()
+        return bool(wanted) and (wanted.casefold() in names or slugify(wanted, "show") in names)
 
     def _do_action(self, who: str, action: dict, now: float, scope: str = "show") -> None:
         action = dict(action)
@@ -888,7 +925,7 @@ class Engine:
             name = container.automations[who].name if who in container.automations else who
             if action.get("do") == "load_show":
                 wanted = str(action.get("show", "")).strip()
-                if not wanted or wanted == show_id(self.show.folder):
+                if not wanted or self._is_loaded(wanted):
                     return  # (that show is loaded already: nothing to do)
                 self._pending_load = (wanted, now + LOAD_WAIT)
                 if lifts:  # its time range began after a "Turn lights off" quit: the show it loads may light things
@@ -1024,7 +1061,8 @@ class Engine:
         held until one of the new show's inputs is sent, which transitions from it). Nothing of the old show plays
         on (its videos and feeds are let go; a feed the new show uses too stays connected). The house lights and
         Master keep their levels. The new show's variables come back as they were when it was last loaded, and its
-        automations are checked straight away, "When this show loads" with them."""
+        automations are checked straight away, "When this show loads" with them. A fade to black that's under way
+        carries on to black."""
         old = self.show
         if show.folder and _folder_key(show.folder) == _folder_key(old.folder):
             self._swap_show(show)  # (the same show again: just its latest version)
@@ -1032,21 +1070,29 @@ class Engine:
         solo, self._solo = self._solo, None
         self._solo_fixed = False
         base = self._base
-        held = None if self._black_now(now) and solo is None else self._still_mix(now, solo)
-        base.current = None
-        base.outgoing = None
-        base.transition = Transition("cut", 0.0)
+        fading_to_black = (solo is None and base.current is None and base.held is None and base.transitioning(now)
+                           and not any(slot.visibility(now) > 0.0 for slot in self._overlays))
+        if fading_to_black:  # (a Fade to black, say: frozen now, the lights would stay as they are this moment)
+            held = None
+        else:
+            held = None if self._black_now(now) and solo is None else self._still_mix(now, solo)
+            base.current = None
+            base.outgoing = None
+            base.transition = Transition("cut", 0.0)
         base.held = held
         for slot in self._overlays:
             slot.clear_now()
         self._house_driven.clear()
         if old.folder:
             self._show_globals[_folder_key(old.folder)] = saveable(self._globals)
+            self._other_runners[_folder_key(old.folder)] = self._runner
         self._swap_show(show)
         self._globals = initial_globals(show, self._show_globals.pop(_folder_key(show.folder), {}))
         self._ctx.globals = frozen_map(self._globals)
+        # the new show's automations: as they were when it was last loaded (so what already ran this time round
+        # doesn't run again), or afresh
         paused, since = self._global_runner.paused, self._global_runner.paused_since
-        self._runner = AutomationRunner()  # the new show's automations start afresh
+        self._runner = self._runner_for(show.folder)
         self._runner.paused, self._runner.paused_since = paused, since
         self._show_events = {"show_loads"}
         self._pending_load = None
@@ -1054,6 +1100,19 @@ class Engine:
         self._feeds_until = now + FEED_WAIT  # (its feeds are still connecting)
         log_info(f"Show “{show.name}” loaded ({show.folder}); the lights hold what they showed until one of its inputs is sent"
                  if held is not None else f"Show “{show.name}” loaded ({show.folder})")
+
+    def _runner_for(self, folder: str) -> AutomationRunner:
+        """A show's automations' runner: the one it had when it was last loaded (kept while CentraLight runs, and in
+        live.json), or a new one."""
+        key = _folder_key(folder)
+        runner = self._other_runners.pop(key, None)
+        if runner is not None:
+            return runner
+        runner = AutomationRunner()
+        saved = self._other_runner_data.pop(key, None)
+        if saved:
+            runner.restore(saved, self._wall(), saved_at=self._saved_at)
+        return runner
 
     def _refresh_identify(self) -> None:
         colours = identify_colours([fx.id for fx in self.show.colour_fixtures()], self._identify_seed)
