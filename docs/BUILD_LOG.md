@@ -17,12 +17,13 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M3 Variables, expressions, Stream Deck | **done** (3 Nov, 00:35) — 277 tests pass |
 | M4 Automations + always running (tray, start with Windows) | **done** (3 Nov, 01:00) |
 | M5 AI inputs | **done** (3 Nov, 01:55) |
+| Layout positions only + Blur (your change of 3 Nov) | **done** (3 Nov, 02:17) |
 | M6 Timed mode + keyframes (+ video) | next |
 | M7 Painting and masks | not started |
 | M8 Audio variables | not started |
 | M9 Polish (launcher .exe, Diagnostics) | not started |
 
-Run all the tests (about a minute) from the CentraLight folder:
+Run all the tests (about three minutes, including the layout check at every scaling) from the CentraLight folder:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -t .
@@ -42,6 +43,33 @@ Run all the tests (about a minute) from the CentraLight folder:
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## Layout positions only, and Blur (your plan change of 3 Nov) — done
+
+You changed the plan at about 01:15 on 3 Nov, while M5 was under way, so this came straight after M5 rather than
+before it.
+
+- **The Layout tab is only about where the lights are.** The blue size knob, the size rings and the **Size** box
+  are gone, and so are "Resize" undo steps. Every light follows the same-sized patch of the picture around its
+  dot (the size every light had by default: 8 % of the picture's width on each side), shown as a faint ring.
+  Saved layouts keep positions and the room photo only. Sizes in files from before are ignored, and they aren't
+  written again.
+- **Blur** on NDI and Image elements (and Video, when it arrives in M6): Editor → click the element → **Blur**.
+  - 0 % (the default) is exactly how Follow screen looked before.
+  - Higher: each light averages a wider area of that element's picture, so the colours are calmer and smoother.
+  - 100 %: every light shows the whole picture's average colour.
+  - Like any setting it can be keyframed or given an expression, and it softens only its own element: a sharp
+    Paint shape on another track stays sharp. The same Blur gives the same colours in the Editor and on the lights.
+- The AI guide explains Blur and the fixed patch size.
+
+A crash found and fixed along the way: once in about ten runs, the layout check crashed outright. The cause was a
+real bug in the Editor's details panel: when you pick another element, the panel rebuilds its rows, and it
+deleted the old ones straight away. If a text box in them still had the keyboard (e.g. you'd typed in the NDI
+source box), deleting it made it report "editing finished" while half gone, and the app could crash. The same
+could happen when a choice that changes which rows show (e.g. Fill: Colour → Gradient) rebuilt the panel from
+inside its own signal. Now a half-typed edit is finished first (and goes to the element it was typed for), and the
+old rows are removed quietly and deleted a moment later. A test types in the source box and clicks away; the
+layout check now also prints where it was if it ever crashes.
 
 ## M5 AI inputs — done
 
@@ -255,7 +283,11 @@ Measured (Simulated output, so no lights):
   (target about 5 s).
 - **CPU** for the whole app following a 960×540 24 fps feed: 3.6 % of one core = 0.23 % of this 16-core PC
   (target ≤3 %). Engine: 0.28 ms per tick. Memory steady at about 122 MB.
-- **3-hour soak** (`tools\soak.py`): running now; result below when it finishes.
+- **3-hour soak** (`tools\soak.py`, finished 3 Nov 02:02): the app (as it was after M4) followed a 640×360,
+  24 fps test feed for 180 minutes. CPU averaged 4.3 % of one core (0.27 % of the PC; worst minute 6.1 %),
+  memory stayed flat (121 MB at the start, 124 MB at the end; the second half averaged only 0.4 MB more than
+  the first), and the session log has no errors. The CPU is a little over the 3 %-of-one-core target; M9
+  (polish) will look at trimming it.
 
 ### Media Background Pane is only sending one picture per connection
 

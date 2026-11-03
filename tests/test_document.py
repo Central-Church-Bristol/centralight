@@ -68,7 +68,7 @@ class DocumentTests(DocumentTestCase):
 
     def test_merged_edits_are_one_undo_step(self) -> None:
         for old, x in ((20, 0.1), (10, 0.2), (20, 0.3)):
-            self.doc.apply(move_lights(self.doc.show, {"slimpar-101": MapSpot(x, 0.2, 0.08)}), f"Across {old} % → {round(x * 100)} %", merge_key="spin")
+            self.doc.apply(move_lights(self.doc.show, {"slimpar-101": MapSpot(x, 0.2)}), f"Across {old} % → {round(x * 100)} %", merge_key="spin")
         self.assertEqual(self.doc.undo_stack.count(), 1)
         self.assertEqual(self.doc.undo_stack.text(0), "Across 20 % → 30 %")  # first "from", last "to"
         self.doc.undo()
@@ -81,7 +81,7 @@ class DocumentTests(DocumentTestCase):
     def test_a_drag_is_one_undo_step(self) -> None:
         self.doc.begin_drag()
         for x in (0.3, 0.4, 0.5):
-            self.doc.preview(move_lights(self.doc.show, {"slimpar-101": MapSpot(x, 0.5, 0.08)}))
+            self.doc.preview(move_lights(self.doc.show, {"slimpar-101": MapSpot(x, 0.5)}))
         self.assertEqual(self.doc.undo_stack.count(), 0)
         self.doc.end_drag("Move SlimPAR 101")
         self.assertEqual(self.doc.undo_stack.count(), 1)
@@ -163,11 +163,11 @@ class SeparateHistoryTests(DocumentTestCase):
 
     def test_layout_undo_never_touches_inputs(self) -> None:
         self.doc.set_scope(SCOPE_LAYOUT)
-        self.doc.apply(move_lights(self.doc.show, {"slimpar-101": MapSpot(0.9, 0.9, 0.1)}), "Move SlimPAR 101")
+        self.doc.apply(move_lights(self.doc.show, {"slimpar-101": MapSpot(0.9, 0.9)}), "Move SlimPAR 101")
         self.edit_input("warm-white", "Warm wash")
         self.doc.set_scope(SCOPE_LAYOUT)
         self.doc.undo()
-        self.assertEqual(self.doc.show.fixture("slimpar-101").map, MapSpot(0.2, 0.2, 0.08))
+        self.assertEqual(self.doc.show.fixture("slimpar-101").map, MapSpot(0.2, 0.2))
         self.assertEqual(self.doc.show.inputs["warm-white"].name, "Warm wash")
 
     def test_new_and_deleted_inputs_keep_their_own_history(self) -> None:
@@ -231,7 +231,7 @@ class SeparateHistoryTests(DocumentTestCase):
     def test_history_jumps_and_redo_after_a_jump(self) -> None:
         self.doc.set_scope(SCOPE_LAYOUT)
         for x in (0.3, 0.4, 0.5):
-            self.doc.apply(move_lights(self.doc.show, {"slimpar-101": MapSpot(x, 0.2, 0.08)}), f"Move SlimPAR 101 to {round(x * 100)} %")
+            self.doc.apply(move_lights(self.doc.show, {"slimpar-101": MapSpot(x, 0.2)}), f"Move SlimPAR 101 to {round(x * 100)} %")
         stack = self.doc.undo_stack
         self.assertEqual([stack.text(i) for i in range(stack.count())], ["Move SlimPAR 101 to 30 %", "Move SlimPAR 101 to 40 %", "Move SlimPAR 101 to 50 %"])
         stack.setIndex(1)  # what clicking the first step in the History panel does
@@ -249,19 +249,19 @@ class SavedLayoutDocumentTests(DocumentTestCase):
     def test_switching_is_undoable_and_saved(self) -> None:
         show, christmas = save_layout_as(self.doc.show, "Christmas")
         self.doc.apply(show, "Save layout as Christmas")
-        self.doc.apply(move_lights(self.doc.show, {"slimpar-101": MapSpot(0.9, 0.9, 0.12)}), "Move SlimPAR 101")
+        self.doc.apply(move_lights(self.doc.show, {"slimpar-101": MapSpot(0.9, 0.9)}), "Move SlimPAR 101")
         self.doc.apply(switch_layout(self.doc.show, "main"), "Switch to layout Main")
-        self.assertEqual(self.doc.show.fixture("slimpar-101").map, MapSpot(0.2, 0.2, 0.08))
+        self.assertEqual(self.doc.show.fixture("slimpar-101").map, MapSpot(0.2, 0.2))
         self.doc.undo()
         self.assertEqual(self.doc.show.active_layout, christmas)
-        self.assertEqual(self.doc.show.fixture("slimpar-101").map, MapSpot(0.9, 0.9, 0.12))
+        self.assertEqual(self.doc.show.fixture("slimpar-101").map, MapSpot(0.9, 0.9))
         self.saved_show()
         files = sorted(p.name for p in (self.folder / "layouts").glob("*.json"))
         self.assertEqual(files, ["christmas.json", "main.json"])
         again = load_show(self.folder)  # a restart
         self.assertEqual(again.active_layout, christmas)
-        self.assertEqual(again.fixture("slimpar-101").map, MapSpot(0.9, 0.9, 0.12))
-        self.assertEqual(again.layout("main").positions["slimpar-101"], MapSpot(0.2, 0.2, 0.08))
+        self.assertEqual(again.fixture("slimpar-101").map, MapSpot(0.9, 0.9))
+        self.assertEqual(again.layout("main").positions["slimpar-101"], MapSpot(0.2, 0.2))
 
     def test_deleted_layouts_lose_their_file(self) -> None:
         show, christmas = save_layout_as(self.doc.show, "Christmas")

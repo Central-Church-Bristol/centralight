@@ -311,15 +311,15 @@ def delete_input_file(folder: Path, input_id: str) -> None:
 
 
 def _spot_to_dict(spot: MapSpot) -> dict[str, float]:
-    return {"x": round(spot.x, 4), "y": round(spot.y, 4), "r": round(spot.r, 4)}
+    return {"x": round(spot.x, 4), "y": round(spot.y, 4)}
 
 
 def _spot_from_dict(raw: Any) -> MapSpot:
+    """Positions only: an "r" (light size) from an older CentraLight is ignored."""
     raw = raw if isinstance(raw, dict) else {}
     return MapSpot(
         x=min(1.0, max(0.0, _soft_number(raw.get("x"), 0.5))),
         y=min(1.0, max(0.0, _soft_number(raw.get("y"), 0.5))),
-        r=min(0.5, max(0.01, _soft_number(raw.get("r"), 0.07))),
     )
 
 
@@ -549,7 +549,7 @@ def fixture_to_dict(fx: Fixture) -> dict[str, Any]:
         data["group"] = fx.group
     data["role"] = fx.role
     if fx.map is not None and fx.role == ROLE_COLOUR:
-        data["map"] = {"x": round(fx.map.x, 4), "y": round(fx.map.y, 4), "r": round(fx.map.r, 4)}
+        data["map"] = _spot_to_dict(fx.map)
     return data
 
 
@@ -662,14 +662,7 @@ def _fixture_from_dict(item: Any) -> Fixture:
         raise ShowError(f"role must be one of {', '.join(ROLES)}")
     spot = None
     if role == ROLE_COLOUR:
-        raw = item.get("map") or {}
-        if not isinstance(raw, dict):
-            raw = {}
-        spot = MapSpot(
-            x=min(1.0, max(0.0, _soft_number(raw.get("x"), 0.5))),
-            y=min(1.0, max(0.0, _soft_number(raw.get("y"), 0.5))),
-            r=min(0.5, max(0.01, _soft_number(raw.get("r"), 0.07))),
-        )
+        spot = _spot_from_dict(item.get("map"))
     return Fixture(
         id=fixture_id,
         name=str(item.get("name") or fixture_id),

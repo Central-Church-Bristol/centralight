@@ -50,13 +50,16 @@ def slugify(text: str, fallback: str = "input") -> str:
     return (slug or fallback)[:64].strip("-") or fallback
 
 
+PATCH_RADIUS = 0.08  # every light follows the same-sized patch of the picture: this radius, in screen widths
+
+
 @dataclass(frozen=True)
 class MapSpot:
-    """Where a colour light sits on the 16:9 map: x, y from 0 to 1, radius in screen widths."""
+    """Where a colour light sits on the 16:9 map: x, y from 0 to 1. Every light follows the same-sized patch of
+    the picture around its dot (PATCH_RADIUS); how much picture the lights average is each element's Blur."""
 
     x: float = 0.5
     y: float = 0.5
-    r: float = 0.07
 
 
 @dataclass(frozen=True)

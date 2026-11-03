@@ -28,11 +28,12 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from .compositor import direction_ramp, from_image, radial_ramp, scale_alpha, solid_layer, transparent, warp
+from .compositor import blur, direction_ramp, from_image, radial_ramp, scale_alpha, solid_layer, transparent, warp
 from .ndi_source import SourceFrame
 from .params import evaluate, is_dynamic
 
 DEFAULT_NDI_SOURCE = "Media Background Pane"
+BLUR_KINDS = ("image", "video", "ndi")  # picture elements: their Blur makes each light average more of them
 MEDIA_CACHE_SIZE = 32
 _MAP_TYPES = (dict, MappingProxyType)
 _NUMBER_TYPES = (int, float)
@@ -400,6 +401,10 @@ def _finish_element(element: Mapping[str, Any], ctx: RenderContext, use_mask: bo
     scale = param(element, "transform.scale", t, 1.0)
     rotation = param(element, "transform.rotation", t, 0.0)
     layer = warp(layer, x, y, scale, rotation)
+    if element.get("kind") in BLUR_KINDS:  # each light averages more of this element's own picture
+        amount = param(element, "blur", t, 0.0)
+        if amount > 0.0:
+            layer = blur(layer, amount)
     opacity = min(1.0, max(0.0, param(element, "opacity", t, 1.0)))
     if opacity < 1.0:
         layer = scale_alpha(layer, opacity)

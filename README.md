@@ -10,7 +10,7 @@ Double-click `run.bat` to start the CentraLight app: a window with the **Festoon
 
 - The first time, `run.bat` installs what the app needs into `.venv` and copies the church fonts from `G:\My Drive\Video Projection\Brand\Fonts` into `fonts\`.
 - The app starts with **Simulated** output: it shows what it would send, but doesn't touch the lights. To drive the lights, click the gear (top right) → **Output** → **Eurolite USB-DMX512 PRO**. Close the console scripts and MagicQ first: only one program can use the dongle at a time.
-- **Layout** tab: drag each dot to where its light is, click a dot to flash that light, and turn on **Identify** to give every light its own colour. Notes about where each light is go into `fixture_map.csv` (the same file `usb_dmx_patch_test.py` uses).
+- **Layout** tab: drag each dot to where its light is, click a dot to flash that light, and turn on **Identify** to give every light its own colour. Every light follows the same-sized patch of the picture around its dot; for calmer, smoother colours, raise **Blur** on the NDI (or Image) element in the Editor. Notes about where each light is go into `fixture_map.csv` (the same file `usb_dmx_patch_test.py` uses).
 - **Editor** tab: build inputs from Paint (colours, gradients, shapes), Image and NDI elements on four tracks; untick lights an element should leave alone; pick a transition. **=** next to a setting gives it an *expression*, a small formula such as `wave(time, 0.25)` or `mix(#FF0000, accent, 0.5)`. *Global variables* (Editor → Globals tab) can be shown on the Dashboard and set from the Stream Deck.
 - **Automation** tab: "when these conditions are met, do this", e.g. Sundays 09:00–12:30 → Warm white on Base and the key lights at 70 %. Closing the window keeps CentraLight running in the tray by the clock, so automations and the Stream Deck keep working; **Quit** is in the tray icon's menu.
 - **Inputs made by AI**: **Create with AI** on the **+ New input** tile (or the sparkle on a tile, to edit one). Describe the look, click **Copy prompt**, paste it into any AI chat (ChatGPT, Claude, Gemini, Copilot), and paste the reply back: it's checked and previewed before you add it. AI tools such as Claude Code or Cursor can also work in the show folder (Settings → AI → **Open show folder**): they read `AI_GUIDE.md` there, and inputs they write appear straight away (Ctrl+Z undoes them).
@@ -45,7 +45,7 @@ Settings → Remote → **Allow other computers and phones** is ticked; they the
 
 The console scripts below still work, and stay the fallback until the app has been tested on the lights.
 
-Run the app's tests (about a minute; they never touch the lights):
+Run the app's tests (about three minutes; they never touch the lights):
 
 ```bat
 .venv\Scripts\python.exe -m unittest discover -s tests -t .

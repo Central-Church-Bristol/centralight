@@ -32,12 +32,12 @@ def _replace_fixture(show: Show, fixture_id: str, **changes: Any) -> Show:
 
 
 def move_lights(show: Show, spots: dict[str, MapSpot]) -> Show:
-    """New map spots for some colour lights (x, y clamped to the map, radius to 0.01-0.5)."""
+    """New map spots for some colour lights (x, y clamped to the map)."""
     fixtures = []
     for fx in show.fixtures:
         spot = spots.get(fx.id)
         if spot is not None and fx.role == ROLE_COLOUR:
-            spot = MapSpot(min(1.0, max(0.0, spot.x)), min(1.0, max(0.0, spot.y)), min(0.5, max(0.01, spot.r)))
+            spot = MapSpot(min(1.0, max(0.0, spot.x)), min(1.0, max(0.0, spot.y)))
             fx = replace(fx, map=spot)
         fixtures.append(fx)
     return sync_active_layout(replace(show, fixtures=tuple(fixtures)))
@@ -114,7 +114,7 @@ def add_colour_light(show: Show, x: float = 0.5, y: float = 0.5) -> tuple[Show, 
         profile=DEFAULT_COLOUR_PROFILE,
         address=next_free_address(show, channels),
         role=ROLE_COLOUR,
-        map=MapSpot(x, y, 0.07),
+        map=MapSpot(x, y),
     )
     return sync_active_layout(replace(show, fixtures=show.fixtures + (fixture,))), fixture.id
 

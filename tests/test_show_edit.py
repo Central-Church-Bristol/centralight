@@ -27,8 +27,8 @@ class ShowEditTests(unittest.TestCase):
         self.show = show_from_patch()
 
     def test_move_clamps_to_the_map(self) -> None:
-        moved = move_lights(self.show, {"slimpar-101": MapSpot(1.4, -0.2, 0.9), "dimmer-1": MapSpot(0.5, 0.5, 0.1)})
-        self.assertEqual(moved.fixture("slimpar-101").map, MapSpot(1.0, 0.0, 0.5))
+        moved = move_lights(self.show, {"slimpar-101": MapSpot(1.4, -0.2), "dimmer-1": MapSpot(0.5, 0.5)})
+        self.assertEqual(moved.fixture("slimpar-101").map, MapSpot(1.0, 0.0))
         self.assertIsNone(moved.fixture("dimmer-1").map)  # house lights aren't on the map
 
     def test_rename_house_light_renames_its_label(self) -> None:

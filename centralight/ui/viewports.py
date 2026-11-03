@@ -21,7 +21,7 @@ from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFontMetrics, QImage, QPainter, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolTip, QVBoxLayout, QWidget
 
-from ..model import Show
+from ..model import PATCH_RADIUS, Show
 from ..output import RGB, to_byte
 from ..params import evaluate, is_dynamic
 from ..step_names import shape_name
@@ -154,7 +154,7 @@ class ViewportCanvas(QWidget):
             if fx.map is None:
                 continue
             centre = self.to_widget(fx.map.x, fx.map.y)
-            radius = fx.map.r * canvas.width()
+            radius = PATCH_RADIUS * canvas.width()
             excluded = fx.id in self.excluded
             ring = QPen(QColor(theme.DANGER if excluded else "#C8D2E0"), 1, Qt.PenStyle.DashLine)
             ring.setCosmetic(True)

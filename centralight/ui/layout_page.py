@@ -1,11 +1,12 @@
 """The Layout page: where the lights are, and which light is which.
 
 - Map: drag a light's dot to where it is in the room (the map is 16:9, like the screen).
-  Drag the small handle on its ring to change how much of the picture it follows.
-  Click a dot to flash that light. The tinted patches show which part of the picture
-  each light follows. A photo of the room can go behind the map.
+  Click a dot to flash that light. The faint ring and the tinted patches show which part
+  of the picture each light follows (the same size for every light: how much picture the
+  lights average is the Blur setting on picture elements, in the Editor). A photo of the
+  room can go behind the map.
 - Saved layouts: "Layout: Main ▾" at the top switches between named arrangements of the
-  map (positions, sizes and the room photo); Save as, Rename and Delete are there too.
+  map (positions and the room photo); Save as, Rename and Delete are there too.
 - Undo / Redo / History at the top right cover everything on this page.
 - Lights: names, groups, DMX addresses (overlaps are flagged) and a note of where each
   light is, saved to fixture_map.csv (the same file usb_dmx_patch_test.py uses).
@@ -17,7 +18,6 @@ Identify and test colours switch off when you leave this page.
 from __future__ import annotations
 
 import hashlib
-import math
 import random
 from pathlib import Path
 
@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
-    QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsObject,
     QGraphicsPixmapItem,
@@ -64,7 +63,7 @@ from ..engine import EngineFrame
 from ..files import write_atomic
 from ..layouts import delete_layout, rename_layout, save_layout_as, set_backdrop, set_backdrop_opacity, sorted_layouts, switch_layout
 from ..log import log_exception
-from ..model import ROLE_COLOUR, MapSpot, Show
+from ..model import PATCH_RADIUS, ROLE_COLOUR, MapSpot, Show
 from ..notes import load_notes, save_notes
 from ..output import RGB
 from ..sampler import EDITOR_H, EDITOR_W, Sampler, identify_colours
@@ -110,44 +109,15 @@ TEST_COLOURS = (
 # ---------------------------------------------------------------- the map
 
 
-class RadiusHandle(QGraphicsEllipseItem):
-    """The small knob on a light's ring: drag it to change the light's size."""
-
-    def __init__(self, light: LightItem) -> None:
-        super().__init__(-4.5, -4.5, 9, 9, light)
-        self.light = light
-        self.setBrush(QColor(theme.ACCENT))
-        self.setPen(QPen(QColor(theme.ACCENT_TEXT), 1))
-        self.setCursor(Qt.CursorShape.SizeHorCursor)
-        self.setToolTip("Drag to change how much of the picture this light follows")
-        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
-        self.setZValue(2)
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802
-        self.light.page.begin_drag()
-        event.accept()
-
-    def mouseMoveEvent(self, event) -> None:  # noqa: N802
-        centre = self.light.scenePos()
-        point = event.scenePos()
-        radius = max(SCENE_W * 0.01, min(SCENE_W * 0.5, math.hypot(point.x() - centre.x(), point.y() - centre.y())))
-        self.light.set_radius(radius)
-        self.light.page.light_moving(self.light)
-        event.accept()
-
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        self.light.page.end_drag("resize")
-        event.accept()
-
-
 class LightItem(QGraphicsObject):
-    """One colour light on the map: its dot, its ring, its name."""
+    """One colour light on the map: its dot, a faint ring showing the patch of picture it follows (the same
+    size for every light), and its name."""
 
-    def __init__(self, page: LayoutPage, fixture_id: str, name: str, x: float, y: float, r: float) -> None:
+    def __init__(self, page: LayoutPage, fixture_id: str, name: str, x: float, y: float) -> None:
         super().__init__()
         self.page = page
         self.fixture_id = fixture_id
-        self.radius = r
+        self.radius = PATCH_RADIUS * SCENE_W
         self.colour = QColor(0, 0, 0)
         self.tint = QColor(theme.TEXT_3)
         self._pressed_at: QPointF | None = None
@@ -168,10 +138,8 @@ class LightItem(QGraphicsObject):
         # names stay a readable size however small the map is drawn
         self.label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
         self.full_name = name
-        self.handle = RadiusHandle(self)
         self.setPos(x, y)
         self.set_name(name)
-        self.set_radius(r)
 
     def set_name(self, name: str) -> None:
         from PySide6.QtGui import QFontMetrics
@@ -179,19 +147,13 @@ class LightItem(QGraphicsObject):
         self.full_name = name
         shown = QFontMetrics(self.label.font()).elidedText(name, Qt.TextElideMode.ElideRight, LABEL_MAX_PX)
         self.label.setText(shown)
-        self.setToolTip(f"{name}\nDrag to move · click to flash · drag the blue knob to resize")
+        self.setToolTip(f"{name}\nDrag to move · click to flash")
         self.place_label(1.0)
 
     def place_label(self, scale: float) -> None:
         """Centre the name under the dot (the name itself isn't scaled with the map)."""
         rect = self.label.boundingRect()
         self.label.setPos(-rect.width() / 2 / max(scale, 0.01), CORE + 3 / max(scale, 0.01))
-
-    def set_radius(self, radius: float) -> None:
-        self.prepareGeometryChange()
-        self.radius = radius
-        self.handle.setPos(radius, 0)
-        self.update()
 
     def set_colours(self, colour: QColor, tint: QColor) -> None:
         if colour != self.colour or tint != self.tint:
@@ -259,7 +221,7 @@ class LightItem(QGraphicsObject):
             self.page.flash([self.fixture_id])
 
     def spot(self) -> MapSpot:
-        return MapSpot(self.pos().x() / SCENE_W, self.pos().y() / SCENE_H, self.radius / SCENE_W)
+        return MapSpot(self.pos().x() / SCENE_W, self.pos().y() / SCENE_H)
 
 
 class MapScene(QGraphicsScene):
@@ -494,7 +456,8 @@ class LayoutPage(QWidget):
         self.read_only_hint.setWordWrap(True)
         map_panel.body.addWidget(self.read_only_hint)
         map_panel.body.addWidget(self.view, 1)
-        hint = QLabel("Drag a dot to where the light is in the room · click a dot to flash its light · drag the blue knob to resize")
+        hint = QLabel("Drag a dot to where the light is in the room · click a dot to flash its light. Every light "
+                      "follows the picture inside its ring; to average more of it, use Blur on the element in the Editor.")
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         map_panel.body.addWidget(hint)
@@ -576,10 +539,8 @@ class LayoutPage(QWidget):
         form.setHorizontalSpacing(10)
         self.x_spin = self._percent_spin(0, 100, "Across the map (0 = left, 100 = right)")
         self.y_spin = self._percent_spin(0, 100, "Down the map (0 = top, 100 = bottom)")
-        self.r_spin = self._percent_spin(1, 50, "How far the light's patch reaches, in % of the map's width")
         form.addRow("Across", self.x_spin)
         form.addRow("Down", self.y_spin)
-        form.addRow("Size", self.r_spin)
         selected_panel.body.addWidget(self.position_box)
         self.position_box.setVisible(False)
 
@@ -713,9 +674,9 @@ class LayoutPage(QWidget):
                 self.scene.removeItem(self._items.pop(fixture_id))
         for fx in lights:
             item = self._items.get(fx.id)
-            x, y, r = fx.map.x * SCENE_W, fx.map.y * SCENE_H, fx.map.r * SCENE_W
+            x, y = fx.map.x * SCENE_W, fx.map.y * SCENE_H
             if item is None:
-                item = LightItem(self, fx.id, fx.name, x, y, r)
+                item = LightItem(self, fx.id, fx.name, x, y)
                 self.scene.addItem(item)
                 self._items[fx.id] = item
             else:
@@ -723,10 +684,7 @@ class LayoutPage(QWidget):
                 if not self._dragging:
                     if (abs(item.pos().x() - x) > 0.01 or abs(item.pos().y() - y) > 0.01):
                         item.setPos(x, y)
-                    if abs(item.radius - r) > 0.01:
-                        item.set_radius(r)
             item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not read_only)
-            item.handle.setVisible(not read_only)
         self._update_labels()
         self._update_territory(show)
         self._fill_tables(show)
@@ -780,7 +738,7 @@ class LayoutPage(QWidget):
         return {k: rgb for k, (_n, rgb) in identify_colours([fx.id for fx in show.colour_fixtures()], show.identify_seed).items()}
 
     def _update_territory(self, show: Show) -> None:
-        key = tuple((fx.id, fx.map.x, fx.map.y, fx.map.r) for fx in show.colour_fixtures() if fx.map) + (show.identify_seed,)
+        key = tuple((fx.id, fx.map.x, fx.map.y) for fx in show.colour_fixtures() if fx.map) + (show.identify_seed,)
         if key == self._territory_key:
             return
         self._territory_key = key
@@ -962,8 +920,8 @@ class LayoutPage(QWidget):
             show = move_lights(self.show_data, dict(self._drag_spots))
             self.document.preview(show)
 
-    def end_drag(self, kind: str) -> None:
-        """The end of a drag: kind is "move" or "resize". The whole drag is one undo step."""
+    def end_drag(self, kind: str = "move") -> None:
+        """The end of a drag (moving lights). The whole drag is one undo step."""
         if not self._dragging:
             return
         self._preview_timer.stop()
@@ -971,7 +929,7 @@ class LayoutPage(QWidget):
         moved = list(self._drag_spots)
         self._dragging = False
         self._drag_spots.clear()
-        self.document.end_drag(f"{'Resize' if kind == 'resize' else 'Move'} {self.lights_label(moved)}")
+        self.document.end_drag(f"Move {self.lights_label(moved)}")
         self._update_labels()
 
     def lights_label(self, fixture_ids) -> str:
@@ -1013,7 +971,7 @@ class LayoutPage(QWidget):
 
     def _sync_selected_panel(self) -> None:
         ids = self.selected_ids()
-        spins = (self.x_spin, self.y_spin, self.r_spin)
+        spins = (self.x_spin, self.y_spin)
         if len(ids) != 1:
             self.selected_name.setText("Click a light on the map" if not ids else f"{len(ids)} lights selected")
             self.position_box.setVisible(False)
@@ -1023,7 +981,7 @@ class LayoutPage(QWidget):
             return
         self.position_box.setVisible(True)
         self.selected_name.setText(f"{fx.name} · ch {fx.channel_range()}")
-        for spin, value in zip(spins, (fx.map.x, fx.map.y, fx.map.r)):
+        for spin, value in zip(spins, (fx.map.x, fx.map.y)):
             blocked = spin.blockSignals(True)
             spin.setValue(round(value * 100, 1))
             spin.blockSignals(blocked)
@@ -1036,9 +994,8 @@ class LayoutPage(QWidget):
         fx = self.show_data.fixture(ids[0])
         if fx is None or fx.map is None:
             return
-        spot = MapSpot(self.x_spin.value() / 100, self.y_spin.value() / 100, self.r_spin.value() / 100)
-        kind = "Resize" if abs(spot.r - fx.map.r) > 1e-9 else "Move"
-        self.document.apply(move_lights(self.show_data, {ids[0]: spot}), f"{kind} {fx.name}", merge_key=f"spin-{kind}-{ids[0]}")
+        spot = MapSpot(self.x_spin.value() / 100, self.y_spin.value() / 100)
+        self.document.apply(move_lights(self.show_data, {ids[0]: spot}), f"Move {fx.name}", merge_key=f"spin-Move-{ids[0]}")
 
     # ------------------------------------------------------------ editing
 
@@ -1113,7 +1070,7 @@ class LayoutPage(QWidget):
             for n, item in enumerate(ordered):
                 value = first + (last - first) * n / (len(ordered) - 1)
                 x, y = (value, item.pos().y()) if axis == 0 else (item.pos().x(), value)
-                spots[item.fixture_id] = MapSpot(x / SCENE_W, y / SCENE_H, item.radius / SCENE_W)
+                spots[item.fixture_id] = MapSpot(x / SCENE_W, y / SCENE_H)
         else:
             target = {"left": min(xs), "hcentre": sum(xs) / len(xs), "right": max(xs), "top": min(ys), "vmiddle": sum(ys) / len(ys), "bottom": max(ys)}.get(how)
             if target is None:
@@ -1124,7 +1081,7 @@ class LayoutPage(QWidget):
                     x = target
                 else:
                     y = target
-                spots[item.fixture_id] = MapSpot(x / SCENE_W, y / SCENE_H, item.radius / SCENE_W)
+                spots[item.fixture_id] = MapSpot(x / SCENE_W, y / SCENE_H)
         title = dict((h, label) for label, h in ALIGN_CHOICES).get(how, "Line up")
         self.document.apply(move_lights(self.show_data, spots), f"{title} ({len(items)} lights)")
 

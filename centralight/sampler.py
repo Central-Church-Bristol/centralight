@@ -1,16 +1,17 @@
 """Which part of the picture each light follows.
 
-The picture (the canvas) is 16:9. Each colour light sits on it at (x, y), both 0-1,
-with a radius r measured in screen widths. A pixel belongs to the nearest light whose
-circle it's inside (nearest in radii, so a bigger light claims more): that's the owner
-map, and it means two lights never share a pixel. Inside its patch, pixels near the
-middle count most: weight = 1 - 0.75·d², with d = distance / radius. Each light's
-weights add up to 1, so its colour is the weighted average of its patch:
+The picture (the canvas) is 16:9. Each colour light sits on it at (x, y), both 0-1, and
+follows a circle of the picture around its dot, the same size for every light (radius
+PATCH_RADIUS, in screen widths). A pixel belongs to the nearest light whose circle it's
+inside: that's the owner map, and it means two lights never share a pixel. Inside its
+patch, pixels near the middle count most: weight = 1 - 0.75·d², with d = distance / radius.
+Each light's weights add up to 1, so its colour is the weighted average of its patch:
 
     lights = W @ pixels
 
-A light whose patch is empty (tiny, or off the edge) takes the colour under its centre.
-Lights on exactly the same spot share one patch.
+A light whose patch is empty (off the edge) takes the colour under its centre. Lights on
+exactly the same spot share one patch. To average a wider area (calmer colours), a picture
+element has a Blur setting (compositor.blur), rather than the lights having sizes.
 
 This file also has the Identify colours: 12 colours that look different on LED lights.
 """
@@ -22,7 +23,7 @@ from collections.abc import Iterable, Mapping
 
 import numpy as np
 
-from .model import Fixture
+from .model import PATCH_RADIUS, Fixture
 
 CANVAS_W = 160
 CANVAS_H = 90
@@ -54,12 +55,14 @@ def identify_colours(light_ids: Iterable[str], seed: int) -> dict[str, tuple[str
 
 
 class Sampler:
-    def __init__(self, fixtures: Iterable[Fixture], width: int = CANVAS_W, height: int = CANVAS_H) -> None:
+    def __init__(self, fixtures: Iterable[Fixture], width: int = CANVAS_W, height: int = CANVAS_H,
+                 radius: float = PATCH_RADIUS) -> None:
         self.width = width
         self.height = height
+        self.radius = radius  # every light's patch (screen widths)
         lights = [fx for fx in fixtures if fx.is_colour and fx.map is not None]
         self.ids: tuple[str, ...] = tuple(fx.id for fx in lights)
-        self.key = tuple((fx.id, fx.map.x, fx.map.y, fx.map.r) for fx in lights)
+        self.key = tuple((fx.id, fx.map.x, fx.map.y) for fx in lights)
         self._keep_cache: dict[frozenset[str], np.ndarray] = {}
         self.owner, self.weights = self._build(lights)
 
@@ -90,7 +93,7 @@ class Sampler:
         distances = np.empty((len(groups), h, w), dtype=np.float32)
         for g, members in enumerate(groups):
             fx = lights[members[0]]
-            radius = max(max(lights[i].map.r for i in members), 1e-6)
+            radius = max(self.radius, 1e-6)
             dx = xs[None, :] - fx.map.x
             dy = (ys[:, None] - fx.map.y) * aspect
             distances[g] = np.sqrt(dx * dx + dy * dy) / radius
@@ -161,7 +164,7 @@ class Sampler:
 def sampler_for(fixtures: Iterable[Fixture], previous: Sampler | None, width: int = CANVAS_W, height: int = CANVAS_H) -> Sampler:
     """Reuse the previous sampler if no light moved, otherwise build a new one."""
     fixtures = list(fixtures)
-    key = tuple((fx.id, fx.map.x, fx.map.y, fx.map.r) for fx in fixtures if fx.is_colour and fx.map is not None)
+    key = tuple((fx.id, fx.map.x, fx.map.y) for fx in fixtures if fx.is_colour and fx.map is not None)
     if previous is not None and previous.key == key and previous.width == width and previous.height == height:
         return previous
     return Sampler(fixtures, width, height)

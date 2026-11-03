@@ -44,7 +44,6 @@ GROUP_SPOTS = {
     "Side Fill": [(0.07, 0.62), (0.93, 0.62)],
     "Pillars": [(0.3, 0.75), (0.7, 0.75)],
 }
-DEFAULT_RADIUS = 0.08
 
 
 def fixture_id(name: str) -> str:
@@ -72,7 +71,7 @@ def show_from_patch(patch: list[dict] | None = None, name: str = "Central Church
                 x, y = 0.1 + 0.1 * (spare % 9), 0.92
                 spare += 1
             fixtures.append(
-                Fixture(fid, item["name"], item["profile"], item["start_ch"], group, ROLE_COLOUR, MapSpot(x, y, DEFAULT_RADIUS))
+                Fixture(fid, item["name"], item["profile"], item["start_ch"], group, ROLE_COLOUR, MapSpot(x, y))
             )
         else:
             label = HOUSE_LABELS.get(group, group or item["name"])

@@ -199,7 +199,7 @@ class BaseBusTests(BaseTestCase):
         engine = self.make()
         engine.tick()
         self.assertEqual(self.rgb(41), (255, 0, 0))
-        moved = replace(self.show, fixtures=tuple(replace(fx, map=MapSpot(0.9, 0.5, 0.05)) if fx.id == "slimpar-105" else fx for fx in self.show.fixtures))
+        moved = replace(self.show, fixtures=tuple(replace(fx, map=MapSpot(0.9, 0.5)) if fx.id == "slimpar-105" else fx for fx in self.show.fixtures))
         engine.submit(SwapShow(moved))
         engine.tick()
         self.assertEqual(self.rgb(41), (0, 0, 255))

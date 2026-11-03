@@ -111,6 +111,16 @@ class LayoutPageTests(M1WindowTestCase):
         process(self.app, 3)
         return window, engine, window.layout_page
 
+    def test_the_map_is_positions_only(self) -> None:
+        from centralight.model import PATCH_RADIUS
+        from centralight.ui.layout_page import SCENE_W
+
+        _window, _engine, page = self.open_layout()
+        self.assertFalse(hasattr(page, "r_spin"))  # no Size box
+        self.assertEqual({round(item.radius, 3) for item in page._items.values()}, {round(PATCH_RADIUS * SCENE_W, 3)})
+        self.assertEqual([i for i in page.scene.items() if i.parentItem() in page._items.values()
+                          and i not in [it.label for it in page._items.values()]], [])  # no size knobs on the rings
+
     def drag_item(self, page, fixture_id: str, dx: int, dy: int) -> None:
         item = page._items[fixture_id]
         viewport = page.view.viewport()

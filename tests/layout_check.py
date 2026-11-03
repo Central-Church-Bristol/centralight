@@ -16,6 +16,7 @@ Exit code 0 = no problems; otherwise the problems are printed.
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import os
 import shutil
 import sys
@@ -39,6 +40,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    faulthandler.enable()  # if Qt ever crashes, print where (the test shows stderr)
     args = parse_args()
     os.environ["QT_SCALE_FACTOR"] = f"{args.scale:g}"
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -86,14 +88,16 @@ def main() -> int:
             process(app, 2)
             for key in window.pages:
                 states = [key]
-                if key == "editor":  # the Editor three times: an element (with a shape), the Input tab, the Globals tab
+                if key == "editor":  # the Editor four times: an element (with a shape), the NDI element (Blur), the Input tab, the Globals tab
                     window.editor_page.open_input("stage-shapes")
-                    states = ["editor-element", "editor-input", "editor-globals"]
+                    states = ["editor-element", "editor-ndi", "editor-input", "editor-globals"]
                 for state in states:
                     window.show_page(key)
                     if state == "editor-element":
                         window.editor_page.select_element("E2")
                         window.editor_page._shape_from_viewport("S1")
+                    elif state == "editor-ndi":
+                        window.editor_page.select_element("E1")
                     elif state == "editor-input":
                         window.editor_page.select_element("")
                         window.editor_page.details.widget().findChild(QTabWidget).setCurrentIndex(0)

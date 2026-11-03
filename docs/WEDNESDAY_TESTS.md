@@ -58,6 +58,9 @@ Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -Name Centr
       Background Pane isn't sending pictures (on 2 Nov it was stuck sending one picture per connection — see
       the build log); the lights then hold their last colours.
 - [ ] Colour changes reach the lights quickly (measured without the lights: about 50 ms).
+- [ ] **Blur**: Editor → Follow screen → click its NDI element → drag **Blur** up. The lights get calmer and
+      closer to each other in colour; at 100 % they all show the screen's average colour. Set it to what looks
+      best in the room (0 % is how it was before) and note the value.
 
 ## 3. Festoon, key lights, Master
 
@@ -78,8 +81,8 @@ Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -Name Centr
 
 - [ ] **Layout** tab → switch on **Identify**: every SlimPAR shows a different colour, matching the dots and
       the list on the right.
-- [ ] Drag each dot to where that light is in the room (the map is the shape of the screen). Drag the blue
-      knob on a dot's ring to change how much of the picture that light follows.
+- [ ] Drag each dot to where that light is in the room (the map is the shape of the screen). The faint ring
+      round each dot is the part of the picture that light follows (the same size for every light).
 - [ ] Click a dot: that light flashes white three times.
 - [ ] Type where each light is in the **Where** column (e.g. "front left, above the drums"). It's saved to
       `fixture_map.csv`, the same file `usb_dmx_patch_test.py` uses.

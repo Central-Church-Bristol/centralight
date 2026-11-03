@@ -66,6 +66,35 @@ def is_identity(x: float, y: float, scale: float, rotation: float) -> bool:
     return abs(x - 0.5) < 1e-6 and abs(y - 0.5) < 1e-6 and abs(scale - 1.0) < 1e-6 and abs(rotation % 360.0) < 1e-6
 
 
+def blur(layer: np.ndarray, amount: float) -> np.ndarray:
+    """Soften a picture (planar premultiplied RGBA) so each light averages a wider area: 0 = as it is, 1 = every
+    pixel the whole picture's average. Sizes are in screen widths, so it looks the same at any canvas size."""
+    import cv2
+
+    amount = min(1.0, max(0.0, float(amount)))
+    if amount <= 0.0:
+        return layer
+    height, width = layer.shape[1:]
+    mean = layer.reshape(4, -1).mean(axis=1).astype(np.float32)
+    toward_mean = 0.0 if amount <= 0.6 else ease((amount - 0.6) / 0.4)  # ends at exactly the average
+    out = np.empty_like(layer)
+    if toward_mean >= 1.0:
+        out[:] = mean[:, None, None]
+        return out
+    # a box this wide, three times over: close to a Gaussian whose spread is half the box (50 % blur: a quarter of
+    # the picture's width, so lights near the middle clearly mix with their neighbours)
+    size = max(1, round(amount * width))
+    kernel = (min(size, width), min(size, height))
+    for plane in range(4):
+        smooth = layer[plane]
+        for _ in range(3):
+            smooth = cv2.blur(smooth, kernel, borderType=cv2.BORDER_REFLECT)
+        out[plane] = smooth
+    if toward_mean > 0.0:
+        out += (mean[:, None, None] - out) * np.float32(toward_mean)
+    return out
+
+
 def warp(layer: np.ndarray, x: float, y: float, scale: float, rotation: float) -> np.ndarray:
     """Move the layer's centre to (x, y) (0-1 of the width / height), scale it, and turn it
     clockwise by rotation degrees. Whatever moves in from outside is transparent."""

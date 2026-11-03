@@ -17,7 +17,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -63,7 +63,7 @@ from .document import ShowDocument
 from .editor_widgets import ChoiceField, ColourField, NumberField, SourceField
 from .expression_edit import Evaluator, ExprButton, ExpressionDialog
 from .globals_panel import GlobalsPanel, LocalsPanel
-from .widgets import ElidedLabel, FlowLayout, Panel
+from .widgets import ElidedLabel, FlowLayout, Panel, discard
 
 KIND_TITLES = {"paint": "Paint", "image": "Image", "video": "Video", "ndi": "NDI feed"}
 MIN_WIDTH = 340
@@ -143,8 +143,17 @@ class DetailsPanel(QScrollArea):
     def set_target(self, input_id: str, element_id: str | None, shape_id: str | None = None) -> None:
         if (input_id, element_id, shape_id) == (self.input_id, self.element_id, self.shape_id):
             return
+        self._finish_typing()  # an edit half typed belongs to what's showing now
         self.input_id, self.element_id, self.shape_id = input_id, element_id, shape_id
         self.refresh(self.show_data)
+
+    def _finish_typing(self) -> None:
+        """If a field here has the keyboard (e.g. the NDI source box), finish its edit now, while the element it
+        belongs to is still the one showing."""
+        focus = QGuiApplication.focusObject()
+        content = self.widget()
+        if isinstance(focus, QWidget) and content is not None and content.isAncestorOf(focus):
+            focus.clearFocus()
 
     def refresh(self, _show: Show | None = None) -> None:
         """Update the values in place; rebuild only when the set of rows changes."""
@@ -201,7 +210,15 @@ class DetailsPanel(QScrollArea):
         else:
             self._element_sections(layout, inp)
         layout.addStretch(1)
+        # The old rows go later, quietly: they may be in the middle of sending a signal (a choice that changed which
+        # rows show), and deleting a focused text box straight away makes it send "editing finished" while half gone.
+        old = self.takeWidget()
         self.setWidget(content)
+        if old is not None:
+            for child in old.findChildren(QObject):
+                child.blockSignals(True)
+            old.blockSignals(True)
+            discard(old)
         self._content = content
         self._fill_values()
 

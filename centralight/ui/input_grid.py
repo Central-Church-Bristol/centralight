@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..model import Input, Show
+from ..model import PATCH_RADIUS, Input, Show
 from ..output import RGB
 from . import icons, theme
 from .light_view import rgb_colour
@@ -84,7 +84,7 @@ class MiniLightMap(QWidget):
                 continue
             centre_x = canvas.left() + fx.map.x * canvas.width()
             centre_y = canvas.top() + fx.map.y * canvas.height()
-            radius = max(2.5, fx.map.r * canvas.width() * 0.45)
+            radius = max(2.5, PATCH_RADIUS * canvas.width() * 0.45)
             rgb = self._colours.get(fx.id)
             if rgb is None:
                 painter.setBrush(Qt.BrushStyle.NoBrush)

@@ -26,12 +26,11 @@ from .automations import ACTIONS, CONDITIONS
 from .elements import media_path
 from .expressions import AUDIO_NAMES, FUNCTIONS, ExpressionError, compile_expression
 from .files import json_text, write_atomic
-from .model import ROLE_COLOUR, TRACK_COUNT, TRANSITION_KINDS, Input, Show, slugify
+from .model import PATCH_RADIUS, ROLE_COLOUR, TRACK_COUNT, TRANSITION_KINDS, Input, Show, slugify
 from .schema import (
     BLEND_MODES,
     ELEMENT_KINDS,
     FILL_TYPES,
-    FIT_MODES,
     SHAPE,
     SHAPE_TYPES,
     TRANSITION,
@@ -295,15 +294,21 @@ def guide_text(show: Show, full: bool = True) -> str:
         _table(_spec_rows(SHAPE[1:])),
         "### NDI (`\"kind\": \"ndi\"`): a live video feed",
         "`source`: any NDI source whose name contains this text. `\"Media Background Pane\"` is the church's own "
-        "screen feed (what's on the projector). `transform.fit`: " + ", ".join(f'"{v}"' for v, _ in FIT_MODES) + ".",
+        "screen feed (what's on the projector).",
+        _table(_spec_rows(tuple(s for s in element_specs("ndi") if s.path in ("source", "blur", "transform.fit")))),
         "### Image (`\"kind\": \"image\"`)",
         "`file`: a picture inside the show folder, e.g. `media/sunrise.jpg`.",
+        _table(_spec_rows(tuple(s for s in element_specs("image") if s.path in ("file", "blur", "transform.fit")))),
+        "`blur` (NDI and Image): every light follows the same small patch of the picture around its dot; blur makes "
+        "the lights average more of this element's picture, for calmer colours (100 % = the whole picture's average). "
+        "It only softens this element, so a sharp Paint shape on another track stays sharp.",
         "### Leaving lights alone (masks)",
         "`\"mask\": {\"exclude\": [\"light-id\", ...]}` on any element: those lights ignore that element (their patch of "
         "the picture is left clear for the tracks below, or for whatever is underneath in an overlay). This is how "
         "\"only the pillars\" works.",
         "## The lights",
-        lights,
+        lights + f"\n\nEach light shows the average colour of the picture within {PATCH_RADIUS:g} of the picture's "
+        "width of its dot (the same for every light).",
         "## Settings that change: keyframes and expressions",
         "Any number or colour setting can be:\n"
         "- fixed: `0.5` or `\"#FF8800\"`\n"

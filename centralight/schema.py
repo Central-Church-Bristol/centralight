@@ -71,6 +71,9 @@ SHAPE = (
     Spec("opacity", "Opacity", "number", 1.0, unit="%"),
 )
 
+BLUR = Spec("blur", "Blur", "number", 0.0, unit="%",
+            help="How much of the picture around each light it averages: 0 % = just around its own dot, "
+                 "100 % = the whole picture (calmer, smoother colours)")
 NDI = (Spec("source", "NDI source", "source", "Media Background Pane", animatable=False, help="Any NDI source whose name contains this"),)
 IMAGE = (Spec("file", "Picture", "file", "", animatable=False, help="A picture in the show's media folder"),)
 VIDEO = (Spec("file", "Video", "file", "", animatable=False, help="A video in the show's media folder"),
@@ -89,11 +92,11 @@ def element_specs(kind: str) -> tuple[Spec, ...]:
     if kind == "paint":
         return PAINT + COMMON
     if kind == "image":
-        return IMAGE + COMMON + (MEDIA_FIT,)
+        return IMAGE + (BLUR,) + COMMON + (MEDIA_FIT,)
     if kind == "video":
-        return VIDEO + COMMON + (MEDIA_FIT,)
+        return VIDEO + (BLUR,) + COMMON + (MEDIA_FIT,)
     if kind == "ndi":
-        return NDI + COMMON + (MEDIA_FIT,)
+        return NDI + (BLUR,) + COMMON + (MEDIA_FIT,)
     return COMMON
 
 

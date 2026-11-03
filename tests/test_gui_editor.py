@@ -162,6 +162,47 @@ class ShapeEditingTests(EditorTestCase):
 
 
 class EditorControlsTests(EditorTestCase):
+    def test_blur_on_the_screen_element(self) -> None:
+        window, _engine = self.make()
+        window.open_editor("follow-screen")
+        page = window.editor_page
+        page.select_element("E1")
+        process(self.app)
+        field = page.details._fields["element:blur"]
+        self.assertIn("whole picture", field.toolTip())  # the help says what it does
+        field.spin.setValue(40.0)
+        self.assertEqual(self.element(window, "follow-screen", "E1")["blur"], 0.4)
+        self.assertIn("blur", window.document.undo_group.undoText().lower())
+
+    def test_typing_then_picking_something_else(self) -> None:
+        """The details panel is rebuilt when another element is picked. A half-typed NDI source used to be
+        deleted while it still had the keyboard, which could crash the app; now the edit is finished first,
+        for the element it belongs to."""
+        window, _engine = self.make()
+        window.activateWindow()
+        window.open_editor("stage-shapes")
+        page = window.editor_page
+        for _ in range(3):
+            page.select_element("E1")  # the NDI element
+            process(self.app)
+            box = page.details._fields["element:source"].lineEdit()
+            box.setFocus()
+            box.selectAll()
+            QTest.keyClicks(box, "Projector feed")
+            page.select_element("E2")  # pick something else without pressing Enter
+            process(self.app)
+            self.assertEqual(self.element(window, "stage-shapes", "E1")["source"], "Projector feed")
+            self.assertNotIn("source", self.element(window, "stage-shapes", "E2"))
+            page.select_element("")
+            process(self.app)
+        # a choice that changes which rows show rebuilds the panel from inside its own signal
+        page.select_element("E2")
+        for kind in ("colour", "radial", "linear", "none", "radial"):
+            fill = page.details._fields["element:fill.type"]  # a new box after each rebuild
+            fill.setCurrentIndex(fill.findData(kind))
+            process(self.app)
+        self.assertEqual(self.element(window, "stage-shapes", "E2")["fill"]["type"], "radial")
+
     def test_solo_live_banner_and_send(self) -> None:
         window, engine = self.make()
         window.open_editor("worship-blue")

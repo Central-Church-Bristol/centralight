@@ -17,7 +17,7 @@ from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QImage, QPainter, QPen, QRadialGradient
 from PySide6.QtWidgets import QSizePolicy, QToolTip, QWidget
 
-from ..model import Fixture, Show
+from ..model import PATCH_RADIUS, Fixture, Show
 from ..output import RGB, to_byte
 from . import icons, theme
 
@@ -92,7 +92,7 @@ class LightView(QWidget):
         if spot is None:
             return QPointF(), 0.0
         centre = QPointF(canvas.left() + spot.x * canvas.width(), canvas.top() + spot.y * canvas.height())
-        return centre, max(3.0, spot.r * canvas.width())
+        return centre, max(3.0, PATCH_RADIUS * canvas.width())
 
     # ------------------------------------------------------------ painting
 

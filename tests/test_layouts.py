@@ -35,7 +35,7 @@ from centralight.show_io import (
 )
 from tests.test_follow_screen import BaseTestCase
 
-MAIN_101 = MapSpot(0.2, 0.2, 0.08)  # where SlimPAR 101 starts in a new show
+MAIN_101 = MapSpot(0.2, 0.2)  # where SlimPAR 101 starts in a new show
 
 
 class LayoutFunctionTests(unittest.TestCase):
@@ -51,12 +51,12 @@ class LayoutFunctionTests(unittest.TestCase):
     def test_save_as_then_switch(self) -> None:
         show, christmas = save_layout_as(self.show, "Christmas")
         self.assertEqual(show.active_layout, christmas)
-        show = move_lights(show, {"slimpar-101": MapSpot(0.9, 0.8, 0.15)})
-        self.assertEqual(show.layout().positions["slimpar-101"], MapSpot(0.9, 0.8, 0.15))  # edits go into the active layout
+        show = move_lights(show, {"slimpar-101": MapSpot(0.9, 0.8)})
+        self.assertEqual(show.layout().positions["slimpar-101"], MapSpot(0.9, 0.8))  # edits go into the active layout
         self.assertEqual(show.layout("main").positions["slimpar-101"], MAIN_101)  # and nowhere else
         back = switch_layout(show, "main")
         self.assertEqual(back.fixture("slimpar-101").map, MAIN_101)
-        self.assertEqual(switch_layout(back, christmas).fixture("slimpar-101").map, MapSpot(0.9, 0.8, 0.15))
+        self.assertEqual(switch_layout(back, christmas).fixture("slimpar-101").map, MapSpot(0.9, 0.8))
 
     def test_lights_added_later_stay_put_and_join_the_layout(self) -> None:
         show, christmas = save_layout_as(self.show, "Christmas")
@@ -64,7 +64,7 @@ class LayoutFunctionTests(unittest.TestCase):
         self.assertIn(new_id, show.layout().positions)
         self.assertNotIn(new_id, show.layout("main").positions)
         show = switch_layout(show, "main")
-        self.assertEqual(show.fixture(new_id).map, MapSpot(0.4, 0.6, 0.07))  # Main didn't know it: it stays
+        self.assertEqual(show.fixture(new_id).map, MapSpot(0.4, 0.6))  # Main didn't know it: it stays
         self.assertIn(new_id, show.layout("main").positions)  # and now Main has it
 
     def test_removed_lights_leave_every_layout(self) -> None:
@@ -87,13 +87,13 @@ class LayoutFunctionTests(unittest.TestCase):
     def test_delete(self) -> None:
         self.assertIs(delete_layout(self.show, "main"), self.show)  # the last one can't go
         show, christmas = save_layout_as(self.show, "Christmas")
-        show = move_lights(show, {"slimpar-101": MapSpot(0.9, 0.8, 0.15)})
+        show = move_lights(show, {"slimpar-101": MapSpot(0.9, 0.8)})
         gone = delete_layout(show, christmas)  # the active one: the lights move to the neighbour
         self.assertEqual(gone.active_layout, "main")
         self.assertEqual(gone.fixture("slimpar-101").map, MAIN_101)
         self.assertEqual([lay.id for lay in gone.layouts], ["main"])
         other = delete_layout(show, "main")  # not the active one: nothing moves
-        self.assertEqual(other.fixture("slimpar-101").map, MapSpot(0.9, 0.8, 0.15))
+        self.assertEqual(other.fixture("slimpar-101").map, MapSpot(0.9, 0.8))
 
     def test_photo_and_strength_belong_to_a_layout(self) -> None:
         show = set_backdrop(self.show, "media/room-a.jpg")
@@ -124,11 +124,30 @@ class LayoutFileTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
+    def test_sizes_from_an_older_centralight_are_ignored(self) -> None:
+        show = create_show(self.folder)
+        show_file = self.folder / "show.json"
+        data = json.loads(show_file.read_text(encoding="utf-8"))
+        for fixture in data["fixtures"]:
+            if "map" in fixture:
+                fixture["map"]["r"] = 0.3  # an old per-light size
+        show_file.write_text(json.dumps(data), encoding="utf-8")
+        layout_file = self.folder / "layouts" / f"{show.active_layout}.json"
+        layout = json.loads(layout_file.read_text(encoding="utf-8"))
+        layout["positions"]["slimpar-101"]["r"] = 0.25
+        layout_file.write_text(json.dumps(layout), encoding="utf-8")
+        again = load_show(self.folder)
+        self.assertEqual(again.fixture("slimpar-101").map, MAIN_101)
+        self.assertEqual(again.layout().positions["slimpar-101"], MAIN_101)
+        save_whole_show(again)
+        self.assertNotIn('"r"', show_file.read_text(encoding="utf-8"))
+        self.assertNotIn('"r"', layout_file.read_text(encoding="utf-8"))
+
     def test_round_trip(self) -> None:
-        layout = Layout("christmas", "Christmas", frozen_map({"slimpar-101": MapSpot(0.12345, 0.5, 0.1)}), "media/room-1.jpg", 0.4)
+        layout = Layout("christmas", "Christmas", frozen_map({"slimpar-101": MapSpot(0.12345, 0.5)}), "media/room-1.jpg", 0.4)
         data = layout_to_dict(layout)
         self.assertEqual(data["format"], "centralight-layout")
-        self.assertEqual(data["positions"]["slimpar-101"], {"x": 0.1235, "y": 0.5, "r": 0.1})
+        self.assertEqual(data["positions"]["slimpar-101"], {"x": 0.1235, "y": 0.5})  # positions only
         again, warnings = layout_from_dict(json.loads(json.dumps(data)), expected_id="christmas")
         self.assertEqual(warnings, [])
         self.assertEqual((again.name, again.backdrop, again.backdrop_opacity), ("Christmas", "media/room-1.jpg", 0.4))
@@ -150,11 +169,11 @@ class LayoutFileTests(unittest.TestCase):
         self.assertTrue((self.folder / "layouts" / "main.json").is_file())
         self.assertEqual(json.loads((self.folder / "show.json").read_text(encoding="utf-8"))["active_layout"], "main")
         show, christmas = save_layout_as(show, "Christmas")
-        show = move_lights(show, {"slimpar-101": MapSpot(0.9, 0.8, 0.15)})
+        show = move_lights(show, {"slimpar-101": MapSpot(0.9, 0.8)})
         save_whole_show(show)
         again = load_show(self.folder)
         self.assertEqual(again.active_layout, christmas)
-        self.assertEqual(again.fixture("slimpar-101").map, MapSpot(0.9, 0.8, 0.15))
+        self.assertEqual(again.fixture("slimpar-101").map, MapSpot(0.9, 0.8))
         self.assertEqual(again.layout("main").positions["slimpar-101"], MAIN_101)
 
     def test_an_old_show_gets_main_with_its_room_photo(self) -> None:
@@ -193,7 +212,7 @@ class SwitchingMovesTheSamplingTests(BaseTestCase):
         engine.tick()
         self.assertEqual(self.rgb(5), (255, 0, 0))  # SlimPAR 101 sits on the left (red) half
         show, christmas = save_layout_as(self.show, "Christmas")
-        show = move_lights(show, {"slimpar-101": MapSpot(0.85, 0.2, 0.08)})  # over to the blue half
+        show = move_lights(show, {"slimpar-101": MapSpot(0.85, 0.2)})  # over to the blue half
         engine.submit(SwapShow(show))
         engine.tick()
         self.assertEqual(self.rgb(5), (0, 0, 255))
