@@ -18,8 +18,8 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M4 Automations + always running (tray, start with Windows) | **done** (3 Nov, 01:00) |
 | M5 AI inputs | **done** (3 Nov, 01:55) |
 | Layout positions only + Blur (your change of 3 Nov) | **done** (3 Nov, 02:17) |
-| M6 Timed mode + keyframes (+ video) | next |
-| M7 Painting and masks | not started |
+| M6 Timed mode + keyframes (+ video) | **done** (3 Nov, 02:38) |
+| M7 Painting and masks | next |
 | M8 Audio variables | not started |
 | M9 Polish (launcher .exe, Diagnostics) | not started |
 
@@ -43,6 +43,52 @@ Run all the tests (about three minutes, including the layout check at every scal
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## M6 Timed mode, keyframes and video — done
+
+What's there:
+
+- **Timed inputs**: untick **Infinite** (above the timeline, or in the Input tab). A timed input has a length and
+  says what happens at its end: **Hold** (it stays on its last moment), **Loop**, or **Stop** (it leaves Base, or
+  its overlay switches off). Sending it again starts it again. Its Dashboard tile shows a progress bar while it plays.
+- **The timeline** has a ruler and a playhead: click or drag in the ruler, ▶ / ❚❚ (or Space) to play and pause,
+  ⏮ (or Home) for the start. Each element is a bar from its start to its end:
+  - drag it to move it (up or down to another track), drag an end to trim it, S or right-click to split it at the
+    playhead, Delete or right-click to remove it;
+  - right-click → **In transition** / **Out transition** (Fade, Dip, Wipe, Iris, Random by light; 0.5–5 s or any
+    length). They show as wedges at the ends of the bar;
+  - where two bars on a track overlap, the later one crosses in over the earlier one (an X marks the overlap);
+  - drop an element from the palette at a time on a track; drop a transition on the start or end of a bar for its
+    in or out transition (anywhere else: the input's own transition);
+  - it snaps to the playhead, the start, the end and the other bars' ends; Ctrl + wheel zooms, the wheel scrolls,
+    double-click the ruler to see the whole input.
+  Going back to Infinite asks which element to keep on any track that has more than one.
+- **Keyframes**: a ◆ next to every setting that can change over time. Click it to put a keyframe at the playhead
+  (with the value there), click it again to take it away. A keyframed setting stays editable: changing it puts a
+  keyframe at the playhead. Right-click ◆ to go to the previous or next keyframe, to choose how it gets to the next
+  one (smooth, straight, hold), or to remove them all. The selected element's keyframes are diamonds along the
+  bottom of its bar: drag one to retime it, click it to go there, right-click for smooth / straight / hold / delete.
+  Dragging a shape in the Selected view while its position is keyframed puts a keyframe there too. Keyframe times
+  count from the element's own start (in an infinite input, from when the input starts).
+- **The Editor plays**: the viewports show the input at the playhead. It plays when you open an input (so formulas
+  move); pause it to put keyframes at a moment. A timed input stops at its end, unless it loops.
+- **Video** elements (now in the palette): a video file (copied into the show's media folder) that loops for as
+  long as the element lasts, with **Speed** and **Blur**. It's decoded small (at most 320×180, 25 pictures a
+  second) and only a little ahead of where it's playing, on its own thread, with hardware decoding where Windows
+  offers it, so the engine never waits for it. The Editor shows the exact frame at the playhead.
+- The AI guide explains timed inputs, element transitions, keyframe times and Video, with a timed example (the
+  tests check that it plays as described).
+- Checked by the tests with a hand-moved clock: keyframes, which elements show when, element and cross transitions,
+  hold / loop / stop, a timed input starting again when it's sent again, and "Bar sweep" giving the same light
+  colours in the Editor as the engine sends to the lights, including when it loops.
+
+Problems the tests found and that are fixed:
+- Moving a keyframe left a copy at its old time.
+- Dragging a keyframe diamond only moved it for the first step of the drag (each step worked on the preview):
+  every drag on the timeline now works from the show as it was when you pressed.
+- The layout check now opens a fresh window for each size, as when CentraLight opens at a remembered size (it used
+  to resize one window through all of them). That found the colour box of a global on the Dashboard 7 px too narrow
+  at 1366×768 with long names; the colour code box is now sized for real colour codes, which also left room for ◆.
 
 ## Layout positions only, and Blur (your plan change of 3 Nov) — done
 
@@ -421,6 +467,14 @@ Problems the tests found and that are fixed:
   practice it rarely asks; otherwise the file's version is taken, as one undo step.
 - **Try it on the lights** shows only the AI's input (like the Editor's "Show on lights") and stops when the AI
   window closes, whichever way it closes.
+- **Video decoding** uses the FFmpeg that's built into OpenCV (already part of CentraLight) rather than Media
+  Background Pane's ffmpeg.exe: nothing extra to install, and it still decodes on its own thread, paced by playback.
+- **Keyframes** are for element and shape settings (the timeline and the ◆). House-light levels and local variables
+  can change over time with expressions; keyframes for those can come later if you want them.
+- **Stop** at the end of a timed input is a cut (Base goes black, or the overlay shows what's under it). For a
+  fade, give the last element an out transition.
+- **The Editor's playhead plays** when you open an input, so expressions and videos move as before; pause it to
+  put keyframes at a moment.
 
 ## Problems
 

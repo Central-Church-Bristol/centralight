@@ -384,3 +384,4 @@ class DashboardPage(QWidget):
         overlays = ", ".join(on_names) if on_names else "none"
         self.caption.setText(f"Base: {base}  ·  Overlays: {overlays}{extra}")
         self.grid.set_live(frame.base_id, tuple(v.input_id if v.on else "" for v in frame.overlays), frame.colours)
+        self.grid.set_playing(frame.playing)

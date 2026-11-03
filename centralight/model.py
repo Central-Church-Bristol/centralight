@@ -44,6 +44,44 @@ def frozen_map(data: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return MappingProxyType(dict(data or {}))
 
 
+def element_span(element: Any, inp: Any) -> tuple[float, float]:
+    """(start, end) of an element in seconds of the input. Infinite inputs: the whole time."""
+    if inp.infinite:
+        return 0.0, float("inf")
+    start = element.get("start", 0.0)
+    end = element.get("end", inp.length)
+    start = float(start) if isinstance(start, (int, float)) and not isinstance(start, bool) else 0.0
+    end = float(end) if isinstance(end, (int, float)) and not isinstance(end, bool) else float(inp.length)
+    return start, max(start, end)
+
+
+def input_time(inp: Any, elapsed: float) -> float:
+    """Where a running input is in its own time, `elapsed` seconds after it was sent. Infinite: just that.
+    Timed: "loop" goes round again, "hold" stays on its last moment, "stop" runs on past the end (where
+    nothing plays, and the engine takes it off)."""
+    if inp.infinite:
+        return elapsed
+    length = max(float(inp.length), 1e-3)
+    if inp.end == END_LOOP:
+        return elapsed % length
+    if inp.end == END_HOLD:
+        return min(elapsed, length - END_EPSILON)
+    return elapsed
+
+
+def input_progress(inp: Any, elapsed: float) -> float | None:
+    """How far through a timed input is (0-1), or None for an infinite one."""
+    if inp.infinite:
+        return None
+    length = max(float(inp.length), 1e-3)
+    return min(1.0, max(0.0, (elapsed % length if inp.end == END_LOOP else elapsed) / length))
+
+
+def has_finished(inp: Any, elapsed: float) -> bool:
+    """A timed input that stops at its end has got there."""
+    return not inp.infinite and inp.end == END_STOP and elapsed >= inp.length
+
+
 def slugify(text: str, fallback: str = "input") -> str:
     """'Pillars pulse!' -> 'pillars-pulse' (a safe id and file name)."""
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
@@ -51,6 +89,7 @@ def slugify(text: str, fallback: str = "input") -> str:
 
 
 PATCH_RADIUS = 0.08  # every light follows the same-sized patch of the picture: this radius, in screen widths
+END_EPSILON = 1e-6  # seconds: "hold" shows the input this close to its end (elements end at the length)
 
 
 @dataclass(frozen=True)

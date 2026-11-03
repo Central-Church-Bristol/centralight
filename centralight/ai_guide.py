@@ -94,6 +94,21 @@ def examples(show: Show) -> list[tuple[str, dict]]:
                 "type": "radial", "from": "#FFB347", "to": "#B0306A",
                 "x": {"expr": "0.15 + 0.7 * wave(time, 1/20)"}, "y": 0.4, "radius": 0.55}}], [], [], []],
         }),
+        ("A timed sequence (12 seconds, then it holds): warm white fades in, the pillars pulse purple from 3 s, and at "
+         "8 s everything crosses into deep blue", {
+            "format": FORMAT_INPUT, "version": INPUT_VERSION, "id": "welcome-sequence", "name": "Welcome sequence",
+            "colour": "#FFB46B", "infinite": False, "length": 12, "end": "hold",
+            "tracks": [
+                [{"id": "E1", "kind": "paint", "fill": {"type": "colour", "colour": "#FFD9A0"}, "start": 0, "end": 9,
+                  "in": {"kind": "fade", "duration": 2}},
+                 {"id": "E3", "kind": "paint", "fill": {"type": "colour", "colour": "#0A1A66"}, "start": 8, "end": 12,
+                  "in": {"kind": "fade", "duration": 1}}],
+                [{"id": "E2", "kind": "paint", "fill": {"type": "colour", "colour": "#7A3CFF"}, "start": 3, "end": 9,
+                  "opacity": {"keys": [[0, 0], [1, 1], [5, 1], [6, 0]]}, "mask": {"exclude": others},
+                  "out": {"kind": "fade", "duration": 1}}],
+                [], [],
+            ],
+        }),
         ("A slow trip round the rainbow (once every 30 seconds), with the key lights at 40 %", {
             "format": FORMAT_INPUT, "version": INPUT_VERSION, "id": "slow-rainbow", "name": "Slow rainbow", "colour": "#16E1C9",
             "house": {show.house[-1].fixture: 0.4} if show.house else {},
@@ -275,7 +290,14 @@ def guide_text(show: Show, full: bool = True) -> str:
         f"House lights: {house}.\n"
         "- `colour`: its tile's colour on the Dashboard. `name`: shown on the tile.\n"
         "- Optional: `hotkey`, a key such as `\"F5\"` that sends it to Base while CentraLight's window is in front. "
-        "Leave out `ai` (CentraLight sets it) and `infinite` (inputs run until something replaces them).",
+        "Leave out `ai` (CentraLight sets it).\n"
+        "- **Infinite or timed.** Inputs are infinite unless they say otherwise: each track holds one element, which "
+        "plays until the input is replaced. A timed input has `\"infinite\": false`, a `length` in seconds and an "
+        "`end`: \"hold\" (stay on the last moment; the default), \"loop\" or \"stop\" (leave Base or the overlay). "
+        "Each of its elements has a `start` and an `end` (seconds of the input), and can appear and go with its own "
+        "transitions: `\"in\": {\"kind\": \"fade\", \"duration\": 1}`, `\"out\": {...}` (kinds as for "
+        "`transition`). Where two elements on a track overlap, the later one crosses in over the earlier one (its `in` "
+        "kind, over the overlap). Sending a timed input again starts it again.",
         "## Elements",
         "Every element has an `id` (unique in the input, e.g. `E1`), a `kind`, and these shared settings:",
         _table(_spec_rows(element_specs("")))
@@ -299,7 +321,11 @@ def guide_text(show: Show, full: bool = True) -> str:
         "### Image (`\"kind\": \"image\"`)",
         "`file`: a picture inside the show folder, e.g. `media/sunrise.jpg`.",
         _table(_spec_rows(tuple(s for s in element_specs("image") if s.path in ("file", "blur", "transform.fit")))),
-        "`blur` (NDI and Image): every light follows the same small patch of the picture around its dot; blur makes "
+        "### Video (`\"kind\": \"video\"`)",
+        "`file`: a video inside the show folder, e.g. `media/candles.mp4`. It loops for as long as the element lasts; "
+        "`speed` plays it faster or slower.",
+        _table(_spec_rows(tuple(s for s in element_specs("video") if s.path in ("file", "speed", "blur", "transform.fit")))),
+        "`blur` (NDI, Image and Video): every light follows the same small patch of the picture around its dot; blur makes "
         "the lights average more of this element's picture, for calmer colours (100 % = the whole picture's average). "
         "It only softens this element, so a sharp Paint shape on another track stays sharp.",
         "### Leaving lights alone (masks)",
@@ -315,7 +341,8 @@ def guide_text(show: Show, full: bool = True) -> str:
         "- an expression (a formula, worked out 40 times a second): `{\"expr\": \"sin(time) * 0.5 + 0.5\"}`\n"
         "- an expression with a plain value it can use as `value`: `{\"value\": 0.8, \"expr\": \"value * audio.level\"}`\n"
         "- keyframes: `{\"keys\": [[0, 0.1], [5, 0.9, \"smooth\"]]}` (seconds, value, then \"smooth\", \"linear\" or \"hold\" "
-        "for how it gets to the next key; it holds after the last key)",
+        "for how it gets to the next key; it holds after the last key). The seconds count from the element's own "
+        "`start` (in an infinite input, from when the input starts).",
         "### Expressions",
         "Python-style maths: `+ - * / % **`, comparisons, `and` / `or` / `not`, `a if condition else b`, and the "
         "functions below. Colours are written `#RRGGBB` and can be added, mixed and multiplied; a number used as a "

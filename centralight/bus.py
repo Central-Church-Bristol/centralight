@@ -24,7 +24,7 @@ import numpy as np
 from .compositor import blend, over, transparent
 from .elements import RenderContext, blend_mode, render_element
 from .log import log_exception
-from .model import Input, Transition
+from .model import Input, Transition, element_span, input_time
 from .transitions import mix, reveal, seed_for
 from .variables import scope_for, use_scope
 
@@ -51,44 +51,95 @@ class Frozen:
     name: str = ""
 
 
-def active_element(track, t: float, infinite: bool):
-    """The element showing at input time t on one track (infinite mode: the track's element)."""
+def track_elements(track, t: float, inp: Input) -> list:
+    """The elements showing at input time t on one track: the track's element (infinite), none, one, or
+    two while one crosses into the next (the later two, if more overlap)."""
     if not track:
-        return None
-    if infinite:
-        return track[0]
+        return []
+    if inp.infinite:
+        return [track[0]]
+    showing = []
     for element in track:
-        start = element.get("start", 0.0)
-        end = element.get("end", float("inf"))
-        if isinstance(start, (int, float)) and isinstance(end, (int, float)) and start <= t < end:
-            return element
-    return None
+        start, end = element_span(element, inp)
+        if start <= t < end:
+            showing.append((start, element))
+    showing.sort(key=lambda item: item[0])
+    return [element for _start, element in showing[-2:]]
+
+
+def active_element(track, t: float, infinite: bool, inp: Input | None = None):
+    """The element showing at input time t on one track (the newer one while two cross)."""
+    if inp is None:
+        inp = Input(id="-", name="-", infinite=infinite, length=float("inf"))
+    showing = track_elements(track, t, inp)
+    return showing[-1] if showing else None
 
 
 def render_input(instance: Instance, now: float, ctx: RenderContext) -> np.ndarray:
     """All tracks of an input at its own time, track 1 at the bottom. Its local variables are
-    worked out first; expressions see them, the globals and the time."""
-    t = instance.time(now)
+    worked out first; expressions see them, the globals and the time (`time`: the input's;
+    `t` and keyframes: each element's own, from its start)."""
+    inp = instance.input
+    t = input_time(inp, instance.time(now))
     canvas = None
-    scope = scope_for(instance.input, t, ctx.globals, ctx.audio, instance.memory)
+    scope = scope_for(inp, t, ctx.globals, ctx.audio, instance.memory)
     with use_scope(scope):
-        for track in instance.input.tracks:
-            element = active_element(track, t, instance.input.infinite)
-            if element is None:
+        for track in inp.tracks:
+            showing = track_elements(track, t, inp)
+            if not showing:
                 continue
-            ctx.time = t
-            key = f"{instance.input.id}/{element.get('id', '?')}"
-            scope.element = key
-            try:
-                layer = render_element(element, ctx)
-            except Exception as exc:  # a broken element draws nothing; the rest of the input carries on
-                if key not in ctx.faults:
-                    log_exception(f"element {key}", exc)
-                ctx.faults[key] = str(exc) or type(exc).__name__
-                continue
-            if layer is not None:
-                canvas = blend(canvas, layer, blend_mode(element))
+            layers = [(element, _element_layer(inp, element, t, ctx, scope)) for element in showing]
+            if len(layers) == 2:  # the later element crosses in over the earlier one
+                (old, old_layer), (new, new_layer) = layers
+                old_end = element_span(old, inp)[1]
+                new_start = element_span(new, inp)[0]
+                progress = (t - new_start) / max(old_end - new_start, 1e-6)
+                spec = new.get("in") if hasattr(new.get("in"), "get") else {}
+                blank = transparent(ctx.height, ctx.width)
+                layer = mix(str(spec.get("kind", "fade")), old_layer if old_layer is not None else blank,
+                            new_layer if new_layer is not None else blank, min(1.0, max(0.0, progress)),
+                            direction=float(spec.get("direction", 0.0)), softness=float(spec.get("softness", 0.25)),
+                            owner=_owner(ctx), seed=seed_for(f"{inp.id}/{new.get('id')}"), cache=ctx.cache)
+                mode = blend_mode(new if progress >= 0.5 else old)
+            else:
+                element, layer = layers[0]
+                if layer is None:
+                    continue
+                if not inp.infinite:
+                    layer = _in_and_out(inp, element, layer, t, ctx)
+                mode = blend_mode(element)
+            canvas = blend(canvas, layer, mode)
     return canvas if canvas is not None else transparent(ctx.height, ctx.width)
+
+
+def _element_layer(inp: Input, element, t: float, ctx: RenderContext, scope) -> np.ndarray | None:
+    """One element drawn at input time t (its keyframes and `t` count from its own start)."""
+    ctx.time = t - element_span(element, inp)[0] if not inp.infinite else t
+    key = f"{inp.id}/{element.get('id', '?')}"
+    scope.element = key
+    try:
+        return render_element(element, ctx)
+    except Exception as exc:  # a broken element draws nothing; the rest of the input carries on
+        if key not in ctx.faults:
+            log_exception(f"element {key}", exc)
+        ctx.faults[key] = str(exc) or type(exc).__name__
+        return None
+
+
+def _in_and_out(inp: Input, element, layer: np.ndarray, t: float, ctx: RenderContext) -> np.ndarray:
+    """An element of a timed input appearing ("in") and going ("out") with its own transitions."""
+    start, end = element_span(element, inp)
+    for which, into in (("in", t - start), ("out", end - t)):
+        spec = element.get(which)
+        if not hasattr(spec, "get"):
+            continue
+        duration = spec.get("duration", 0.0)
+        if not isinstance(duration, (int, float)) or duration <= 0 or into >= duration:
+            continue
+        layer = reveal(str(spec.get("kind", "fade")), layer, max(0.0, into / duration),
+                       direction=float(spec.get("direction", 0.0)), softness=float(spec.get("softness", 0.25)),
+                       owner=_owner(ctx), seed=seed_for(f"{inp.id}/{element.get('id')}/{which}"), cache=ctx.cache)
+    return layer
 
 
 def _render_source(source: Instance | Frozen | None, now: float, ctx: RenderContext) -> np.ndarray:
@@ -205,11 +256,11 @@ class OverlaySlot:
         self.content.send(inp, now, ctx, cut=True)
         self._start_reveal(1.0, now, inp.transition)
 
-    def off(self, now: float) -> None:
+    def off(self, now: float, cut: bool = False) -> None:
         if not self.on:
             return
         transition = self.content.current.input.transition if self.content.current is not None else Transition()
-        self._start_reveal(0.0, now, transition)
+        self._start_reveal(0.0, now, Transition("cut", 0.0) if cut else transition)
 
     def _start_reveal(self, target: float, now: float, transition: Transition) -> None:
         self.reveal_from = self.visibility(now)

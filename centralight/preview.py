@@ -19,7 +19,7 @@ class Previewer:
     """Renders inputs to light colours (keeps its own cache, so call it from one thread)."""
 
     def __init__(self, sources: Any | None = None) -> None:
-        self._ctx = RenderContext(CANVAS_W, CANVAS_H, sources)
+        self._ctx = RenderContext(CANVAS_W, CANVAS_H, sources, video_threaded=False)
         self._sampler: Sampler | None = None
         self._memories: dict[str, dict] = {}  # per input: its formulas' cycle positions
 

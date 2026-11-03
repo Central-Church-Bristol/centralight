@@ -1,7 +1,9 @@
 """Changes to inputs, as plain functions: each takes a Show and returns a new one.
 
 The Editor and the Dashboard turn each of these into an undo step; tests call them directly.
-In infinite mode (the default, and all there is until M5) each track holds one element.
+In infinite mode (the default) each track holds one element. A timed input has a length, and its
+elements sit at times on their tracks ("start" / "end", in seconds of the input); keyframe times
+count from the element's own start.
 """
 
 from __future__ import annotations
@@ -12,13 +14,29 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from .model import TRACK_COUNT, Input, Show, slugify
-from .params import with_base_value
+from .colours import to_hex
+from .model import END_BEHAVIOURS, TRACK_COUNT, Input, Show, element_span, slugify
+from .params import (
+    INTERPOLATIONS,
+    KEY_TOLERANCE,
+    base_value,
+    is_keyframed,
+    keys_of,
+    keys_shifted,
+    with_base_value,
+    with_key,
+    with_key_interpolation,
+    with_key_moved,
+    without_key,
+)
 from .schema import set_path
 from .show_io import freeze, thaw
 
 TAG_COLOURS = ("#86D6FF", "#FF6F59", "#D6FF79", "#16E1C9", "#C04DFF", "#FFB547", "#FF6FB5", "#7A9CFF")
 MEDIA_DIR = "media"
+DEFAULT_ELEMENT_LENGTH = 5.0  # seconds: a new element on a timed input's track
+MIN_ELEMENT_LENGTH = 0.1  # seconds: trimming stops here
+MAX_INPUT_LENGTH = 3600.0
 
 
 def _replace_input(show: Show, inp: Input) -> Show:
@@ -204,17 +222,27 @@ def find_element(inp: Input, element_id: str) -> tuple[int, int, Any] | None:
 
 
 def add_element(show: Show, input_id: str, track: int, kind: str, ndi_source: str = "Media Background Pane",
-                element: dict | None = None) -> tuple[Show, str]:
-    """Put a new element on a track (in infinite mode it replaces what was there)."""
+                element: dict | None = None, start: float = 0.0) -> tuple[Show, str]:
+    """Put a new element on a track. Infinite mode: it replaces what was there. Timed: it starts at `start`
+    and lasts DEFAULT_ELEMENT_LENGTH seconds (less if it would run into the next element or the end)."""
     inp = show.inputs[input_id]
     element_id = new_element_id(inp)
     data = dict(element) if element is not None else default_element(kind, element_id, ndi_source)
     data["id"] = element_id
     tracks = _tracks(inp)
     if inp.infinite:
+        for key in ("start", "end", "in", "out"):
+            data.pop(key, None)
         tracks[track] = [data]
     else:
+        start = min(max(0.0, float(start)), max(0.0, inp.length - MIN_ELEMENT_LENGTH))
+        later = [s for s, _e in (element_span(e, inp) for e in tracks[track]) if s > start + 1e-9]
+        end = min([start + DEFAULT_ELEMENT_LENGTH, inp.length] + later)
+        if end - start < MIN_ELEMENT_LENGTH:
+            end = min(inp.length, start + DEFAULT_ELEMENT_LENGTH)
+        data["start"], data["end"] = round(start, 3), round(end, 3)
         tracks[track].append(data)
+        tracks[track].sort(key=lambda e: element_span(e, inp)[0])
     return _set_tracks(show, inp, tracks), element_id
 
 
@@ -238,7 +266,233 @@ def move_element(show: Show, input_id: str, element_id: str, to_track: int) -> S
         tracks[to_track] = [element]
     else:
         tracks[to_track].append(element)
+        tracks[to_track].sort(key=lambda e: element_span(e, inp)[0])
     return _set_tracks(show, inp, tracks)
+
+
+# ---------------------------------------------------------------- timed inputs
+
+
+def set_timed(show: Show, input_id: str, timed: bool, keep: dict[int, str] | None = None) -> Show:
+    """Switch between infinite (each track: one element, playing until the input is replaced) and timed (a
+    length, with elements placed in time). Going infinite keeps one element per track: keep[track] (an
+    element id), otherwise the first; their times and in / out transitions go. Going timed, each element
+    covers the whole input."""
+    inp = show.inputs[input_id]
+    if timed == (not inp.infinite):
+        return show
+    tracks = _tracks(inp)
+    if timed:
+        length = inp.length if inp.length > 0 else 10.0
+        tracks = [[{**e, "start": 0.0, "end": round(length, 3)} for e in track] for track in tracks]
+        return _set_tracks(show, replace(inp, infinite=False, length=length), tracks)
+    kept = []
+    for index, track in enumerate(tracks):
+        wanted = (keep or {}).get(index)
+        chosen = next((e for e in track if e.get("id") == wanted), track[0] if track else None)
+        kept.append([{k: v for k, v in chosen.items() if k not in ("start", "end", "in", "out")}] if chosen else [])
+    return _set_tracks(show, replace(inp, infinite=True), kept)
+
+
+def crowded_tracks(inp: Input) -> dict[int, list[Any]]:
+    """Tracks with more than one element (going infinite has to keep one of each): {track: elements}."""
+    return {i: list(track) for i, track in enumerate(inp.tracks) if len(track) > 1}
+
+
+def set_length(show: Show, input_id: str, length: float, end: str | None = None) -> Show:
+    """A timed input's length (seconds) and what happens at the end ("hold", "loop" or "stop"). Elements past
+    the new end are trimmed to it (an element that would start after it is left alone: it just won't play)."""
+    inp = show.inputs[input_id]
+    length = min(MAX_INPUT_LENGTH, max(MIN_ELEMENT_LENGTH, round(float(length), 3)))
+    changes: dict[str, Any] = {"length": length}
+    if end in END_BEHAVIOURS:
+        changes["end"] = end
+    return _replace_input(show, replace(inp, **changes))
+
+
+def _with_element(show: Show, input_id: str, element_id: str, change) -> Show:
+    inp = show.inputs[input_id]
+    found = find_element(inp, element_id)
+    if found is None:
+        return show
+    tracks = _tracks(inp)
+    track, position, element = found
+    tracks[track][position] = change(thaw(element), inp)
+    tracks[track].sort(key=lambda e: element_span(e, inp)[0])
+    return _set_tracks(show, inp, tracks)
+
+
+def move_element_to(show: Show, input_id: str, element_id: str, start: float) -> Show:
+    """Move an element in time, keeping its length (its keyframes move with it)."""
+    def change(element, inp):
+        old_start, old_end = element_span(element, inp)
+        length = old_end - old_start
+        new_start = min(max(0.0, float(start)), max(0.0, inp.length - MIN_ELEMENT_LENGTH))
+        element["start"], element["end"] = round(new_start, 3), round(new_start + length, 3)
+        return element
+    return _with_element(show, input_id, element_id, change)
+
+
+def trim_element(show: Show, input_id: str, element_id: str, start: float | None = None, end: float | None = None) -> Show:
+    """Change where an element starts or ends. Trimming its start leaves its keyframes where they were in the
+    input (so the look doesn't jump); at least MIN_ELEMENT_LENGTH is left."""
+    def change(element, inp):
+        old_start, old_end = element_span(element, inp)
+        new_start = old_start if start is None else min(max(0.0, float(start)), old_end - MIN_ELEMENT_LENGTH)
+        new_end = old_end if end is None else max(float(end), new_start + MIN_ELEMENT_LENGTH)
+        element["start"], element["end"] = round(new_start, 3), round(new_end, 3)
+        offset = old_start - new_start
+        if abs(offset) > 1e-9:
+            element = _map_params(element, lambda param: keys_shifted(param, offset))
+        return element
+    return _with_element(show, input_id, element_id, change)
+
+
+def split_element(show: Show, input_id: str, element_id: str, at: float) -> tuple[Show, str]:
+    """Cut an element in two at input time `at`. The second part gets a new id; each part keeps the look it
+    had (keyframed settings get a key at the cut), the first keeps the in transition, the second the out."""
+    inp = show.inputs[input_id]
+    found = find_element(inp, element_id)
+    if found is None or inp.infinite:
+        return show, ""
+    track, position, element = found
+    start, end = element_span(element, inp)
+    if not start + MIN_ELEMENT_LENGTH <= at <= end - MIN_ELEMENT_LENGTH:
+        return show, ""
+    cut = at - start  # in element time
+    first = _map_params(thaw(element), lambda param: _keep_keys(param, cut, before=True))
+    second = _map_params(thaw(element), lambda param: _keep_keys(param, cut, before=False))
+    first["end"] = round(at, 3)
+    first.pop("out", None)
+    second_id = new_element_id(inp)
+    second.update({"id": second_id, "start": round(at, 3), "end": round(end, 3)})
+    second.pop("in", None)
+    tracks = _tracks(inp)
+    tracks[track][position] = first
+    tracks[track].insert(position + 1, second)
+    return _set_tracks(show, inp, tracks), second_id
+
+
+def _keep_keys(param: Any, cut: float, before: bool) -> Any:
+    """One side of a split: its keys, plus a key at the cut with the value there; the second side's keys move
+    so the cut becomes its time 0."""
+    if not is_keyframed(param):
+        return param
+    keys = keys_of(param)
+    kind = "colour" if isinstance(keys[0][1], str) else "number"
+    value = base_value(param, cut, (1.0, 1.0, 1.0) if kind == "colour" else 0.0, kind)
+    value = to_hex(value) if kind == "colour" else round(float(value), 4)
+    param = with_key(param, cut, value)
+    if before:
+        return keys_shifted(param, 0.0, keep=lambda kt: kt <= cut + KEY_TOLERANCE)
+    return keys_shifted(param, -cut, keep=lambda kt: kt >= cut - KEY_TOLERANCE)
+
+
+def _map_params(element: dict, change) -> dict:
+    """Apply change() to every keyframed setting of an element (shapes' settings too)."""
+    def walk(value: Any) -> Any:
+        if isinstance(value, dict):
+            if "keys" in value:
+                return change(value)
+            return {k: walk(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        return value
+    return {k: (walk(v) if k not in ("id", "kind", "start", "end", "in", "out") else v) for k, v in element.items()}
+
+
+def set_element_transition(show: Show, input_id: str, element_id: str, which: str, kind: str | None = None,
+                           duration: float | None = None) -> Show:
+    """An element's "in" or "out" transition in a timed input (kind "cut", or duration 0, removes it)."""
+    if which not in ("in", "out"):
+        return show
+    def change(element, inp):
+        current = dict(element.get(which) or {"kind": "fade", "duration": 1.0})
+        if kind is not None:
+            current["kind"] = kind
+        if duration is not None:
+            current["duration"] = round(max(0.0, float(duration)), 3)
+        if current.get("kind") == "cut" or current.get("duration", 0) <= 0:
+            element.pop(which, None)
+        else:
+            element[which] = current
+        return element
+    return _with_element(show, input_id, element_id, change)
+
+
+# ---------------------------------------------------------------- keyframes
+
+
+def param_path(shape_id: str, path: str) -> str:
+    """Where a setting lives in an element: "opacity", "fill.colour", or a shape's "shapes:S1:x"."""
+    return f"shapes:{shape_id}:{path}" if shape_id else path
+
+
+def get_param(element: Any, where: str) -> Any:
+    """The raw setting (a value, keyframes or an expression) at a param_path()."""
+    from .schema import get_path
+
+    if where.startswith("shapes:"):
+        _prefix, shape_id, path = where.split(":", 2)
+        shape = next((s for s in element.get("shapes", ()) or () if s.get("id") == shape_id), None)
+        return get_path(shape, path) if shape is not None else None
+    return get_path(element, where)
+
+
+def set_param(show: Show, input_id: str, element_id: str, where: str, raw: Any) -> Show:
+    if where.startswith("shapes:"):
+        _prefix, shape_id, path = where.split(":", 2)
+        return set_shape_value(show, input_id, element_id, shape_id, path, raw)
+    return set_element_value(show, input_id, element_id, where, raw)
+
+
+def _element_param(show: Show, input_id: str, element_id: str, where: str) -> Any:
+    found = find_element(show.inputs[input_id], element_id)
+    return get_param(found[2], where) if found is not None else None
+
+
+def set_key(show: Show, input_id: str, element_id: str, where: str, t: float, value: Any) -> Show:
+    """A keyframe at element time t (added, or the one there changed)."""
+    param = thaw(_element_param(show, input_id, element_id, where))
+    return set_param(show, input_id, element_id, where, with_key(param, t, value))
+
+
+def remove_key(show: Show, input_id: str, element_id: str, where: str, t: float) -> Show:
+    param = thaw(_element_param(show, input_id, element_id, where))
+    return set_param(show, input_id, element_id, where, without_key(param, t))
+
+
+def move_key(show: Show, input_id: str, element_id: str, where: str, t_from: float, t_to: float) -> Show:
+    param = thaw(_element_param(show, input_id, element_id, where))
+    return set_param(show, input_id, element_id, where, with_key_moved(param, t_from, t_to))
+
+
+def set_key_interpolation(show: Show, input_id: str, element_id: str, where: str, t: float, interp: str) -> Show:
+    if interp not in INTERPOLATIONS:
+        return show
+    param = thaw(_element_param(show, input_id, element_id, where))
+    return set_param(show, input_id, element_id, where, with_key_interpolation(param, t, interp))
+
+
+def element_keys(element: Any) -> dict[str, list[tuple[float, Any, str]]]:
+    """Every keyframed setting of an element (shapes' too), by param_path(): for the timeline's diamonds."""
+    found: dict[str, list[tuple[float, Any, str]]] = {}
+
+    def walk(value: Any, path: str) -> None:
+        if hasattr(value, "get") and "keys" in value:
+            found[path] = keys_of(value)
+            return
+        if hasattr(value, "items"):
+            for k, v in value.items():
+                if k not in ("id", "kind", "start", "end", "in", "out", "shapes"):
+                    walk(v, f"{path}.{k}" if path else k)
+
+    walk(element, "")
+    for shape in element.get("shapes", ()) or ():
+        for k, v in shape.items():
+            if hasattr(v, "get") and "keys" in v:
+                found[f"shapes:{shape.get('id')}:{k}"] = keys_of(v)
+    return found
 
 
 def set_element_value(show: Show, input_id: str, element_id: str, path: str, value: Any) -> Show:
@@ -296,6 +550,21 @@ def set_shape_values(show: Show, input_id: str, element_id: str, shape_id: str, 
         if shape.get("id") == shape_id:
             for path, value in values.items():
                 shape = thaw(set_path(shape, path, round(value, 4) if isinstance(value, float) else value))
+            shapes[i] = shape
+            return set_element_value(show, input_id, element_id, "shapes", shapes)
+    return show
+
+
+def set_shape_values_at(show: Show, input_id: str, element_id: str, shape_id: str, values: dict[str, Any], t: float) -> Show:
+    """A drag in the Selected view: settings that have keyframes get a key at element time t; the others
+    change (keeping an expression, whose `value` they are)."""
+    shapes = _shapes(show, input_id, element_id)
+    for i, shape in enumerate(shapes):
+        if shape.get("id") == shape_id:
+            for path, value in values.items():
+                value = round(value, 4) if isinstance(value, float) else value
+                raw = shape.get(path)
+                shape = thaw(set_path(shape, path, with_key(raw, t, value) if is_keyframed(raw) else with_base_value(raw, value)))
             shapes[i] = shape
             return set_element_value(show, input_id, element_id, "shapes", shapes)
     return show

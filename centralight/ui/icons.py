@@ -300,3 +300,56 @@ def draw_warning(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) -> 
     x = r.center().x()
     painter.drawLine(QPointF(x, r.top() + r.height() * 0.38), QPointF(x, r.top() + r.height() * 0.68))
     painter.drawPoint(QPointF(x, r.top() + r.height() * 0.84))
+
+
+def draw_play(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) -> None:
+    """A triangle pointing right."""
+    r = _square(rect, 0.2)
+    path = QPainterPath()
+    path.moveTo(r.left() + r.width() * 0.12, r.top())
+    path.lineTo(r.right(), r.center().y())
+    path.lineTo(r.left() + r.width() * 0.12, r.bottom())
+    path.closeSubpath()
+    painter.setPen(_pen(colour, r, 0.08))
+    painter.setBrush(colour)
+    painter.drawPath(path)
+
+
+def draw_pause(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) -> None:
+    """Two bars."""
+    r = _square(rect, 0.22)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(colour)
+    bar = r.width() * 0.3
+    painter.drawRoundedRect(QRectF(r.left() + r.width() * 0.08, r.top(), bar, r.height()), bar * 0.25, bar * 0.25)
+    painter.drawRoundedRect(QRectF(r.right() - r.width() * 0.08 - bar, r.top(), bar, r.height()), bar * 0.25, bar * 0.25)
+
+
+def draw_to_start(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) -> None:
+    """A bar and a triangle pointing left: back to the start."""
+    r = _square(rect, 0.22)
+    painter.setPen(_pen(colour, r, 0.1))
+    painter.drawLine(QPointF(r.left() + r.width() * 0.08, r.top()), QPointF(r.left() + r.width() * 0.08, r.bottom()))
+    path = QPainterPath()
+    path.moveTo(r.right(), r.top())
+    path.lineTo(r.left() + r.width() * 0.3, r.center().y())
+    path.lineTo(r.right(), r.bottom())
+    path.closeSubpath()
+    painter.setPen(_pen(colour, r, 0.08))
+    painter.setBrush(colour)
+    painter.drawPath(path)
+
+
+def draw_key(painter: QPainter, rect: QRectF, colour: QColor, on: bool) -> None:
+    """A keyframe diamond: filled when on (a key at the playhead), an outline otherwise."""
+    r = _square(rect, 0.18)
+    path = QPainterPath()
+    path.moveTo(r.center().x(), r.top())
+    path.lineTo(r.right(), r.center().y())
+    path.lineTo(r.center().x(), r.bottom())
+    path.lineTo(r.left(), r.center().y())
+    path.closeSubpath()
+    painter.setPen(_pen(colour, r, 0.1))
+    painter.setBrush(colour if on else Qt.BrushStyle.NoBrush)
+    painter.drawPath(path)
+

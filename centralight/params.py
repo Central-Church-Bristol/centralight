@@ -23,6 +23,7 @@ from typing import Any
 from .colours import parse_colour
 
 INTERPOLATIONS = ("smooth", "linear", "hold")
+KEY_TOLERANCE = 0.002  # seconds: keys this close to a time count as being at it
 _MAP_TYPES = (dict, MappingProxyType)
 
 
@@ -170,6 +171,101 @@ def with_expression(param: Any, text: str, default: Any = None) -> Any:
     if text:
         return {"value": default if param is None else param, "expr": text}
     return default if param is None else param
+
+
+# ---------------------------------------------------------------- editing keyframes
+
+
+def _encode_keys(keys: list[tuple[float, Any, str]]) -> list[list[Any]]:
+    """Keys for the JSON: [seconds, value] (smooth, the default) or [seconds, value, "linear" / "hold"]."""
+    return [[round(t, 4), value] if interp == "smooth" else [round(t, 4), value, interp] for t, value, interp in keys]
+
+
+def key_at(param: Any, t: float) -> tuple[float, Any, str] | None:
+    """The keyframe at time t (within KEY_TOLERANCE), if there is one."""
+    return next((key for key in keys_of(param) if abs(key[0] - t) <= KEY_TOLERANCE), None)
+
+
+def is_keyframed(param: Any) -> bool:
+    return bool(keys_of(param))
+
+
+def with_key(param: Any, t: float, value: Any, interp: str | None = None) -> Any:
+    """param with a keyframe at t (added, or the one already there changed to this value). A fixed value
+    becomes keyframes; an expression is kept (it can use the keyframed value as `value`)."""
+    t = max(0.0, float(t))
+    keys, found = [], False
+    for kt, kv, ki in keys_of(param):
+        if abs(kt - t) <= KEY_TOLERANCE and not found:
+            keys.append((kt, value, interp or ki))
+            found = True
+        else:
+            keys.append((kt, kv, ki))
+    if not found:
+        keys.append((t, value, interp if interp in INTERPOLATIONS else "smooth"))
+    keys.sort(key=lambda k: k[0])
+    data = {k: v for k, v in param.items() if k != "value"} if _is_map(param) else {}
+    data["keys"] = _encode_keys(keys)
+    return data
+
+
+def without_key(param: Any, t: float) -> Any:
+    """param without its keyframe at t. Without any keys left it goes back to a fixed value (the one that
+    key had), keeping its expression."""
+    keys = keys_of(param)
+    removed = next((k for k in keys if abs(k[0] - t) <= KEY_TOLERANCE), None)
+    if removed is None:
+        return param
+    left = [k for k in keys if k is not removed]
+    data = {k: v for k, v in param.items() if k != "keys"}
+    if left:
+        data["keys"] = _encode_keys(left)
+        return data
+    if "expr" in data:
+        data["value"] = removed[1]
+        return data
+    return removed[1]
+
+
+def with_key_moved(param: Any, t_from: float, t_to: float) -> Any:
+    """param with its keyframe at t_from moved to t_to (a key already at t_to is replaced)."""
+    moving = key_at(param, t_from)
+    if moving is None:
+        return param
+    t_to = max(0.0, float(t_to))
+    keys = [k for k in keys_of(param) if abs(k[0] - moving[0]) > KEY_TOLERANCE and abs(k[0] - t_to) > KEY_TOLERANCE]
+    keys.append((t_to, moving[1], moving[2]))
+    keys.sort(key=lambda k: k[0])
+    return {**dict(param), "keys": _encode_keys(keys)}
+
+
+def with_key_interpolation(param: Any, t: float, interp: str) -> Any:
+    """param with the keyframe at t getting to the next one in this way ("smooth", "linear" or "hold")."""
+    if interp not in INTERPOLATIONS or key_at(param, t) is None:
+        return param
+    keys = [(kt, kv, interp if abs(kt - t) <= KEY_TOLERANCE else ki) for kt, kv, ki in keys_of(param)]
+    return {**dict(param), "keys": _encode_keys(keys)}
+
+
+def keys_shifted(param: Any, offset: float, keep: Callable[[float], bool] | None = None) -> Any:
+    """param with every keyframe moved by offset seconds (and only the keys whose old time passes keep(), if
+    given): used when an element is split or trimmed from the start, so its keys stay where they were."""
+    if not is_keyframed(param):
+        return param
+    keys = [(max(0.0, kt + offset), kv, ki) for kt, kv, ki in keys_of(param) if keep is None or keep(kt)]
+    if not keys:
+        return param  # nothing would be left (callers add a key at the cut first, see input_edit.split_element)
+    return {**dict(param), "keys": _encode_keys(keys)}
+
+
+def neighbour_key(param: Any, t: float, direction: int) -> float | None:
+    """The time of the next keyframe after t (direction 1) or the one before it (-1), or None."""
+    times = [k[0] for k in keys_of(param)]
+    if direction > 0:
+        later = [kt for kt in times if kt > t + KEY_TOLERANCE]
+        return min(later) if later else None
+    earlier = [kt for kt in times if kt < t - KEY_TOLERANCE]
+    return max(earlier) if earlier else None
 
 
 def expression_of(param: Any) -> str:

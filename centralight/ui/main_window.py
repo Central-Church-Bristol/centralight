@@ -49,6 +49,7 @@ from ..ai_guide import AIReplyError, parse_reply, write_guide_files
 from .ai_dialog import AIDialog
 from .automation_page import AutomationPage
 from .file_watcher import FolderWatcher
+from ..video_source import videos
 from .document import SCOPE_AUTOMATIONS, SCOPE_LAYOUT, SCOPE_SHOW, ShowDocument
 from .editor_page import EditorPage
 from .header import PAGES, Header
@@ -702,6 +703,7 @@ class MainWindow(QWidget):
         close_sources = getattr(getattr(self.engine, "sources", None), "close", None)
         if close_sources is not None:
             close_sources()
+        videos.close()  # stop the video readers
         self.document.close()
         log_info(f"CentraLight closed ({'lights off' if lights_off else 'lights left as they were'})")
         if self._save_files:

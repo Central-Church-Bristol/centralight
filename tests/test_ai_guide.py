@@ -43,7 +43,7 @@ class GuideTests(unittest.TestCase):
     def test_every_setting_and_function_is_documented(self) -> None:
         show = show_with_globals()
         guide = guide_text(show)
-        for kind in ("paint", "image", "ndi"):
+        for kind in ("paint", "image", "video", "ndi"):
             for spec in element_specs(kind):
                 self.assertIn(f"`{spec.path}`", guide, f"{kind} {spec.path}")
         for spec in SHAPE[1:]:

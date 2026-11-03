@@ -74,7 +74,8 @@ from .compositor import to_rgb8, transparent
 from .elements import RenderContext, ndi_sources_used
 from .live_state import HouseSetting, LiveState
 from .log import log_exception, log_info
-from .model import EMPTY, Input, Show, frozen_map
+from .model import EMPTY, Input, Show, frozen_map, has_finished, input_progress
+from .video_source import videos
 from .ndi_source import SourceStatus
 from .output import RGB, OutputStatus, encode_dmx
 from .params import evaluate, is_dynamic
@@ -179,6 +180,7 @@ class EngineFrame:
     base: str = "Black"  # name of what's on Base
     base_id: str = ""  # its input id ("" = nothing)
     base_progress: float | None = None  # 0-1 while Base is transitioning
+    playing: Mapping[str, float] = EMPTY  # timed inputs on Base or in an overlay -> how far through (0-1)
     overlays: tuple[OverlayView, ...] = ()
     solo: str = ""  # input shown alone on the lights ("" = none)
     live_inputs: frozenset[str] = frozenset()  # inputs on Base or in an overlay right now
@@ -379,6 +381,7 @@ class Engine:
         if self._fault_hook is not None:
             self._fault_hook()
         applied = self._automations(now) or applied
+        applied = self._finish_timed(now) or applied
         self._update_driven_house(now)
 
         canvas = self._render(now)
@@ -397,6 +400,7 @@ class Engine:
         if now - self._last_tidy >= TIDY_INTERVAL:
             self._last_tidy = now
             self.sources.tidy()
+            videos.tidy()
         if now - self._last_preview >= PREVIEW_INTERVAL:
             self._last_preview = now
             self._preview = to_rgb8(canvas)
@@ -406,6 +410,20 @@ class Engine:
         self._tick_stamps.append(started)
         if applied or now - self._last_publish >= PUBLISH_INTERVAL:
             self._publish(now, out_colours, house_out)
+
+    def _finish_timed(self, now: float) -> bool:
+        """A timed input that stops at its end leaves Base (or its overlay) when it gets there."""
+        changed = False
+        current = self._base.current
+        if current is not None and has_finished(current.input, current.time(now)) and not self._base.transitioning(now):
+            self._base.clear(now, cut=True)
+            changed = True
+        for slot in self._overlays:
+            inside = slot.content.current
+            if slot.on and inside is not None and has_finished(inside.input, inside.time(now)):
+                slot.off(now, cut=True)
+                changed = True
+        return changed
 
     def _render(self, now: float) -> np.ndarray:
         """Base and the overlays (or the solo input). If rendering fails, the last good picture is held."""
@@ -752,13 +770,20 @@ class Engine:
         current = self._base.current
         overlays = []
         live_inputs = set()
+        playing: dict[str, float] = {}
         if current is not None:
             live_inputs.add(current.input.id)
+            progress = input_progress(current.input, current.time(now))
+            if progress is not None:
+                playing[current.input.id] = progress
         for slot, ramp in zip(self._overlays, self._overlay_opacity):
             inside = slot.content.current
             visible = slot.visibility(now)
             if inside is not None and (slot.on or visible > 0.0):
                 live_inputs.add(inside.input.id)
+                progress = input_progress(inside.input, inside.time(now))
+                if progress is not None:
+                    playing.setdefault(inside.input.id, progress)
                 overlays.append(OverlayView(inside.input.id, inside.input.name, slot.on, visible, ramp.value(now)))
             else:
                 overlays.append(OverlayView(opacity=ramp.value(now)))
@@ -779,6 +804,7 @@ class Engine:
             base=current.input.name if current is not None else "Black",
             base_id=current.input.id if current is not None else "",
             base_progress=self._base.progress(now),
+            playing=frozen_map(playing),
             overlays=tuple(overlays),
             solo=self._solo.input.id if self._solo is not None else "",
             live_inputs=frozenset(live_inputs),

@@ -62,6 +62,25 @@ def stage_shapes_input(long: bool = False) -> Input:
                  tracks=tracks, locals=local_vars, hotkey="F5")
 
 
+def candlelight_input(long: bool = False) -> Input:
+    """A timed input (20 s, looping) with something of everything on its timeline: a warm wash that crosses
+    into amber where two elements overlap, a flickering glow with keyframes, and in / out transitions."""
+    tracks = freeze([
+        [{"id": "E1", "kind": "paint", "fill": {"type": "colour", "colour": "#FF8A2A"}, "start": 0.0, "end": 12.0,
+          "in": {"kind": "fade", "duration": 2.0}},
+         {"id": "E3", "kind": "paint", "fill": {"type": "colour", "colour": "#FFB347"}, "start": 10.0, "end": 20.0,
+          "out": {"kind": "fade", "duration": 3.0}}],
+        [{"id": "E2", "kind": "paint", "fill": {"type": "none"}, "start": 4.0, "end": 16.0, "blend": "screen",
+          "opacity": {"keys": [[0, 0.0], [2, 0.8], [6, 0.4, "linear"], [10, 0.9]]},
+          "shapes": [{"id": "S1", "type": "ellipse", "x": {"keys": [[0, 0.3], [12, 0.7]]}, "y": 0.7, "w": 0.4, "h": 0.5,
+                      "softness": 0.8, "colour": "#FFE0A0"}]}],
+        [], [],
+    ])
+    name = "Christmas candlelight for the carol service with a very long name" if long else "Candlelight"
+    return Input(id="christmas", name=name, colour="#FF8A2A", infinite=False, length=20.0, end="loop",
+                 transition=Transition("fade", 1.0), tracks=tracks)
+
+
 def with_inputs(show: Show, long: bool = False) -> Show:
     inputs = [
         follow_screen_input(),
@@ -69,7 +88,7 @@ def with_inputs(show: Show, long: bool = False) -> Show:
         paint_input("warm-white", "Warm white", "#FFB46B"),
         paint_input("pillars-purple", "Pillars purple with a slow breathing pulse" if long else "Pillars purple", "#7A3CFF", ai=True),
         paint_input("worship-blue", "Worship blue", "#2050FF"),
-        paint_input("christmas", "Christmas candlelight for the carol service with a very long name" if long else "Candlelight", "#FF8A2A", infinite=False),
+        candlelight_input(long),
         paint_input("off", "All off", "#000000"),
     ]
     globals_ = (

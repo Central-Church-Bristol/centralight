@@ -241,6 +241,16 @@ QToolButton#TileIcon {
     border-radius: 6px;
     padding: 1px;
 }
+QToolButton#KeyButton {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 1px;
+}
+QToolButton#KeyButton:hover {
+    border-color: @border_strong;
+    background: @card_hover;
+}
 QToolButton#TileIcon:hover {
     border-color: @border_strong;
     background: @card_hover;

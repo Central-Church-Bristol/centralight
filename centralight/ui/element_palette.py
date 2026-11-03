@@ -17,7 +17,7 @@ TRANSITION_MIME = "application/x-centralight-transition"
 ELEMENTS = (
     ("paint", "Paint", "Colours, gradients and shapes", icons.draw_pencil, True),
     ("image", "Image", "A picture", icons.draw_plus, True),
-    ("video", "Video", "A video (arrives in a later update)", icons.draw_clock, False),
+    ("video", "Video", "A video file, looping for as long as the element lasts", icons.draw_clock, True),
     ("ndi", "NDI", "A live feed, e.g. Media Background Pane", icons.draw_wave, True),
 )
 TRANSITIONS = (

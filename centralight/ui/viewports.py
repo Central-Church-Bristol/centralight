@@ -23,7 +23,7 @@ from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushBu
 
 from ..model import PATCH_RADIUS, Show
 from ..output import RGB, to_byte
-from ..params import evaluate, is_dynamic
+from ..params import evaluate, expression_of
 from ..step_names import shape_name
 from . import theme
 from .light_view import rgb_colour
@@ -202,6 +202,7 @@ class SelectedViewport(ViewportCanvas):
         self.tool = "select"
         self.element: Mapping | None = None
         self.selected_shape = ""
+        self.time = 0.0  # the element's own time at the playhead (keyframed shapes are drawn there)
         self._drag: dict | None = None
         self._draw: tuple[QPointF, QPointF] | None = None
 
@@ -223,16 +224,18 @@ class SelectedViewport(ViewportCanvas):
     def shape_geometry(self, shape: Mapping) -> tuple[QPointF, float, float, float]:
         """(centre, half width, half height, rotation in degrees) in widget pixels."""
         canvas = self.canvas_rect()
-        x = evaluate(shape.get("x", 0.5), 0.0, 0.5)
-        y = evaluate(shape.get("y", 0.5), 0.0, 0.5)
-        w = abs(evaluate(shape.get("w", 0.3), 0.0, 0.3))
-        h = abs(evaluate(shape.get("h", 0.3), 0.0, 0.3))
-        rotation = evaluate(shape.get("rotation", 0.0), 0.0, 0.0)
+        t = self.time
+        x = evaluate(shape.get("x", 0.5), t, 0.5)
+        y = evaluate(shape.get("y", 0.5), t, 0.5)
+        w = abs(evaluate(shape.get("w", 0.3), t, 0.3))
+        h = abs(evaluate(shape.get("h", 0.3), t, 0.3))
+        rotation = evaluate(shape.get("rotation", 0.0), t, 0.0)
         return self.to_widget(x, y), w * canvas.width() / 2, h * canvas.height() / 2, rotation
 
     @staticmethod
     def editable(shape: Mapping) -> bool:
-        return not any(is_dynamic(shape.get(key)) for key in ("x", "y", "w", "h", "rotation"))
+        """Shapes can be dragged unless a formula sets where they are (keyframed ones get a key at the playhead)."""
+        return not any(expression_of(shape.get(key)) for key in ("x", "y", "w", "h", "rotation"))
 
     def _transform(self, centre: QPointF, rotation: float) -> QTransform:
         transform = QTransform()
@@ -348,7 +351,7 @@ class SelectedViewport(ViewportCanvas):
 
     def _begin(self, shape: Mapping, mode: str, point: QPointF) -> None:
         if not self.editable(shape):
-            QToolTip.showText(self.mapToGlobal(point.toPoint()), "This shape is keyframed: change it in the details panel", self)
+            QToolTip.showText(self.mapToGlobal(point.toPoint()), "A formula places this shape: change it in the details panel", self)
             return
         centre, hw, hh, rotation = self.shape_geometry(shape)
         self._drag = {"shape": str(shape.get("id")), "mode": mode, "start": point, "centre": centre, "hw": hw, "hh": hh, "rotation": rotation}

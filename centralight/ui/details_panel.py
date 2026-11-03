@@ -21,6 +21,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -29,10 +30,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
     QTabWidget,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -40,13 +43,21 @@ from PySide6.QtWidgets import (
 )
 
 from ..expressions import Env, ExpressionError, compile_expression, describe_value
+from ..colours import to_hex
 from ..input_edit import (
     add_shape,
     copy_media,
     find_element,
+    get_param,
     move_shape,
+    param_path,
+    remove_key,
     remove_shape,
     set_element_value,
+    set_key,
+    set_key_interpolation,
+    set_length,
+    set_param,
     set_excluded,
     set_house_level,
     set_house_param,
@@ -54,11 +65,12 @@ from ..input_edit import (
     set_transition,
     update_input,
 )
-from ..model import Input, Show
-from ..params import base_value, expression_of, with_base_value, with_expression
+from ..model import END_BEHAVIOURS, END_HOLD, END_LOOP, END_STOP, Input, Show, element_span
+from ..params import base_value, expression_of, is_keyframed, key_at, neighbour_key, with_base_value, with_expression
 from ..schema import SHAPE, TRANSITION, Spec, element_specs, get_path, visible
 from ..step_names import change_name, describe, element_name, level_name, lights_change_name, lower_first, shape_name
 from ..variables import AUDIO_SILENT, evaluate_locals
+from . import icons, theme
 from .document import ShowDocument
 from .editor_widgets import ChoiceField, ColourField, NumberField, SourceField
 from .expression_edit import Evaluator, ExprButton, ExpressionDialog
@@ -67,6 +79,16 @@ from .widgets import ElidedLabel, FlowLayout, Panel, discard
 
 KIND_TITLES = {"paint": "Paint", "image": "Image", "video": "Video", "ndi": "NDI feed"}
 MIN_WIDTH = 340
+END_CHOICES = ((END_HOLD, "Hold the last moment"), (END_LOOP, "Loop"), (END_STOP, "Stop"))
+_FILLED_KEY = None
+
+
+def _filled_key_icon():
+    """The ◆ when there's a keyframe at the playhead (made once)."""
+    global _FILLED_KEY
+    if _FILLED_KEY is None:
+        _FILLED_KEY = icons.line_icon(lambda painter, rect, colour, _on: icons.draw_key(painter, rect, colour, True), theme.ACCENT)
+    return _FILLED_KEY
 SPECIAL_NAMES = {"t", "time", "value", "pi"}
 RESERVED_HOTKEYS = {"Ctrl+Z", "Ctrl+Y", "Ctrl+Shift+Z", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+,"}
 SHAPE_TITLES = {"rect": "Rectangle", "ellipse": "Ellipse"}
@@ -83,6 +105,8 @@ class DetailsPanel(QScrollArea):
     shape_selected = Signal(str)  # shape id ("" = none)
     element_removed = Signal()
     tab_changed = Signal(int)  # 0 = the Input tab, 1 = Globals
+    seek_requested = Signal(float)  # move the Editor's playhead (input seconds): the ◆ menu's previous / next key
+    timed_requested = Signal(bool)  # the Input tab's Infinite box: True = make it timed (the timeline does it)
 
     def __init__(self, document: ShowDocument, sources_provider: Callable[[], list[str]] | None = None, parent: QWidget | None = None,
                  context: Callable[[], tuple[Mapping[str, Any], float]] | None = None,
@@ -94,6 +118,7 @@ class DetailsPanel(QScrollArea):
         self._context = context or (lambda: ({}, 0.0))  # (global variables' values, the Editor's time)
         self._url_base = url_base or (lambda: "http://127.0.0.1:8746")
         self._exprs: dict[str, ExprButton] = {}
+        self._keys: dict[str, QToolButton] = {}  # the ◆ next to each setting that can have keyframes
         self._tab = 0
         self.locals_panel: LocalsPanel | None = None
         self.globals_panel: GlobalsPanel | None = None
@@ -176,7 +201,7 @@ class DetailsPanel(QScrollArea):
         if element is None:
             visible_transition = tuple(s.path for s in TRANSITION if self._transition_visible(s, inp))
             house = tuple(h.fixture for h in self.show_data.house)
-            return ("input", inp.id, visible_transition, house, tuple(fx.id for fx in self.show_data.colour_fixtures()))
+            return ("input", inp.id, inp.infinite, visible_transition, house, tuple(fx.id for fx in self.show_data.colour_fixtures()))
         specs = element_specs(str(element.get("kind")))
         rows = tuple(s.path for s in specs if visible(s, element, specs))
         shapes = tuple(str(s.get("id")) for s in element.get("shapes", ()) or ())
@@ -189,6 +214,7 @@ class DetailsPanel(QScrollArea):
         self._structure = self._structure_key()
         self._fields = {}
         self._exprs = {}
+        self._keys = {}
         self.lights_tree = None
         self.shape_list = None
         self.locals_panel = None
@@ -251,13 +277,23 @@ class DetailsPanel(QScrollArea):
             field.edited.connect(on_edit)
         return field
 
-    def _with_expr(self, field: QWidget, key: str, on_click: Callable[[], None]) -> QWidget:
-        """field with an "=" button after it (for settings that can have an expression)."""
+    def _with_expr(self, field: QWidget, key: str, on_click: Callable[[], None], keyable: bool = False) -> QWidget:
+        """field with an "=" button after it (for settings that can have an expression), and a ◆ for keyframes."""
         holder = QWidget()
         row = QHBoxLayout(holder)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
         row.addWidget(field, 1)
+        if keyable:
+            diamond = QToolButton()
+            diamond.setObjectName("KeyButton")
+            diamond.setAutoRaise(True)
+            diamond.setCursor(Qt.CursorShape.PointingHandCursor)
+            diamond.clicked.connect(lambda _checked=False, k=key: self.toggle_key(k))
+            diamond.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            diamond.customContextMenuRequested.connect(lambda pos, k=key, b=diamond: self._key_menu(k, b.mapToGlobal(pos)))
+            row.addWidget(diamond)
+            self._keys[key] = diamond
         button = ExprButton()
         button.clicked.connect(on_click)
         row.addWidget(button)
@@ -303,10 +339,25 @@ class DetailsPanel(QScrollArea):
         self.hotkey_problem.setVisible(False)
         form.addRow(self.hotkey_problem)
         mode = QCheckBox("Infinite (plays until something replaces it)")
-        mode.setChecked(True)
-        mode.setEnabled(False)
-        mode.setToolTip("Timed sequences, with a length and keyframes, arrive in a later update")
+        mode.setChecked(inp.infinite)
+        mode.setToolTip("Untick for a timed sequence: a length, with elements placed in time on the timeline")
+        mode.clicked.connect(lambda checked: self.timed_requested.emit(not checked))
         form.addRow(mode)
+        if not inp.infinite:
+            length = QDoubleSpinBox()
+            length.setRange(0.1, 3600.0)
+            length.setDecimals(1)
+            length.setSuffix(" s")
+            length.setKeyboardTracking(False)
+            length.setToolTip("How long it lasts")
+            length.valueChanged.connect(self._set_length)
+            form.addRow(self._label("Length"), length)
+            self._fields["input:length"] = length
+            end = ChoiceField(END_CHOICES)
+            end.setToolTip("What happens when it gets to the end")
+            end.edited.connect(lambda value, _final: self._set_end(value))
+            form.addRow(self._label("At the end"), end)
+            self._fields["input:end"] = end
         urls = QPushButton("Copy Stream Deck URLs")
         urls.setToolTip("Copy the URLs that send this input to Base or an overlay, for Stream Deck keys")
         urls.clicked.connect(lambda: self.copy_urls(urls))
@@ -388,7 +439,7 @@ class DetailsPanel(QScrollArea):
             key = f"element:{spec.path}"
             self._fields[key] = field
             if spec.animatable and spec.type in ("number", "colour"):
-                field = self._with_expr(field, key, lambda k=key: self.edit_expression(k))
+                field = self._with_expr(field, key, lambda k=key: self.edit_expression(k), keyable=True)
             form.addRow(self._label(spec.label), field)
         remove = QPushButton("Remove this element")
         remove.setProperty("danger", True)
@@ -449,7 +500,7 @@ class DetailsPanel(QScrollArea):
             key = f"shape:{spec.path}"
             self._fields[key] = field
             if spec.animatable and spec.type in ("number", "colour"):
-                field = self._with_expr(field, key, lambda k=key: self.edit_expression(k))
+                field = self._with_expr(field, key, lambda k=key: self.edit_expression(k), keyable=True)
             form.addRow(self._label(spec.label), field)
         return panel
 
@@ -504,6 +555,13 @@ class DetailsPanel(QScrollArea):
                     name.setText(inp.name)
                 if "input:colour" in self._fields:
                     self._fields["input:colour"].set_value(inp.colour)
+                length = self._fields.get("input:length")
+                if length is not None and not length.hasFocus() and abs(length.value() - inp.length) > 1e-6:
+                    blocked = length.blockSignals(True)
+                    length.setValue(inp.length)
+                    length.blockSignals(blocked)
+                if "input:end" in self._fields:
+                    self._fields["input:end"].set_value(inp.end)
                 if self.hotkey is not None and not self.hotkey.hasFocus():
                     self.hotkey.setKeySequence(QKeySequence(inp.hotkey))
                 for spec in TRANSITION:
@@ -532,16 +590,19 @@ class DetailsPanel(QScrollArea):
                     self.globals_panel.refresh(self.show_data)
                 return
             specs = element_specs(str(element.get("kind")))
+            t = self.element_time()
             for spec in specs:
-                field = self._fields.get(f"element:{spec.path}")
+                key = f"element:{spec.path}"
+                field = self._fields.get(key)
                 if field is not None:
-                    self._show_value(field, spec, get_path(element, spec.path, spec.default), self._exprs.get(f"element:{spec.path}"))
+                    self._show_value(field, spec, get_path(element, spec.path, spec.default), self._exprs.get(key), self._keys.get(key), t)
             shape = self.current_shape()
             if shape is not None:
                 for spec in SHAPE:
-                    field = self._fields.get(f"shape:{spec.path}")
+                    key = f"shape:{spec.path}"
+                    field = self._fields.get(key)
                     if field is not None:
-                        self._show_value(field, spec, get_path(shape, spec.path, spec.default), self._exprs.get(f"shape:{spec.path}"))
+                        self._show_value(field, spec, get_path(shape, spec.path, spec.default), self._exprs.get(key), self._keys.get(key), t)
             if self.lights_tree is not None:
                 excluded = set(get_path(element, "mask.exclude", ()) or ())
                 blocked = self.lights_tree.blockSignals(True)
@@ -555,19 +616,106 @@ class DetailsPanel(QScrollArea):
         finally:
             self._updating = False
 
-    def _show_value(self, field, spec: Spec, raw: Any, expr_button: ExprButton | None = None) -> None:
-        keyed = hasattr(raw, "get") and "keys" in raw
-        value = base_value(raw, 0.0, spec.default, "colour" if spec.type == "colour" else "number" if spec.type == "number" else "raw")
+    def _show_value(self, field, spec: Spec, raw: Any, expr_button: ExprButton | None = None,
+                    key_button: QToolButton | None = None, t: float = 0.0) -> None:
+        """A setting's value at the playhead. Keyframed settings stay editable: a change sets a key there."""
+        keyed = is_keyframed(raw)
+        value = base_value(raw, t, spec.default, "colour" if spec.type == "colour" else "number" if spec.type == "number" else "raw")
         if hasattr(field, "set_value"):
             field.set_value(value)
         elif isinstance(field, QLineEdit) and not field.hasFocus():
             field.setText(str(value))
-        field.setEnabled(not keyed)  # an expression keeps the value editable: it's the expression's `value`
-        if keyed:
-            field.setToolTip("Keyframed: keyframes can be edited from the timeline in a later update")
         if expr_button is not None:
             text = expression_of(raw)
             expr_button.set_state(text, self.problem_with(text))
+        if key_button is not None:
+            here = key_at(raw, t) is not None
+            state = "here" if here else "keyed" if keyed else "none"
+            if key_button.property("keyState") != state:
+                key_button.setProperty("keyState", state)
+                colour = theme.ACCENT if keyed else theme.TEXT_3
+                key_button.setIcon(icons.line_icon(icons.draw_key, colour, colour) if not here else _filled_key_icon())
+                key_button.setToolTip(
+                    "Keyframe here: click to remove it · right-click for more" if here else
+                    "Keyframed: click to add a keyframe at the playhead · right-click for more" if keyed else
+                    "Click to add a keyframe at the playhead (the setting then changes over time)")
+
+    # ------------------------------------------------------------ keyframes
+
+    def set_time(self) -> None:
+        """The Editor's playhead moved: show values (and ◆) at the new time."""
+        if self.current_element() is not None and not self._updating:
+            self._fill_values()
+
+    def element_time(self) -> float:
+        """The selected element's own time at the playhead (its keyframes count from its start)."""
+        inp, element = self.current_input(), self.current_element()
+        t = self._context()[1]
+        if inp is None or element is None or inp.infinite:
+            return t
+        return max(0.0, t - element_span(element, inp)[0])
+
+    def _where(self, key: str) -> tuple[str, Spec | None]:
+        """("opacity" or "shapes:S1:x", its spec) for a field key ("element:opacity", "shape:x")."""
+        group, path = key.split(":", 1)
+        if group == "shape" and self.shape_id:
+            return param_path(self.shape_id, path), next((s for s in SHAPE if s.path == path), None)
+        element = self.current_element()
+        specs = element_specs(str(element.get("kind"))) if element is not None else ()
+        return path, next((s for s in specs if s.path == path), None)
+
+    def toggle_key(self, key: str) -> None:
+        """◆: add a keyframe at the playhead (with the value there), or remove the one that's there."""
+        element = self.current_element()
+        if element is None:
+            return
+        where, spec = self._where(key)
+        raw = get_param(element, where)
+        t = self.element_time()
+        kind = "colour" if spec is not None and spec.type == "colour" else "number"
+        name = f"{element_name(element)}: {spec.label.lower() if spec else where}"
+        if key_at(raw, t) is not None:
+            self._apply(remove_key(self.show_data, self.input_id, self.element_id, where, t), f"{name}: remove keyframe at {t:.2f} s")
+            return
+        value = base_value(raw, t, spec.default if spec else 0.0, kind)
+        value = to_hex(value) if kind == "colour" else round(float(value), 4)
+        self._apply(set_key(self.show_data, self.input_id, self.element_id, where, t, value), f"{name}: keyframe at {t:.2f} s")
+
+    def _key_menu(self, key: str, at) -> None:
+        element = self.current_element()
+        inp = self.current_input()
+        if element is None or inp is None:
+            return
+        where, spec = self._where(key)
+        raw = get_param(element, where)
+        t = self.element_time()
+        start = element_span(element, inp)[0] if not inp.infinite else 0.0
+        menu = QMenu(self)
+        before, after = neighbour_key(raw, t, -1), neighbour_key(raw, t, 1)
+        back = menu.addAction("Go to the previous keyframe", lambda: self.seek_requested.emit(start + before))
+        back.setEnabled(before is not None)
+        forward = menu.addAction("Go to the next keyframe", lambda: self.seek_requested.emit(start + after))
+        forward.setEnabled(after is not None)
+        if key_at(raw, t) is not None:
+            menu.addSeparator()
+            for interp, label in (("smooth", "Smooth to the next key"), ("linear", "Straight to the next key"), ("hold", "Hold until the next key")):
+                menu.addAction(label, lambda i=interp: self._apply(
+                    set_key_interpolation(self.show_data, self.input_id, self.element_id, where, t, i),
+                    f"{element_name(element)}: keyframe at {t:.2f} s {i}"))
+        if is_keyframed(raw):
+            menu.addSeparator()
+            menu.addAction("Remove all keyframes (keep the value here)", lambda: self._unkey(where, spec, raw, t))
+        menu.exec(at)
+
+    def _unkey(self, where: str, spec: Spec | None, raw: Any, t: float) -> None:
+        element = self.current_element()
+        kind = "colour" if spec is not None and spec.type == "colour" else "number"
+        value = base_value(raw, t, spec.default if spec else 0.0, kind)
+        value = to_hex(value) if kind == "colour" else round(float(value), 4)
+        data = {k: v for k, v in raw.items() if k != "keys"} if hasattr(raw, "items") else {}
+        fixed = {**data, "value": value} if "expr" in data else value
+        self._apply(set_param(self.show_data, self.input_id, self.element_id, where, fixed),
+                    f"{element_name(element)}: no keyframes on {spec.label.lower() if spec else where}")
 
     # ------------------------------------------------------------ expressions
 
@@ -714,6 +862,17 @@ class DetailsPanel(QScrollArea):
             spec = Spec("colour", "Tile colour", "colour", inp.colour)
             self._apply(update_input(self.show_data, self.input_id, colour=value), change_name(inp.name, spec, inp.colour, value))
 
+    def _set_length(self, value: float) -> None:
+        inp = self.current_input()
+        if inp is not None and not self._updating and abs(value - inp.length) > 1e-6:
+            self._apply(set_length(self.show_data, self.input_id, value), f"{inp.name}: length {value:g} s", f"{self.input_id}/length")
+
+    def _set_end(self, value: Any) -> None:
+        inp = self.current_input()
+        if inp is not None and value in END_BEHAVIOURS and value != inp.end:
+            label = dict(END_CHOICES).get(value, value)
+            self._apply(set_length(self.show_data, self.input_id, inp.length, value), f"{inp.name}: at the end, {label.lower()}")
+
     def _set_transition(self, spec: Spec, value: Any) -> None:
         inp = self.current_input()
         if inp is None:
@@ -736,6 +895,12 @@ class DetailsPanel(QScrollArea):
             return
         spec = next((s for s in element_specs(str(element.get("kind"))) if s.path == path), None)
         raw = get_path(element, path, None)
+        if is_keyframed(raw):  # a keyframed setting: the change is a key at the playhead
+            t = self.element_time()
+            self._apply(set_key(self.show_data, self.input_id, self.element_id, path, t, value),
+                        f"{element_name(element)}: {spec.label.lower() if spec else path} keyframe at {t:.2f} s",
+                        f"{self.input_id}/{self.element_id}/{path}/key/{t:.3f}")
+            return
         text = change_name(element_name(element), spec, get_path(element, path, spec.default), value) if spec else f"Change {element_name(element)}"
         self._apply(set_element_value(self.show_data, self.input_id, self.element_id, path, with_base_value(raw, value)),
                     text, f"{self.input_id}/{self.element_id}/{path}")
@@ -746,6 +911,12 @@ class DetailsPanel(QScrollArea):
             return
         spec = next((s for s in SHAPE if s.path == path), None)
         raw = get_path(shape, path, None)
+        if is_keyframed(raw):
+            t = self.element_time()
+            self._apply(set_key(self.show_data, self.input_id, self.element_id, param_path(self.shape_id, path), t, value),
+                        f"{shape_name(shape)}: {spec.label.lower() if spec else path} keyframe at {t:.2f} s",
+                        f"{self.input_id}/{self.element_id}/{self.shape_id}/{path}/key/{t:.3f}")
+            return
         text = change_name(shape_name(shape), spec, get_path(shape, path, spec.default), value) if spec else f"Change {shape_name(shape)}"
         self._apply(set_shape_value(self.show_data, self.input_id, self.element_id, self.shape_id, path, with_base_value(raw, value)),
                     text, f"{self.input_id}/{self.element_id}/{self.shape_id}/{path}")

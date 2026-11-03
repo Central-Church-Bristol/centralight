@@ -44,6 +44,7 @@ class MiniLightMap(QWidget):
         self._show = show
         self._colours: Mapping[str, RGB] = {}
         self._live = False
+        self.progress: float | None = None  # how far through a timed input that's playing (0-1)
         policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         policy.setHeightForWidth(True)
         self.setSizePolicy(policy)
@@ -57,6 +58,11 @@ class MiniLightMap(QWidget):
         if colours != self._colours or live != self._live:
             self._colours = colours
             self._live = live
+            self.update()
+
+    def set_progress(self, progress: float | None) -> None:
+        if progress != self.progress:
+            self.progress = progress
             self.update()
 
     def hasHeightForWidth(self) -> bool:  # noqa: N802
@@ -94,6 +100,13 @@ class MiniLightMap(QWidget):
                 painter.setBrush(colour)
                 painter.setPen(QPen(QColor(theme.BORDER_STRONG) if max(rgb) < 0.1 else colour.lighter(130), 1))
             painter.drawEllipse(QRectF(centre_x - radius, centre_y - radius, radius * 2, radius * 2))
+        if self.progress is not None:  # a timed input playing: how far through it is
+            bar = QRectF(canvas.left() + 6, canvas.bottom() - 7, canvas.width() - 12, 3)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(255, 255, 255, 40))
+            painter.drawRoundedRect(bar, 1.5, 1.5)
+            painter.setBrush(QColor(theme.LIVE))
+            painter.drawRoundedRect(QRectF(bar.left(), bar.top(), bar.width() * min(1.0, max(0.0, self.progress)), bar.height()), 1.5, 1.5)
         painter.end()
 
 
@@ -463,6 +476,11 @@ class InputGrid(QWidget):
             tile.set_on_base(live)
             tile.set_overlays({slot for slot, other in enumerate(self._overlay_ids, start=1) if other == input_id})
             tile.map.set_colours(self._last_colours.get(input_id, {}), live)
+
+    def set_playing(self, playing: Mapping[str, float]) -> None:
+        """Timed inputs on Base or in an overlay: a progress bar on their tiles."""
+        for input_id, tile in self.tiles.items():
+            tile.map.set_progress(playing.get(input_id))
 
     def set_base(self, base_id: str, colours: Mapping[str, RGB]) -> None:
         self.set_live(base_id, self._overlay_ids, colours)

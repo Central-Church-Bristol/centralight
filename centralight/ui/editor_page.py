@@ -13,6 +13,10 @@
 
 Editing an input that's on Base or in an overlay changes the lights straight away (the red
 LIVE banner says so); otherwise editing is "blind" until you send it or use Show on lights.
+
+The viewports show the input at the playhead. It plays when an input is opened (so expressions
+move); pause it to put keyframes at a moment (the ◆ next to each setting), drag in the ruler to
+scrub. A timed input stops at its end, unless it loops.
 """
 
 from __future__ import annotations
@@ -26,8 +30,8 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QStacked
 from ..commands import SendToBase, SetSolo
 from ..editor_render import EditorRenderer
 from ..engine import EngineFrame
-from ..input_edit import add_shape, find_element, set_excluded, set_shape_values
-from ..model import Input, Show
+from ..input_edit import add_shape, find_element, set_excluded, set_shape_values_at
+from ..model import END_LOOP, Input, Show, element_span
 from ..settings import Settings
 from ..step_names import element_name, lights_change_name
 from .details_panel import MIN_WIDTH as DETAILS_MIN_WIDTH
@@ -57,7 +61,9 @@ class EditorPage(QWidget):
         self.input_id = ""
         self.element_id = ""
         self.shape_id = ""
-        self._started = time.monotonic()
+        self.playhead = 0.0  # the input's time shown in the viewports (seconds)
+        self.playing = True
+        self._play_origin = time.monotonic()  # when time 0 would have been, while playing
         self._renderer = EditorRenderer(sources)
         self._renderer_running = False
         self._picture_version = -1
@@ -124,7 +130,7 @@ class EditorPage(QWidget):
         provider = (lambda: sources.available()) if sources is not None and hasattr(sources, "available") else (lambda: [])
         self.details = DetailsPanel(
             document, provider,
-            context=lambda: (self.variables(), max(0.0, time.monotonic() - self._started)),
+            context=lambda: (self.variables(), self.playhead),
             url_base=lambda: f"http://127.0.0.1:{settings.remote_port}",
         )
         self.details.tab_changed.connect(lambda _index: self._entered and self.document.set_scope(self.undo_scope()))
@@ -178,10 +184,14 @@ class EditorPage(QWidget):
         self.palette.element_clicked.connect(self.timeline.add_to_first_empty)
         self.palette.transition_clicked.connect(self.timeline.set_transition_kind)
         document.changed.connect(self._show_changed)
+        self.timeline.seek_requested.connect(self.seek)
+        self.timeline.play_toggled.connect(self.set_playing)
+        self.details.seek_requested.connect(self.seek)
+        self.details.timed_requested.connect(lambda timed: self.timeline.set_timed(timed))
 
         self._poll = QTimer(self)
         self._poll.setInterval(POLL_MS)
-        self._poll.timeout.connect(self._poll_picture)
+        self._poll.timeout.connect(self._tick)
         self._sync_buttons()
 
     # ------------------------------------------------------------ splits
@@ -229,10 +239,11 @@ class EditorPage(QWidget):
         self.input_id = input_id
         self.element_id = ""
         self.shape_id = ""
-        self._started = time.monotonic()
+        self.playhead, self.playing, self._play_origin = 0.0, True, time.monotonic()
         if self._entered:
             self.document.set_scope(self.undo_scope())
         self.timeline.set_input(input_id)
+        self._push_time()
         self.details.set_target(input_id, None, None)
         self.selected_canvas.set_element(None, None)
         self.selected_panel.set_paint_tools(False)
@@ -265,6 +276,7 @@ class EditorPage(QWidget):
 
     def _sync_selected_view(self) -> None:
         element = self._element()
+        self.selected_canvas.time = self.element_time()
         self.selected_canvas.set_element(element, self.shape_id)
         self.selected_panel.set_paint_tools(element is not None and element.get("kind") == "paint")
 
@@ -274,6 +286,63 @@ class EditorPage(QWidget):
         self.editing.setText(f"Editing: {inp.name}" if inp is not None else "Editing: nothing")
         for button in (self.solo_button, self.send_button, self.ai_button):
             button.setEnabled(inp is not None)
+
+    # ------------------------------------------------------------ the playhead
+
+    def element_time(self) -> float:
+        """The selected element's own time at the playhead (keyframes count from its start)."""
+        inp, element = self.current_input(), self._element()
+        if inp is None or element is None or inp.infinite:
+            return self.playhead
+        return max(0.0, self.playhead - element_span(element, inp)[0])
+
+    def seek(self, t: float) -> None:
+        """Move the playhead (it carries on from there if it's playing)."""
+        inp = self.current_input()
+        t = max(0.0, float(t))
+        if inp is not None and not inp.infinite:
+            t = min(t, inp.length)
+        self.playhead = t
+        self._play_origin = time.monotonic() - t
+        self._push_time()
+        self._request()
+
+    def set_playing(self, on: bool) -> None:
+        inp = self.current_input()
+        if on and inp is not None and not inp.infinite and inp.end != END_LOOP and self.playhead >= inp.length - 1e-6:
+            self.playhead = 0.0  # at the end: play from the start again
+        self.playing = bool(on)
+        self._play_origin = time.monotonic() - self.playhead
+        self._push_time()
+        self._request()
+
+    def _advance(self) -> None:
+        """While playing, the playhead follows the clock (looping, or stopping at the end of a timed input)."""
+        inp = self.current_input()
+        if not self.playing or inp is None:
+            return
+        t = time.monotonic() - self._play_origin
+        if not inp.infinite:
+            length = max(inp.length, 1e-3)
+            if inp.end == END_LOOP:
+                t %= length
+            elif t >= length:
+                t, self.playing = length, False
+        self.playhead = t
+        self._push_time()
+
+    def _push_time(self) -> None:
+        self.timeline.set_playhead(self.playhead, self.playing)
+        self.details.set_time()
+        self.selected_canvas.time = self.element_time()
+        if self.shape_id or self.selected_canvas.selected_shape:
+            self.selected_canvas.update()
+
+    def _tick(self) -> None:
+        if self.playing:
+            self._advance()
+            self._request()
+        self._poll_picture()
 
     def variables(self):
         """Global variables' current values (from the engine), for drawing and live values."""
@@ -304,8 +373,8 @@ class EditorPage(QWidget):
     # ------------------------------------------------------------ shapes in the Selected view
 
     def _shape_dragged(self, element_id: str, shape_id: str, values: dict) -> None:
-        if self.input_id:
-            self.document.preview(set_shape_values(self.show_data, self.input_id, element_id, shape_id, values))
+        if self.input_id:  # keyframed settings get a key at the playhead
+            self.document.preview(set_shape_values_at(self.show_data, self.input_id, element_id, shape_id, values, self.element_time()))
 
     def _shape_drawn(self, shape_type: str, values: dict) -> None:
         if not self.input_id or not self.element_id:
@@ -353,7 +422,7 @@ class EditorPage(QWidget):
 
     def _request(self) -> None:
         if self.input_id and self._renderer_running:
-            self._renderer.request(self.show_data, self.input_id, self.element_id or None, self._started, self.variables())
+            self._renderer.request(self.show_data, self.input_id, self.element_id or None, self.playhead, self.variables())
 
     def _poll_picture(self) -> None:
         version, picture = self._renderer.pictures.get_versioned()
@@ -374,7 +443,7 @@ class EditorPage(QWidget):
             return
         from ..editor_render import EditorRequest
 
-        picture = self._renderer.render_now(EditorRequest(self.show_data, self.input_id, self.element_id or None, self._started, self.variables()))
+        picture = self._renderer.render_now(EditorRequest(self.show_data, self.input_id, self.element_id or None, self.playhead, self.variables()))
         if picture is not None:
             self._renderer.pictures.put(picture)
             self._poll_picture()

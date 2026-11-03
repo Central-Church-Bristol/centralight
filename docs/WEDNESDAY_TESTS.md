@@ -191,6 +191,23 @@ Worship blue.
       second or two of it saving the file, the tile appears by itself. Ask it to change that input: the change
       shows straight away, and Ctrl+Z (in the Editor, on that input) puts the old version back.
 
+## 14c. Timed sequences, keyframes and video
+
+- [ ] Editor → open **Warm white** → untick **Infinite** (above the timeline). It's now a timed input (10 s). In the
+      Input tab set **Length** to 12 s and **At the end: Loop**.
+- [ ] Drag **Paint** from the palette onto Track 2 at about 4 s. Drag the bar to move it, drag its ends to trim it,
+      right-click → **Split at the playhead**. Ctrl+Z undoes each.
+- [ ] Right-click a bar → **In transition → Fade**, and **Out transition → Wipe**: wedges show at its ends. Make two
+      bars on one track overlap: an X shows where one crosses into the other.
+- [ ] Pause (Space), click the ruler at 2 s, click the ◆ next to **Opacity**; click the ruler at 6 s and set Opacity
+      to 20 %. Play: it fades between them. Drag a diamond on the bar to retime it.
+- [ ] **Send to Base**: the lights play the sequence and loop it; the tile shows a progress bar; the Editor's Result
+      view matches the lights. **Send to Base** again: it starts again.
+- [ ] Set **At the end: Stop** and send it: at the end it leaves Base.
+- [ ] **Video**: drag Video onto a track, **Choose…** a short video (it's copied into the show), send it to Base: the
+      lights follow the video. Try **Speed** and **Blur**. While it plays, glance at Task Manager: CentraLight should
+      stay small (note the CPU %).
+
 ## 15. Always running: the tray, a second launch, sleep
 
 - [ ] Close the window (✕): CentraLight keeps running in the tray by the clock (a message says so the first time);

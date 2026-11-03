@@ -93,6 +93,7 @@ class RenderContext:
     globals: Mapping[str, Any] = MappingProxyType({})  # global variables' current values
     audio: Mapping[str, float] = MappingProxyType({})  # audio.level and friends (M8)
     static: _LRU = field(default_factory=lambda: _LRU(512, STATIC_CACHE_BYTES))  # drawn static elements
+    video_threaded: bool = True  # videos decode ahead in their own thread (the engine); False: exact frames (Editor, tests)
 
 
 # ---------------------------------------------------------------- helpers
@@ -331,6 +332,29 @@ def render_image(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray |
     return media_layer(image, ctx, _fit_of(element))
 
 
+def render_video(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | None:
+    """A video file, looping for as long as the element lasts; `speed` plays it faster or slower."""
+    from .video_source import videos
+
+    path = media_path(ctx.folder, element.get("file"))
+    if path is None or not path.is_file():
+        return None
+    clip = videos.clip(path, threaded=ctx.video_threaded)
+    if clip.duration <= 0:
+        return None
+    speed = max(0.0, float(param(element, "speed", ctx.time, 1.0)))
+    frame = clip.frame_at(max(0.0, ctx.time) * speed)
+    if frame is None:
+        return None
+    fit = _fit_of(element)
+    key = ("video", str(path), fit, ctx.width, ctx.height)
+    cached = ctx.cache.get(key)
+    if cached is None or cached[0] is not frame:
+        cached = (frame, media_layer(frame, ctx, fit))  # holding the picture keeps it from being mistaken for another
+        ctx.cache[key] = cached
+    return cached[1]
+
+
 def ndi_source_name(element: Mapping[str, Any]) -> str:
     name = element.get("source")
     return name if isinstance(name, str) and name.strip() else DEFAULT_NDI_SOURCE
@@ -352,7 +376,7 @@ def render_ndi(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | N
     return cached
 
 
-RENDERERS = {"ndi": render_ndi, "paint": render_paint, "image": render_image}
+RENDERERS = {"ndi": render_ndi, "paint": render_paint, "image": render_image, "video": render_video}
 
 
 # ---------------------------------------------------------------- one element, start to finish

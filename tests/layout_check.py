@@ -75,25 +75,42 @@ def main() -> int:
     shots = 0
 
     for variant, show in (("normal", with_inputs(show_from_patch())), ("long", long_names_show())):
-        engine: FakeEngine = busy_show_engine(show)
-        window = MainWindow(Settings(), engine.show, engine, engine.fake_output, save_files=False)
-        layout_rules.show_all_chips(window)
-        if variant == "long":
-            window.header.set_show_name(LONG_SHOW_NAME)
-        window.show()
+        window = None
         for width, height in sizes:
+            # a fresh window for each size, as when CentraLight opens at a remembered size (resizing one window
+            # through every size can hide a problem that only shows when it starts that way)
+            if window is not None:
+                window.editor_page.shutdown()
+                window.document.close()
+                window.hide()
+                window.deleteLater()
+            engine: FakeEngine = busy_show_engine(show)
+            window = MainWindow(Settings(), engine.show, engine, engine.fake_output, save_files=False)
+            layout_rules.show_all_chips(window)
+            if variant == "long":
+                window.header.set_show_name(LONG_SHOW_NAME)
             window.resize(width, height)
+            window.show()
             process(app, 4)
             window.bridge.poll()
             process(app, 2)
             for key in window.pages:
                 states = [key]
-                if key == "editor":  # the Editor four times: an element (with a shape), the NDI element (Blur), the Input tab, the Globals tab
+                if key == "editor":  # the Editor: an element (with a shape), the NDI element (Blur), the Input tab, the
+                    # Globals tab, then a timed input (its timeline, an element with keyframes, its Input tab)
                     window.editor_page.open_input("stage-shapes")
-                    states = ["editor-element", "editor-ndi", "editor-input", "editor-globals"]
+                    states = ["editor-element", "editor-ndi", "editor-input", "editor-globals", "editor-timed", "editor-timed-input"]
                 for state in states:
                     window.show_page(key)
-                    if state == "editor-element":
+                    if state == "editor-timed":
+                        window.editor_page.open_input("christmas")
+                        window.editor_page.set_playing(False)
+                        window.editor_page.seek(5.0)
+                        window.editor_page.select_element("E2")
+                    elif state == "editor-timed-input":
+                        window.editor_page.select_element("")
+                        window.editor_page.details.widget().findChild(QTabWidget).setCurrentIndex(0)
+                    elif state == "editor-element":
                         window.editor_page.select_element("E2")
                         window.editor_page._shape_from_viewport("S1")
                     elif state == "editor-ndi":

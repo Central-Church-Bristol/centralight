@@ -25,7 +25,7 @@ from .compositor import to_rgb8, to_rgba8
 from .elements import RenderContext, element_is_dynamic, element_keep, render_element
 from .input_edit import find_element
 from .log import log_exception
-from .model import Show
+from .model import Show, element_span, input_time
 from .output import RGB
 from .sampler import CANVAS_H, CANVAS_W, EDITOR_H, EDITOR_W, sampler_for
 from .slot import LatestSlot
@@ -39,7 +39,7 @@ class EditorRequest:
     show: Show
     input_id: str
     element_id: str | None
-    started: float  # time.monotonic() when the input's clock started
+    at: float  # the time to draw, in seconds since the input started (the Editor's playhead)
     globals: Mapping[str, Any] = MappingProxyType({})  # global variables' current values (from the engine)
 
 
@@ -70,13 +70,14 @@ class EditorRenderer:
         self.pictures: LatestSlot[EditorPicture] = LatestSlot()
         self._requests: LatestSlot[EditorRequest] = LatestSlot()
         self._sources = sources
-        self._big = RenderContext(width, height, sources)
-        self._small = RenderContext(CANVAS_W, CANVAS_H, sources)
+        self._big = RenderContext(width, height, sources, video_threaded=False)  # exact video frames at the playhead
+        self._small = RenderContext(CANVAS_W, CANVAS_H, sources, video_threaded=False)
         self._running = False
         self._thread: threading.Thread | None = None
         self._seq = 0
-        self._memory_key: tuple | None = None  # (input id, started): one memory per playback, like the engine's
+        self._memory_key: str | None = None  # the input whose formulas' cycle positions are remembered
         self._memory: dict = {}
+        self._lock = threading.Lock()  # the thread and render_sync() share the drawing contexts
 
     def start(self) -> None:
         if self._running:
@@ -91,12 +92,16 @@ class EditorRenderer:
         if self._thread is not None:
             self._thread.join(2.0)
 
-    def request(self, show: Show, input_id: str, element_id: str | None, started: float,
+    def request(self, show: Show, input_id: str, element_id: str | None, at: float,
                 globals_: Mapping[str, Any] = MappingProxyType({})) -> None:
-        self._requests.put(EditorRequest(show, input_id, element_id, started, globals_))
+        self._requests.put(EditorRequest(show, input_id, element_id, at, globals_))
 
     def render_now(self, request: EditorRequest) -> EditorPicture | None:
         """Draw one request straight away (the thread uses this; so can tests)."""
+        with self._lock:
+            return self._render(request)
+
+    def _render(self, request: EditorRequest) -> EditorPicture | None:
         inp = request.show.inputs.get(request.input_id)
         if inp is None:
             return None
@@ -105,19 +110,19 @@ class EditorRenderer:
             ctx.folder = show.folder
             ctx.sampler = sampler_for(show.fixtures, ctx.sampler, ctx.width, ctx.height)
             ctx.globals = request.globals
-        now = time.monotonic()
-        if self._memory_key != (inp.id, request.started):
-            self._memory_key, self._memory = (inp.id, request.started), {}
-        instance = Instance(inp, request.started, self._memory)
-        result = render_input(instance, now, self._big)
-        small = render_input(instance, now, self._small)
+        at = max(0.0, request.at)
+        if self._memory_key != inp.id:
+            self._memory_key, self._memory = inp.id, {}
+        instance = Instance(inp, 0.0, self._memory)
+        result = render_input(instance, at, self._big)
+        small = render_input(instance, at, self._small)
         colours = self._small.sampler.colours(small)
         selected = keep = None
         found = find_element(inp, request.element_id) if request.element_id else None
         if found is not None:
             element = found[2]
-            t = instance.time(now)
-            self._big.time = t
+            t = input_time(inp, at)
+            self._big.time = t - element_span(element, inp)[0] if not inp.infinite else t
             scope = scope_for(inp, t, request.globals, self._big.audio, self._memory)
             scope.element = f"{inp.id}/{element.get('id', '?')}"
             with use_scope(scope):
@@ -128,7 +133,7 @@ class EditorRenderer:
             if mask is not None:
                 keep = (np.clip(mask, 0.0, 1.0) * 255 + 0.5).astype(np.uint8)
         self._seq += 1
-        return EditorPicture(self._seq, inp.id, request.element_id, to_rgb8(result), selected, keep, colours, instance.time(now))
+        return EditorPicture(self._seq, inp.id, request.element_id, to_rgb8(result), selected, keep, colours, input_time(inp, at))
 
     def _run(self) -> None:
         _lower_thread_priority()
