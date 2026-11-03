@@ -15,7 +15,8 @@ from .model import Input, Show, Transition
 MASTER_SLEW = 0.08  # seconds: Master moves are smoothed over this long
 HOUSE_SLEW = 0.08  # seconds: festoon / key-light fader moves are smoothed over this long
 HOUSE_SWITCH_FADE = 0.5  # seconds: the on/off switches fade over this long
-BLACKOUT_FADE = 0.5  # seconds: Blackout fades over this long (Shift-click = instant)
+BLACK_FADE = 2.0  # seconds: Fade to black's time to start with (Settings changes it)
+QUIT_FADE = 0.5  # seconds: "Turn lights off" fades everything to black this fast, then quits
 
 
 @dataclass(frozen=True)
@@ -38,11 +39,13 @@ class SetHouse:
 
 
 @dataclass(frozen=True)
-class SetBlackout:
-    """Blackout on or off (None = flip it). instant skips the fade."""
+class ToBlack:
+    """Cut (seconds 0) or fade the colour lights to black: Base ends up with nothing playing and the overlays
+    cleared, from the mix as it is. everything: the Festoon and Key lights too (their switches go off, their
+    levels stay). A one-off action, not a latch: the next input sent lights things again."""
 
-    on: bool | None = None
-    instant: bool = False
+    seconds: float = 0.0
+    everything: bool = False
 
 
 @dataclass(frozen=True)
@@ -178,7 +181,7 @@ class SetSolo:
 Command = (
     SetMaster
     | SetHouse
-    | SetBlackout
+    | ToBlack
     | SwapShow
     | SendToBase
     | ClearBase

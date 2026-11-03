@@ -15,7 +15,8 @@ in a browser for a page listing every URL, with big buttons (it doubles as a pho
                                            switches on / off / toggle
     /api/master?level=0.8                  (&fade=2)
     /api/house/<light>?level=0.4           festoon or key lights (&fade=3); /on, /off, /toggle
-    /api/blackout/on, /off, /toggle
+    /api/black/cut, /api/black/fade        the colour lights to black (?all=1: the Festoon and Key
+                                           lights too; ?seconds=2 for the fade)
     /api/identify/on, /off
     /api/automation/<id>/run               run an automation now (/enable, /disable)
     /api/automations/pause, /resume, /toggle
@@ -45,11 +46,11 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .commands import (
+    BLACK_FADE,
     OverlayOff,
     RunAutomation,
     SendToBase,
     SendToOverlay,
-    SetBlackout,
     SetHouse,
     SetIdentify,
     SetMaster,
@@ -58,6 +59,7 @@ from .commands import (
     SetAutomationsPaused,
     SetVariable,
     SwitchLayout,
+    ToBlack,
 )
 from .expressions import describe_value
 from .log import log_exception, log_info
@@ -159,7 +161,7 @@ def _on_off(word: str) -> bool | None:
     raise BadRequest(404, "use on, off or toggle")
 
 
-def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any = None) -> Any:
+def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any = None, black_fade: float = BLACK_FADE) -> Any:
     """The engine command for an API path (split into parts, after /api/). Raises BadRequest."""
     if not parts:
         raise BadRequest(404, "see / for the list of URLs")
@@ -216,8 +218,11 @@ def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any
         if level is None and on is None:
             raise BadRequest(400, "add ?level=0.5, or use /on, /off or /toggle")
         return SetHouse(fixture, level=level, on=on, toggle=False, fade=_fade(params))
-    elif head == "blackout" and len(rest) == 1:
-        return SetBlackout(on=_on_off(rest[0]))
+    elif head == "black" and len(rest) == 1 and rest[0] in ("cut", "fade"):
+        everything = params.get("all", "").strip().lower() in ("1", "true", "yes", "on")
+        if rest[0] == "cut":
+            return ToBlack(0.0, everything)
+        return ToBlack(_number(params, "seconds", 0.0, 60.0, default=black_fade), everything)
     elif head == "identify" and len(rest) == 1:
         on = _on_off(rest[0])
         if on is None:
@@ -241,7 +246,7 @@ def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any
     raise BadRequest(404, "there's no such URL: see / for the list")
 
 
-def command_from_json(payload: Any, show: Show, frame: Any = None) -> Any:
+def command_from_json(payload: Any, show: Show, frame: Any = None, black_fade: float = BLACK_FADE) -> Any:
     """POST /api/command: {"op": "input", "id": "warm-white"} and so on, the same as the URLs."""
     if not isinstance(payload, dict) or not isinstance(payload.get("op"), str):
         raise BadRequest(400, 'send {"op": ...}, e.g. {"op": "input", "id": "warm-white"}')
@@ -266,12 +271,15 @@ def command_from_json(payload: Any, show: Show, frame: Any = None) -> Any:
         if "state" in payload:
             parts.append(str(payload["state"]))
             params.pop("state", None)
-    elif op in ("blackout", "identify"):
+    elif op == "black":
+        parts = ["black", str(payload.get("state", "fade"))]
+        params.pop("state", None)
+    elif op == "identify":
         parts = [op, str(payload.get("state", "toggle"))]
         params.pop("state", None)
     else:
         raise BadRequest(400, f"unknown op {op!r}")
-    return command_for(parts, params, show, frame)
+    return command_for(parts, params, show, frame, black_fade)
 
 
 def state_of(engine: Any) -> dict[str, Any]:
@@ -290,7 +298,7 @@ def state_of(engine: Any) -> dict[str, Any]:
             "overlays": [{"slot": n, "id": o.input_id, "name": o.name, "on": o.on, "opacity": round(o.opacity, 3)}
                          for n, o in enumerate(frame.overlays, start=1)],
             "master": round(frame.master, 3),
-            "blackout": frame.blackout,
+            "colour_black": frame.colour_black,
             "levels": {fid: {"level": round(h.level, 3), "on": h.on} for fid, h in frame.house.items()},
             "variables": {name: describe_value(v) if type(v) is tuple else v for name, v in frame.variables.items()},
             "identify": frame.identify,
@@ -389,7 +397,7 @@ class _Handler(BaseHTTPRequestHandler):
             if self.command == "POST":
                 if path != ["api", "command"]:
                     raise BadRequest(404, "POST goes to /api/command")
-                command = command_from_json(payload, remote.engine.show, remote.engine.frames.get())
+                command = command_from_json(payload, remote.engine.show, remote.engine.frames.get(), remote.black_fade())
                 remote.engine.submit(command)
                 remote.count += 1
                 self._json(200, {"ok": True})
@@ -402,7 +410,7 @@ class _Handler(BaseHTTPRequestHandler):
             elif path[1:] == ["state"]:
                 self._json(200, {"ok": True, **state_of(remote.engine)})
             else:
-                command = command_for(path[1:], params, remote.engine.show, remote.engine.frames.get())
+                command = command_for(path[1:], params, remote.engine.show, remote.engine.frames.get(), remote.black_fade())
                 remote.engine.submit(command)
                 remote.count += 1
                 self._json(200, {"ok": True})
@@ -427,8 +435,11 @@ class _Server(ThreadingHTTPServer):
 class RemoteServer:
     """The remote's web server, on its own thread ("remote")."""
 
-    def __init__(self, engine: Any, port: int = DEFAULT_PORT, lan: bool = False, key: str = "") -> None:
+    def __init__(self, engine: Any, port: int = DEFAULT_PORT, lan: bool = False, key: str = "",
+                 black_fade: Any = None) -> None:
+        """black_fade: gives Fade to black's time (Settings); 2 s if not given."""
         self.engine = engine
+        self._black_fade = black_fade
         self.port = port
         self.lan = lan
         self.key = key
@@ -437,9 +448,22 @@ class RemoteServer:
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
+    @classmethod
+    def from_settings(cls, engine: Any, settings: Any) -> RemoteServer:
+        """The remote as Settings set it up: its port, other computers and their key, and Fade to black's time (read
+        each time, so a change in Settings counts at once)."""
+        return cls(engine, settings.remote_port, settings.remote_lan, settings.remote_key,
+                   black_fade=lambda: settings.black_fade)
+
     @property
     def running(self) -> bool:
         return self._httpd is not None
+
+    def black_fade(self) -> float:
+        try:
+            return max(0.0, float(self._black_fade())) if self._black_fade is not None else BLACK_FADE
+        except Exception:
+            return BLACK_FADE
 
     def start(self) -> bool:
         """Start listening. False (with .error set) if the port is taken."""
@@ -538,7 +562,8 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
         ("Master", "/api/master?level=0.8&fade=2"),
         ("House light level", "/api/house/<light>?level=0.4&fade=3"),
         ("House light switch", "/api/house/<light>/toggle  (or /on, /off)"),
-        ("Blackout", "/api/blackout/toggle  (or /on, /off)"),
+        ("Cut the colour lights to black", "/api/black/cut  (?all=1: the Festoon and Key lights too)"),
+        ("Fade them to black", "/api/black/fade  (?seconds=2, ?all=1)"),
         ("Identify", "/api/identify/on  (or /off)"),
         ("Run an automation", "/api/automation/<id>/run  (or /enable, /disable)"),
         ("Pause all automations", "/api/automations/pause  (or /resume, /toggle)"),
@@ -590,8 +615,9 @@ button.on {{ background: var(--lime); color: #1B2600; }}
 .var {{ display: flex; gap: 10px; align-items: center; background: var(--card); border-radius: 8px; padding: 8px 10px; }}
 .var span {{ flex: 0 0 120px; overflow: hidden; text-overflow: ellipsis; }}
 .var input[type=range] {{ flex: 1; }}
-#blackout {{ background: transparent; border: 2px solid var(--red); color: var(--red); padding: 8px 14px; font-weight: 600; }}
-#blackout.on {{ background: var(--red); color: white; }}
+button.black {{ background: transparent; border: 2px solid var(--red); color: var(--red); padding: 8px 12px; font-weight: 600;
+  min-height: 40px; }}
+button.black.held {{ background: var(--red); color: white; }}
 #status {{ color: var(--dim); font-size: 13px; }}
 table {{ margin: 0 16px 24px; border-collapse: collapse; font-size: 13px; }}
 td {{ padding: 4px 10px 4px 0; vertical-align: top; }}
@@ -599,7 +625,9 @@ code {{ color: var(--accent); word-break: break-all; }}
 p {{ margin: 8px 16px; color: var(--dim); }}
 </style></head>
 <body>
-<header><h1>{show}</h1><span id="status">Connecting…</span><button id="blackout" data-path="/api/blackout/toggle">Blackout</button></header>
+<header><h1>{show}</h1><span id="status">Connecting…</span>
+<button class="black" data-black="/api/black/cut" title="Tap: the colour lights. Hold: everything, Festoon and Key lights too">Cut to black</button>
+<button class="black" data-black="/api/black/fade" title="Tap: the colour lights. Hold: everything, Festoon and Key lights too">Fade to black</button></header>
 <h2>Inputs: tap to send to Base</h2>
 <div class="grid">{tiles}</div>
 <h2>Variables</h2><div class="vars">{variables}</div>
@@ -623,6 +651,24 @@ async function call(path) {{
   }} catch (e) {{ document.getElementById("status").textContent = "Can't reach CentraLight"; }}
 }}
 document.querySelectorAll("button[data-path]").forEach(b => b.addEventListener("click", () => call(b.dataset.path)));
+// Cut / Fade to black: a tap is the colour lights; holding it (0.6 s) is everything, the Festoon and Key lights too
+document.querySelectorAll("button[data-black]").forEach(b => {{
+  const label = b.textContent;
+  let timer = null;
+  const start = e => {{
+    e.preventDefault();
+    b.classList.add("held");
+    timer = setTimeout(() => {{ timer = null; b.textContent = label.replace("to black", "everything"); call(b.dataset.black + "?all=1"); }}, 600);
+  }};
+  const end = () => {{
+    b.classList.remove("held");
+    if (timer !== null) {{ clearTimeout(timer); timer = null; call(b.dataset.black); }}
+    setTimeout(() => {{ b.textContent = label; }}, 800);
+  }};
+  b.addEventListener("pointerdown", start);
+  b.addEventListener("pointerup", end);
+  b.addEventListener("pointerleave", () => {{ if (timer !== null) {{ clearTimeout(timer); timer = null; b.classList.remove("held"); }} }});
+}});
 document.querySelectorAll("input[data-var]").forEach(input => input.addEventListener("input", () => {{
   const value = input.dataset.colour ? input.value.slice(1) : input.value;
   call(input.dataset.var + "?value=" + encodeURIComponent(value));
@@ -632,7 +678,6 @@ async function refresh() {{
     const state = await (await fetch(withKey("/api/state"))).json();
     if (!state.ok) {{ document.getElementById("status").textContent = state.error; return; }}
     document.getElementById("status").textContent = "Base: " + state.base.name;
-    document.getElementById("blackout").classList.toggle("on", state.blackout);
     document.querySelectorAll(".tile").forEach(t => t.classList.toggle("base", t.dataset.id === state.base.id));
     document.querySelectorAll(".tile").forEach(t => t.querySelectorAll(".row button[data-path*='/overlay/']").forEach(b => {{
       const slot = Number(b.textContent);

@@ -14,12 +14,12 @@ from centralight.commands import (
     OverlayOff,
     SendToBase,
     SendToOverlay,
-    SetBlackout,
     SetHouse,
     SetIdentify,
     SetMaster,
     SetOverlayOpacity,
     SetVariable,
+    ToBlack,
 )
 from centralight.engine import EngineFrame, HouseView, OverlayView
 from centralight.model import GlobalVar, Input, Transition
@@ -93,7 +93,7 @@ class RouteTests(RemoteTestCase):
         self.assertEqual(self.sent("/api/input/pillars-purple/overlay/2"), SendToOverlay(2, "pillars-purple"))
         self.assertEqual(self.sent("/api/input/pillars-purple/overlay/2?state=off"), SendToOverlay(2, "pillars-purple", "off"))
 
-    def test_overlays_master_house_blackout_identify(self) -> None:
+    def test_overlays_master_house_black_identify(self) -> None:
         self.assertEqual(self.sent("/api/overlay/3/off"), OverlayOff(3))
         self.assertEqual(self.sent("/api/overlay/1/opacity?value=0.25"), SetOverlayOpacity(1, 0.25))
         self.assertEqual(self.sent("/api/overlay/1/opacity?value=0.25&fade=2"), SetOverlayOpacity(1, 0.25, 2.0))
@@ -102,8 +102,10 @@ class RouteTests(RemoteTestCase):
         self.assertEqual(self.sent("/api/house/key-lights?level=0.4&fade=3"), SetHouse("dimmer-4", level=0.4, on=True, fade=3.0))
         self.assertEqual(self.sent("/api/house/dimmer-1/toggle"), SetHouse("dimmer-1", toggle=True))
         self.assertEqual(self.sent("/api/house/festoon/off"), SetHouse("dimmer-1", on=False))
-        self.assertEqual(self.sent("/api/blackout/toggle"), SetBlackout(on=None))
-        self.assertEqual(self.sent("/api/blackout/on"), SetBlackout(on=True))
+        self.assertEqual(self.sent("/api/black/cut"), ToBlack(0.0, False))
+        self.assertEqual(self.sent("/api/black/cut?all=1"), ToBlack(0.0, True))
+        self.assertEqual(self.sent("/api/black/fade"), ToBlack(2.0, False))  # (Settings' time: 2 s to start with)
+        self.assertEqual(self.sent("/api/black/fade?seconds=4&all=1"), ToBlack(4.0, True))
         self.assertEqual(self.sent("/api/identify/on"), SetIdentify(True, self.show.identify_seed))
 
     def test_automations_and_layouts(self) -> None:
@@ -190,14 +192,14 @@ class SafetyTests(RemoteTestCase):
         self.assertEqual(self.server._httpd.server_address[0], "127.0.0.1")
 
     def test_other_websites_are_refused(self) -> None:
-        status, reply = self.request("/api/blackout/on", headers={"Sec-Fetch-Site": "cross-site"})
+        status, reply = self.request("/api/black/cut", headers={"Sec-Fetch-Site": "cross-site"})
         self.assertEqual(status, 403)
         self.assertEqual(self.engine.commands, [])
         # the help page itself (same-origin) and the Stream Deck app (no such header) are fine
-        self.assertEqual(self.request("/api/blackout/on", headers={"Sec-Fetch-Site": "same-origin"})[0], 200)
+        self.assertEqual(self.request("/api/black/cut", headers={"Sec-Fetch-Site": "same-origin"})[0], 200)
 
     def test_another_host_name_is_refused(self) -> None:
-        status, _reply = self.request("/api/blackout/on", headers={"Host": f"evil.example:{self.server.port}"})
+        status, _reply = self.request("/api/black/cut", headers={"Host": f"evil.example:{self.server.port}"})
         self.assertEqual(status, 403)
         self.assertEqual(self.request("/api/state", headers={"Host": f"localhost:{self.server.port}"})[0], 200)
 
@@ -213,10 +215,10 @@ class LanTests(RemoteTestCase):
     def test_other_computers_need_the_key(self) -> None:
         self.assertEqual(self.server._httpd.server_address[0], "0.0.0.0")
         lan_host = {"Host": f"192.168.1.20:{self.server.port}"}  # as a phone would ask
-        self.assertEqual(self.request("/api/blackout/on", headers=lan_host)[0], 403)
-        self.assertEqual(self.request("/api/blackout/on?key=wrong", headers=lan_host)[0], 403)
-        self.assertEqual(self.request(f"/api/blackout/on?key={self.key}", headers=lan_host)[0], 200)
-        self.assertEqual(self.request("/api/blackout/on")[0], 200)  # the Stream Deck on this PC doesn't need it
+        self.assertEqual(self.request("/api/black/cut", headers=lan_host)[0], 403)
+        self.assertEqual(self.request("/api/black/cut?key=wrong", headers=lan_host)[0], 403)
+        self.assertEqual(self.request(f"/api/black/cut?key={self.key}", headers=lan_host)[0], 200)
+        self.assertEqual(self.request("/api/black/cut")[0], 200)  # the Stream Deck on this PC doesn't need it
         page = self.request(f"/?key={self.key}", headers=lan_host)[1]
         self.assertIn(json.dumps(self.key), page)  # the page's buttons carry the key
 

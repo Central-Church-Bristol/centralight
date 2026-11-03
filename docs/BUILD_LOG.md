@@ -25,6 +25,8 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | A review of the whole app (five reviewers, 46 problems) | **done** (3 Nov: part 1 at 05:21, part 2 at 06:00; 522 tests pass) |
 | Reviews of those fixes (four more rounds, each checking the one before) | **done** (3 Nov, 09:50; 563 tests pass) |
 | M10 Per-light colours (your change of 3 Nov) | **done** (3 Nov, 10:31; 570 tests pass; engine 0.16 ms a tick) |
+| M11 Cut to black / Fade to black (your change of 3 Nov), and a look at M10 (five fixes) | **done** (3 Nov, 11:20; 587 tests pass) |
+| M12 Shows + global automations (your change of 3 Nov) | being built |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -48,6 +50,54 @@ Run all the tests (about five minutes, including the layout check at every scali
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## M11 Cut to black and Fade to black — done (3 Nov)
+
+Your change of 3 Nov: two one-off buttons instead of the Blackout toggle.
+- **Cut to black** and **Fade to black** (red, in the header). They're actions, not a latch: nothing stays "on", and
+  the next input sent (by you, the Stream Deck or an automation) lights things again. Master isn't touched.
+  - **Click:** the colour lights go to black: the mix as it is (Base and every overlay, as one still look) cuts or
+    fades to nothing, and the overlays are cleared. The Festoon and Key lights stay as they are.
+  - **Hold** (0.6 s; the button fills up and says "Cut everything" / "Fade everything"), or **Shift-click**:
+    everything, the Festoon and Key lights too. Their switches go off and their faders keep their levels.
+  - **Switching a house light back on** (its header switch, or a Stream Deck toggle without its own fade) brings it
+    back the way it went out: at once after a cut, or over the same time after a fade. Then its switch works as
+    normal again. Inputs and automations that set house lights do it their own way, whatever the blackout was.
+  - **Fade to black takes 2 s** to start with: Settings → Cut / Fade to black.
+  - **Lock** stops both buttons, as it stopped Blackout.
+- **Automations:** "Cut to black" and "Fade to black" actions (with a "Festoon and Key lights too" box, and the fade's
+  time) replace Blackout on / off, and the condition "Blackout is on" is now "The colour lights are black" (nothing
+  on Base or in the overlays). Old automation files are brought up to date with a note in the log: "Blackout on"
+  becomes "Fade to black", everything, over half a second (what Blackout did); "Blackout off" is left out, since
+  there's nothing to turn off now.
+- **Stream Deck and the phone page:** `/api/black/cut` and `/api/black/fade` (`?all=1` for everything; `?seconds=`, or
+  else the time set in Settings) replace `/api/blackout/…`. On the phone page a tap is the colour lights and holding
+  the button is everything.
+- **Quitting with "Turn lights off"** fades everything to black (half a second), then quits. The next start comes up
+  black with nothing playing. The fourth and fifth reviews' rule keeps its intent without a latch: until one of an
+  automation's time ranges begins after the quit (e.g. Sunday 09:00 after a quit on Saturday), automations don't
+  light anything ("CentraLight starts", a feed coming back at 03:00, a whole day such as "Sundays"); anything a
+  person sends lights things at once. The quit's own time is still kept through restarts.
+- An older live.json that was blacked out starts black (nothing playing, house lights off with their levels kept).
+
+## A look at M10 (3 Nov, 11:00)
+
+A reviewer checked M10 and found five things. Each is fixed, with a test that fails without the fix:
+- **A Fill picture moved, shrunk or turned:** lights near its edge, or just outside it, could pick up the strips
+  that Fill crops off (such as the top and bottom of a 4:3 picture). Each light's patch now covers only the part of
+  the picture that shows, wherever the element is.
+- **Smoothing while the Editor is paused:** with Smoothing on, a change made while paused (a new slide, a changed
+  setting) didn't reach the Editor's dots until you pressed play. When no time passes, a change now shows at once.
+- **A light added or taken away during a transition** (or a fade to black): the old look, frozen for the old set of
+  lights, no longer fitted, and every light went black until the transition ended. Now the old look counts as
+  nothing for the rest of that transition, and the new look comes in as normal.
+- **Memory:** each picture's table for Area was kept for as long as the app ran, and every move of a light left an
+  old "nearest light" map behind. The tables now share a store of at most 48 MB (the most recently used are kept; a
+  picture's is remade if it's needed again), and only the newest map is kept.
+- **The lights come first, while playing too:** the Editor drew less while the engine was late only when it was
+  redrawing a moving input by itself, not while you played one; now it draws at most twice a second either way.
+  The Dashboard's picture stopped completely while ticks ran late; now it slows to once a second, so it never
+  looks stuck.
 
 ## M10 Per-light colours — done (3 Nov)
 
@@ -78,7 +128,7 @@ Your change of 3 Nov: work out each light's colour directly, instead of drawing 
   Dashboard and the Layout tab show dots only (the Layout tab's rings, tinted patches and "use Blur" hint are gone).
 - The Light colour tool paints a dab round the dot of the light nearest the pointer (Paint is read at the dot).
 - **The lights come first.** The engine records how late each tick starts. While ticks are late, the Dashboard's
-  picture waits and the Editor redraws twice a second instead of eight times. Diagnostics (Ctrl+Shift+D) has a new
+  picture slows to once a second and the Editor redraws twice a second instead of eight times. Diagnostics (Ctrl+Shift+D) has a new
   "On time" line with the last minute's figures.
 - A small fix found on the way: the AI window's Copy buttons could touch a closed window 2.5 s after a click (it
   was harmless, but logged an error).
@@ -781,11 +831,12 @@ Problems the tests found and that are fixed:
 - **Output defaults to Simulated.** Settings → Output → Eurolite (USB) drives the lights. Leaving the Eurolite
   (switching to Simulated or Art-Net) blacks its lights out first, so they're never left stuck on.
 - **House lights** start off, with their faders at 100 %. Dragging a fader turns that light on; the switch fades
-  over half a second; fader moves are smoothed over 80 ms. Blackout doesn't move the faders, so turning it
-  off brings everything back as it was.
-- **Quitting:** "Turn lights off" fades to black over half a second, and the next start comes up blacked out
-  ("Lights off — click to restore") rather than suddenly lighting the room. "Leave lights as they are" restarts
-  exactly where it left off. The choice can be remembered (Settings → When you quit).
+  over half a second; fader moves are smoothed over 80 ms. A held Cut / Fade to black switches them off without
+  moving the faders, and their next plain switch on comes back the same way (a cut, or a fade over the same time).
+- **Quitting:** "Turn lights off" fades everything to black over half a second, and the next start comes up with
+  everything black and nothing on Base; automations leave it so until one of their time ranges begins after the
+  quit (anything a person sends lights things at once). "Leave lights as they are" restarts exactly where it left
+  off. The choice can be remembered (Settings → When you quit).
 - **Live state** lives in `%LOCALAPPDATA%\CentraLight\live.json` (it's about this PC, not the show), and is
   ignored if it belongs to a different show.
 - **Lock** blocks the lights controls (faders, switches, Blackout; later the dashboard buttons) but not the tabs.

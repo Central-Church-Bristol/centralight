@@ -24,7 +24,7 @@ from ..commands import (
     OverlayOff,
     SendToBase,
     SendToOverlay,
-    SetBlackout,
+    ToBlack,
     SetHouse,
     SetAutomationsPaused,
     SetMaster,
@@ -186,7 +186,8 @@ class MainWindow(QWidget):
         self.header.settings_requested.connect(self.open_settings)
         self.header.house_changed.connect(self._house_changed)
         self.header.master_changed.connect(lambda level: self.engine.submit(SetMaster(level)))
-        self.header.blackout_clicked.connect(lambda instant: self.engine.submit(SetBlackout(on=None, instant=instant)))
+        self.header.black_requested.connect(
+            lambda fade, everything: self.engine.submit(ToBlack(self.settings.black_fade if fade else 0.0, everything)))
         self.header.lock_toggled.connect(self.set_locked)
         self.header.chips["files"].set_clickable(True)
         self.header.chips["files"].clicked.connect(self._show_file_problems)

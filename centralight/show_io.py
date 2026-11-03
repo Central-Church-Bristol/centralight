@@ -459,6 +459,29 @@ def automation_to_dict(automation: Automation) -> dict[str, Any]:
     return data
 
 
+def _updated_condition(cond: dict, warnings: list[str]) -> dict:
+    """A condition from before Cut / Fade to black: "Blackout is on" is now "The colour lights are black"."""
+    if cond.get("type") == "blackout":
+        warnings.append('the condition "Blackout is on" is now "The colour lights are black"')
+        return {**cond, "type": "colour_black"}
+    return cond
+
+
+def _updated_action(action: Any, warnings: list[str]) -> Any:
+    """An action from before Cut / Fade to black: Blackout on is now Fade to black (everything, as Blackout did);
+    Blackout off has nothing to turn off now, so it's left out (the next input lights things again)."""
+    if not isinstance(action, dict) or action.get("do") != "blackout":
+        return action
+    if action.get("on", True) is True:
+        warnings.append('"Blackout on" is now "Fade to black" (the Festoon and Key lights too)')
+        updated = {"do": "fade_black", "fade": 0.5, "all": True}
+        if "delay" in action:
+            updated["delay"] = action["delay"]
+        return updated
+    warnings.append('"Blackout off" was left out: there\'s no Blackout to turn off now (the next input lights things again)')
+    return None
+
+
 def automation_from_dict(data: Any, expected_id: str | None = None) -> tuple[Automation, list[str]]:
     """Check and convert an automation file's data. Raises InputFileError for a file that can't be
     used at all. A broken condition switches the automation off (dropping it could make the
@@ -489,6 +512,8 @@ def automation_from_dict(data: Any, expected_id: str | None = None) -> tuple[Aut
     conditions = data.get("conditions", [])
     if not isinstance(conditions, list) or not all(isinstance(c, dict) for c in conditions):
         raise InputFileError('"conditions" must be a list of objects')
+    updated: list[str] = []  # notes about bringing an older file up to date (not problems: it stays switched on)
+    conditions = [_updated_condition(cond, updated) for cond in conditions]
     for index, cond in enumerate(conditions, start=1):
         for problem in check_condition(cond):
             warnings.append(f"condition {index}: {problem}")
@@ -501,6 +526,7 @@ def automation_from_dict(data: Any, expected_id: str | None = None) -> tuple[Aut
         if not isinstance(actions, list):
             raise InputFileError(f'"{key}" must be a list of objects')
         kept[key] = []
+        actions = [new for action in actions if (new := _updated_action(action, updated)) is not None]
         for index, action in enumerate(actions, start=1):
             problems = check_action(action) if isinstance(action, dict) else ["it must be an object"]
             if problems:
@@ -511,7 +537,7 @@ def automation_from_dict(data: Any, expected_id: str | None = None) -> tuple[Aut
         id=automation_id, name=name, enabled=enabled, logic=logic, conditions=freeze(conditions),
         actions=freeze(kept["actions"]), on_end=freeze(kept["on_end"]),
     )
-    return automation, warnings
+    return automation, updated + warnings
 
 
 def automation_file(folder: Path, automation_id: str) -> Path:

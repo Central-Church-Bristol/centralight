@@ -1,4 +1,4 @@
-"""The engine: house-light fades, Master, Blackout, restore without flicker, supervision."""
+"""The engine: house-light fades, Master, Cut / Fade to black, restore without flicker, supervision."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import unittest
 import numpy as np
 
 from centralight import paths
-from centralight.commands import SetBlackout, SetHouse, SetMaster, SwapShow
+from centralight.commands import HOUSE_SWITCH_FADE, SendToBase, SetHouse, SetMaster, SwapShow, ToBlack
 from centralight.engine import Engine
 from centralight.live_state import HouseSetting, LiveState
 from centralight.new_show import show_from_patch
@@ -77,28 +77,82 @@ class HouseLightTests(EngineTestCase):
         self.assertEqual(engine.frames.get().faults, 0)
 
 
-class BlackoutAndMasterTests(EngineTestCase):
-    def test_blackout_fades_and_wins_over_house_lights(self) -> None:
+class BlackAndMasterTests(EngineTestCase):
+    def test_fade_everything_to_black_keeps_the_levels_and_switching_on_fades_back(self) -> None:
         engine, clock, output = self.make(LiveState(house={"dimmer-4": HouseSetting(1.0, True)}))
         engine.tick()
         self.assertEqual(output.last[KEY], 255)
-        engine.submit(SetBlackout(on=True))
-        self.run_for(engine, clock, 0.25)
+        engine.submit(ToBlack(1.0, everything=True))  # held: the house lights too, over 1 s
+        self.run_for(engine, clock, 0.5)
         self.assertTrue(100 <= output.last[KEY] <= 155)
-        self.run_for(engine, clock, 0.3)
+        self.run_for(engine, clock, 0.6)
         self.assertEqual(output.last[KEY], 0)
         frame = engine.frames.get()
-        self.assertTrue(frame.blackout)
-        self.assertEqual(frame.house["dimmer-4"].level, 1.0)  # the fader itself didn't move
-        engine.submit(SetBlackout(on=None))  # toggle back
+        self.assertFalse(frame.house["dimmer-4"].on)  # its switch went off...
+        self.assertEqual(frame.house["dimmer-4"].level, 1.0)  # ...and its fader kept its level
+        self.assertTrue(frame.colour_black)
+        engine.submit(SetHouse("dimmer-4", on=True))  # switched on again: a fade, as it went out (1 s, not 0.5 s)
+        self.run_for(engine, clock, 0.5)
+        self.assertTrue(100 <= output.last[KEY] <= 155)
         self.run_for(engine, clock, 0.6)
         self.assertEqual(output.last[KEY], 255)
+        engine.submit(SetHouse("dimmer-4", on=False))  # back on, its switch works as normal again (0.5 s)
+        self.run_for(engine, clock, HOUSE_SWITCH_FADE + 0.05)
+        self.assertEqual(output.last[KEY], 0)
 
-    def test_instant_blackout(self) -> None:
+    def test_cut_to_black_and_the_switch_coming_back_with_a_cut(self) -> None:
         engine, _clock, output = self.make(LiveState(house={"dimmer-4": HouseSetting(1.0, True)}))
-        engine.submit(SetBlackout(on=True, instant=True))
+        engine.submit(ToBlack(0.0))  # a click: the colour lights only
+        engine.tick()
+        self.assertEqual(output.last[KEY], 255)  # the key lights stay as they are
+        self.assertTrue(engine.frames.get().colour_black)
+        engine.submit(ToBlack(0.0, everything=True))  # held: everything, at once
         engine.tick()
         self.assertEqual(output.last[KEY], 0)
+        engine.submit(SetHouse("dimmer-4", toggle=True))  # a Stream Deck toggle without its own fade
+        engine.tick()
+        self.assertEqual(output.last[KEY], 255)  # back at once: it went out with a cut
+
+    def test_inputs_and_automations_bring_house_lights_back_their_own_way(self) -> None:
+        from centralight.model import Input, Transition
+        from centralight.show_io import freeze
+
+        engine, clock, output = self.make(LiveState(house={"dimmer-4": HouseSetting(1.0, True)}))
+        lit = Input(id="lit", name="Lit", house=freeze({"dimmer-4": 0.6}), transition=Transition("cut", 0.0))
+        engine.submit(SwapShow(engine.show.with_inputs({"lit": lit}, ("lit",))))
+        engine.submit(ToBlack(2.0, everything=True))
+        self.run_for(engine, clock, 2.1)
+        self.assertEqual(output.last[KEY], 0)
+        engine.submit(SendToBase("lit", cut=True))  # an input that sets the key lights: its own way (a cut), not 2 s
+        engine.tick()
+        self.assertEqual(output.last[KEY], round(0.6 * 255))
+        engine.submit(ToBlack(2.0, everything=True))
+        self.run_for(engine, clock, 2.1)
+        engine._do_action_now("auto", {"do": "house", "light": "dimmer-4", "on": True}, clock())  # an automation: as set up
+        self.run_for(engine, clock, HOUSE_SWITCH_FADE + 0.05)
+        self.assertEqual(output.last[KEY], round(0.6 * 255))  # (the usual 0.5 s, not the blackout's 2 s)
+
+    def test_the_next_input_lights_the_colour_lights_and_master_isnt_touched(self) -> None:
+        from centralight.model import Input
+        from centralight.show_io import freeze
+
+        engine, _clock, output = self.make()
+        red = Input(id="red", name="Red", tracks=freeze([[{"id": "E1", "kind": "paint", "fill": {"type": "colour", "colour": "#FF0000"}}], [], [], []]))
+        engine.submit(SwapShow(engine.show.with_inputs({"red": red}, ("red",))))
+        engine.submit(SendToBase("red", cut=True))
+        engine.submit(SetMaster(0.7, fade=0))
+        engine.tick()
+        lit = output.last[SLIMPAR_101_RED]
+        self.assertIn(lit, (178, 179))  # red at Master 70 %
+        engine.submit(ToBlack(0.0))
+        engine.tick()
+        self.assertEqual(output.last[SLIMPAR_101_RED], 0)
+        self.assertTrue(engine.frames.get().colour_black)
+        self.assertAlmostEqual(engine.frames.get().master, 0.7)  # Master isn't touched
+        engine.submit(SendToBase("red", cut=True))  # the next input lights things again
+        engine.tick()
+        self.assertEqual(output.last[SLIMPAR_101_RED], lit)
+        self.assertFalse(engine.frames.get().colour_black)
 
     def test_master_scales_colour_lights_only(self) -> None:
         engine, clock, output = self.make(LiveState(house={"dimmer-4": HouseSetting(1.0, True)}))
@@ -125,30 +179,42 @@ class RestoreTests(EngineTestCase):
         engine2.tick()
         self.assertEqual(output2.frames[0], last)  # no flash: the very first frame matches
 
-    def test_lights_off_quit_comes_back_blacked_out(self) -> None:
+    def test_lights_off_quit_comes_back_black(self) -> None:
         engine, clock, _output = self.make()
-        engine.submit(SetHouse("dimmer-4", on=True))
+        engine.submit(SetHouse("dimmer-4", level=0.8, on=True))
         self.run_for(engine, clock, 1.0)
         state = engine.stop(lights_off=True, fade=False)
-        self.assertTrue(state.blackout)
-        self.assertTrue(state.house["dimmer-4"].on)  # one click on Blackout brings it all back
+        self.assertTrue(state.quit_dark)
+        self.assertIsNone(state.base)
+        self.assertEqual(state.house["dimmer-4"], HouseSetting(0.8, False))  # off, its level kept
 
         engine2, clock2, output2 = self.make(state)
         engine2.tick()
         self.assertEqual(output2.frames[0][KEY], 0)
-        engine2.submit(SetBlackout(on=False))
+        engine2.submit(SetHouse("dimmer-4", on=True))  # switched on by hand: it comes back at its level
         self.run_for(engine2, clock2, 0.6)
-        self.assertEqual(output2.last[KEY], 255)
+        self.assertEqual(output2.last[KEY], round(0.8 * 255))
+        self.assertFalse(engine2._quit_dark)  # (a person took charge)
 
     def test_live_state_file_round_trip(self) -> None:
-        state = LiveState(show="x", master=0.5, blackout=True, house={"dimmer-1": HouseSetting(0.25, True)})
+        state = LiveState(show="x", master=0.5, quit_dark=True, quit_at=1234.0, house={"dimmer-1": HouseSetting(0.25, True)})
         path = paths.app_data_dir() / "live-test.json"
         state.save(path)
         loaded = LiveState.load(path)
         self.assertEqual(loaded.house["dimmer-1"], HouseSetting(0.25, True))
-        self.assertEqual((loaded.master, loaded.blackout, loaded.show), (0.5, True, "x"))
+        self.assertEqual((loaded.master, loaded.quit_dark, loaded.quit_at, loaded.show), (0.5, True, 1234.0, "x"))
         path.write_text("{broken", encoding="utf-8")
         self.assertIsNone(LiveState.load(path))
+
+    def test_a_blacked_out_live_json_from_before_starts_black(self) -> None:
+        old = LiveState.from_dict({"show": "x", "blackout": True, "blackout_by_quit": True, "blackout_quit_at": 99.0,
+                                   "base": {"input": "follow-screen", "time": 3}, "house": {"dimmer-4": {"level": 0.6, "on": True}}})
+        self.assertIsNone(old.base)  # nothing playing (the Blackout hid it)...
+        self.assertEqual(old.house["dimmer-4"], HouseSetting(0.6, False))  # ...the house lights off, levels kept
+        self.assertEqual((old.quit_dark, old.quit_at), (True, 99.0))  # and it was a "Turn lights off" quit
+        clicked = LiveState.from_dict({"show": "x", "blackout": True, "house": {"dimmer-4": {"level": 0.6, "on": True}}})
+        self.assertFalse(clicked.quit_dark)  # (a click: black now, but nothing held back)
+        self.assertFalse(clicked.house["dimmer-4"].on)
 
 
 class ShowSwapTests(EngineTestCase):

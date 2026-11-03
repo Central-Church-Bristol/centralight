@@ -20,7 +20,7 @@ from centralight.automations import (
     sun_threshold,
     upcoming,
 )
-from centralight.commands import PowerEvent, RunAutomation, SetAutomationsPaused, SetBlackout, SetHouse, SwitchLayout
+from centralight.commands import PowerEvent, RunAutomation, SendToBase, SetAutomationsPaused, SetHouse, SwitchLayout, ToBlack
 from centralight.engine import Engine
 from centralight.live_state import LiveState
 from centralight.model import Automation, GlobalVar, Input
@@ -186,15 +186,15 @@ class WhenTheyRunTests(AutomationEngineTestCase):
     def test_invert_and_any(self) -> None:
         weekend = automation("weekend", [{"type": "days", "days": ["sat"]}, {"type": "days", "days": ["sun"]}],
                              [{"do": "base", "input": "evening"}], logic="any")
-        not_blackout = automation("lit", [{"type": "blackout", "invert": True}, {"type": "time", "from": "18:00", "to": "19:00"}],
-                                  [{"do": "house", "light": "dimmer-1", "level": 0.5}])
-        self.make(datetime(2026, 11, 7, 17, 59), [weekend, not_blackout])  # Saturday
+        not_black = automation("lit", [{"type": "colour_black", "invert": True}, {"type": "time", "from": "18:00", "to": "19:00"}],
+                               [{"do": "house", "light": "dimmer-1", "level": 0.5}])
+        self.make(datetime(2026, 11, 7, 17, 59), [weekend, not_black])  # Saturday
         self.engine.tick()
         self.assertEqual(self.base(), "evening")
-        self.engine.submit(SetBlackout(on=True))
+        self.engine.submit(ToBlack(0.0))  # the colour lights cut to black
         self.run_until(datetime(2026, 11, 7, 18, 5))
-        self.assertEqual(self.runs("lit"), [])  # inverted: blackout is on, so no
-        self.engine.submit(SetBlackout(on=False))
+        self.assertEqual(self.runs("lit"), [])  # inverted: the colour lights are black, so no
+        self.engine.submit(SendToBase("evening", cut=True))  # something on Base again
         self.clocks.advance(1)
         self.engine.tick()
         self.assertEqual(len(self.runs("lit")), 1)
@@ -383,7 +383,7 @@ class DataTests(unittest.TestCase):
         show = show_from_patch().with_automations(
             {"welcome": automation("welcome", SUNDAY_MORNING, WELCOME),
              "evening": automation("evening", [{"type": "days", "days": ["sun"]}, {"type": "time", "from": "17:30", "to": "20:00"},
-                                               {"type": "blackout", "invert": True}], [])},
+                                               {"type": "colour_black", "invert": True}], [])},
             ("welcome", "evening"))
         found = upcoming(show, datetime(2026, 11, 4, 15, 0))  # a Wednesday
         self.assertEqual([(when, a.id, others) for when, a, others in found], [

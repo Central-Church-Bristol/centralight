@@ -6,7 +6,7 @@ Built for [Central Church Bristol](https://github.com/Central-Church-Bristol). W
 
 ## The CentraLight app (new, being tested)
 
-Double-click `CentraLight.exe` (or `run.bat`, which also sets things up the first time) to start the CentraLight app: a window with the **Festoon**, **Key lights** and **Master** faders, **Blackout**, a map of the lights, and *inputs* (looks) such as **Follow screen**, where the lights follow Media Background Pane like `ndi_pixel_mapper.py` does.
+Double-click `CentraLight.exe` (or `run.bat`, which also sets things up the first time) to start the CentraLight app: a window with the **Festoon**, **Key lights** and **Master** faders, **Cut to black** and **Fade to black** (click: the colour lights; hold: everything), a map of the lights, and *inputs* (looks) such as **Follow screen**, where the lights follow Media Background Pane like `ndi_pixel_mapper.py` does.
 
 - The first time, `run.bat` installs what the app needs into `.venv` and copies the church fonts from `G:\My Drive\Video Projection\Brand\Fonts` into `fonts\`.
 - The app starts with **Simulated** output: it shows what it would send, but doesn't touch the lights. To drive the lights, click the gear (top right) → **Output** → **Eurolite USB-DMX512 PRO**. Close the console scripts and MagicQ first: only one program can use the dongle at a time.
@@ -53,7 +53,7 @@ Some useful ones:
 | Overlay 1 on / off | `/api/input/pillars-purple/overlay/1` |
 | Set a global variable | `/api/var/speed?value=0.7` (colours: `?value=FF6F59`; switches: `on`, `off`, `toggle`) |
 | Key lights | `/api/house/key-lights?level=0.6&fade=3`, `/api/house/key-lights/toggle` |
-| Master, Blackout | `/api/master?level=0.8`, `/api/blackout/toggle` |
+| Master, Cut / Fade to black | `/api/master?level=0.8`, `/api/black/cut`, `/api/black/fade` (`?all=1`: the Festoon and Key lights too; `?seconds=2`, or else the time in Settings) |
 
 A Stream Deck **Multi Action** can pair a vMix key with a lights URL. The remote only answers this PC unless
 Settings → Remote → **Allow other computers and phones** is ticked; they then need the key shown there

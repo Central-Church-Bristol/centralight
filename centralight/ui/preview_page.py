@@ -24,7 +24,7 @@ PALETTE = (
     ("On Base (coral)", theme.LIVE),
     ("In an overlay (lime)", theme.OVERLAY),
     ("OK (turquoise)", theme.OK),
-    ("Blackout / error", theme.DANGER),
+    ("Cut / Fade to black, errors", theme.DANGER),
     ("Warning (chips only)", theme.WARN),
 )
 FUTURA_STYLES = (("Book", 400), ("Medium", 500), ("Demi", 600), ("Bold", 700))

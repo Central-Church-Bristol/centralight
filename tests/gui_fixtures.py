@@ -107,7 +107,7 @@ def sample_automations(long: bool = False) -> list[Automation]:
     welcome = Automation(
         "sunday-welcome", "Sunday morning welcome as people arrive for the ten o'clock service" if long else "Sunday welcome",
         conditions=freeze([{"type": "days", "days": ["sun"]}, {"type": "time", "from": "09:00", "to": "12:30"},
-                           {"type": "blackout", "invert": True}]),
+                           {"type": "colour_black", "invert": True}]),
         actions=freeze([{"do": "base", "input": "warm-white", "transition": {"kind": "fade", "duration": 3}},
                         {"do": "house", "light": "dimmer-4", "level": 0.7, "fade": 2},
                         {"do": "overlay", "input": "pillars-purple", "slot": 2, "state": "on", "delay": 30}]),
@@ -123,7 +123,7 @@ def sample_automations(long: bool = False) -> list[Automation]:
                            {"type": "sun", "when": "after", "event": "sunset", "minutes": -30}]),
         actions=freeze([{"do": "variable", "name": "accent", "value": "#FF6F59"}, {"do": "master", "level": 0.8, "fade": 5},
                         {"do": "layout", "layout": "main"}, {"do": "automation", "automation": "sunday-welcome", "enabled": False},
-                        {"do": "blackout", "on": False}, {"do": "overlay_off", "slot": 3}]),
+                        {"do": "fade_black", "fade": 3, "all": True}, {"do": "overlay_off", "slot": 3}]),
     )
     return [welcome, evening]
 

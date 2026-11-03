@@ -12,7 +12,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QDialog
 
 from centralight import paths
-from centralight.commands import SetHouse
+from centralight.commands import SendToBase, SetHouse
 from centralight.live_state import LiveState
 from centralight.settings import OUTPUT_SIMULATED, OUTPUT_USB, QUIT_ASK, QUIT_LEAVE, QUIT_OFF, Settings
 from centralight.ui import main_window as main_window_module
@@ -111,29 +111,50 @@ class HeaderTests(WindowTestCase):
         engine.settle(0.3)
         self.assertAlmostEqual(engine.frames.get().master, 0.25, delta=0.02)
 
-    def test_blackout_click_fades_and_shift_click_is_instant(self) -> None:
+    def test_cut_and_fade_to_black_click_is_the_colour_lights_shift_click_is_everything(self) -> None:
+        from centralight.new_show import show_from_patch
+        from tests.gui_fixtures import with_inputs
+
+        window, engine = self.make(show=with_inputs(show_from_patch()))
+        engine.submit(SendToBase("warm-white", cut=True))
+        engine.submit(SetHouse("dimmer-4", on=True, fade=0))
+        engine.settle(0.1)
+        self.assertFalse(engine.frames.get().colour_black)  # Warm white is on
+        QTest.mouseClick(window.header.cut_black, Qt.MouseButton.LeftButton)  # a click: the colour lights, at once
+        engine.settle(0.05)
+        self.assertTrue(engine.frames.get().colour_black)
+        self.assertEqual(engine.fake_output.last[KEY], 255)  # the key lights stay as they are
+        engine.submit(SendToBase("warm-white", cut=True))
+        engine.settle(0.05)
+        window.settings.black_fade = 1.0
+        QTest.mouseClick(window.header.fade_black, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier)  # everything
+        engine.settle(0.5)
+        self.assertTrue(0 < engine.fake_output.last[KEY] < 255)  # fading over Settings' time
+        engine.settle(0.6)
+        self.assertEqual(engine.fake_output.last[KEY], 0)
+        self.assertTrue(engine.frames.get().colour_black)
+        self.assertFalse(engine.frames.get().house["dimmer-4"].on)
+        self.assertEqual(window.header.fade_black.text(), "Fade to black")  # one-off: no "on" state to show
+
+    def test_holding_a_black_button_does_everything(self) -> None:
         window, engine = self.make()
         engine.submit(SetHouse("dimmer-4", on=True, fade=0))
-        QTest.mouseClick(window.header.blackout, Qt.MouseButton.LeftButton)
-        engine.settle(0.25)
-        self.assertTrue(0 < engine.fake_output.last[KEY] < 255)  # still fading
-        engine.settle(0.4)
+        engine.settle(0.05)
+        button = window.header.cut_black
+        QTest.mousePress(button, Qt.MouseButton.LeftButton)
+        QTest.qWait(250)
+        self.assertEqual(button.text(), "Cut everything")  # while held: it says what letting it fill up does
+        self.assertGreater(button.progress, 0.0)
+        QTest.qWait(500)  # full (0.6 s): it fires
+        engine.settle(0.05)
         self.assertEqual(engine.fake_output.last[KEY], 0)
-        self.refresh(window)
-        self.assertIn("Lights off", window.header.blackout.text())
-        self.assertTrue(window.header.blackout.property("active"))
-        window.header._last_blackout_click -= 1.0  # (a second later, as a person would: not a double-click)
-        QTest.mouseClick(window.header.blackout, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier)
-        self.assertEqual(engine.fake_output.last[KEY], 255)  # restored at once
-        self.refresh(window)
-        self.assertEqual(window.header.blackout.text(), "Blackout")
-
-    def test_a_double_click_on_blackout_is_one_click(self) -> None:
-        window, engine = self.make()
-        QTest.mouseDClick(window.header.blackout, Qt.MouseButton.LeftButton)
-        QTest.mouseClick(window.header.blackout, Qt.MouseButton.LeftButton)  # (some mice send click, click)
-        engine.settle(0.7)
-        self.assertTrue(engine.frames.get().blackout)  # off, not off-and-on-again
+        QTest.mouseRelease(button, Qt.MouseButton.LeftButton)
+        self.assertEqual(button.text(), "Cut to black")
+        engine.submit(SetHouse("dimmer-4", on=True))  # and a quick click only does the colour lights
+        engine.settle(0.05)
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        engine.settle(0.05)
+        self.assertEqual(engine.fake_output.last[KEY], 255)
 
     def test_engine_fades_show_on_the_faders(self) -> None:
         window, engine = self.make()
@@ -147,21 +168,26 @@ class HeaderTests(WindowTestCase):
         self.assertEqual(control.percent.text(), "60%")
 
     def test_lock_blocks_the_lights_controls(self) -> None:
-        window, engine = self.make()
+        from centralight.new_show import show_from_patch
+        from tests.gui_fixtures import with_inputs
+
+        window, engine = self.make(show=with_inputs(show_from_patch()))
         QTest.mouseClick(window.header.lock_button, Qt.MouseButton.LeftButton)
         self.assertTrue(window.locked)
         self.assertTrue(window.lock_banner.isVisible())
-        QTest.mouseClick(window.header.blackout, Qt.MouseButton.LeftButton)
+        engine.submit(SendToBase("warm-white", cut=True))
+        QTest.mouseClick(window.header.cut_black, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(window.header.fade_black, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier)
         QTest.mouseClick(window.header.house_controls["dimmer-4"].switch, Qt.MouseButton.LeftButton)
         engine.settle(0.6)
         frame = engine.frames.get()
-        self.assertFalse(frame.blackout)
+        self.assertFalse(frame.colour_black)  # (the black buttons were locked)
         self.assertFalse(frame.house["dimmer-4"].on)
         QTest.mouseClick(window.header.tabs["layout"], Qt.MouseButton.LeftButton)  # tabs still work
         self.assertEqual(window.current_page(), "layout")
         QTest.mouseClick(window.header.lock_button, Qt.MouseButton.LeftButton)
         self.assertFalse(window.locked)
-        self.assertTrue(window.header.blackout.isEnabled())
+        self.assertTrue(window.header.cut_black.isEnabled() and window.header.fade_black.isEnabled())
 
     def test_output_chip_says_simulated(self) -> None:
         window, _engine = self.make()
@@ -232,8 +258,9 @@ class QuitTests(WindowTestCase):
         window.close()
         self.assertEqual(engine.fake_output.closed_with_blackout, True)
         state = LiveState.load(paths.live_state_path())
-        self.assertTrue(state.blackout)
-        self.assertTrue(state.house["dimmer-4"].on)
+        self.assertTrue(state.quit_dark)
+        self.assertIsNone(state.base)  # everything black: nothing playing...
+        self.assertFalse(state.house["dimmer-4"].on)  # ...the key lights off, their level kept
 
     def test_quit_leaving_lights(self) -> None:
         window, engine = self.make(Settings(quit_action=QUIT_LEAVE), save_files=True)
@@ -242,7 +269,8 @@ class QuitTests(WindowTestCase):
         self.assertEqual(engine.fake_output.closed_with_blackout, False)
         self.assertEqual(engine.fake_output.last[KEY], 255)
         state = LiveState.load(paths.live_state_path())
-        self.assertFalse(state.blackout)
+        self.assertFalse(state.quit_dark)
+        self.assertTrue(state.house["dimmer-4"].on)
 
     def test_cancel_keeps_running(self) -> None:
         window, engine = self.make(Settings(quit_action=QUIT_ASK))

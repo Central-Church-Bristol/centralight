@@ -317,8 +317,8 @@ class FakeEngine(Engine):
 
     def stop(self, lights_off: bool = False, fade: bool = True) -> LiveState:  # type: ignore[override]
         if lights_off:
-            from centralight.commands import SetBlackout
+            from centralight.commands import ToBlack
 
-            Engine.submit(self, SetBlackout(on=True, instant=True))
+            Engine.submit(self, ToBlack(0.0, everything=True))
             self.tick()
-        return self.live_state()
+        return Engine.stop(self, lights_off=lights_off, fade=False)

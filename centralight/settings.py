@@ -46,6 +46,7 @@ class Settings:
     audio_source: str = ""  # "" off, "output" this PC's output, or an input's name (audio.AUDIO sources)
     audio_attack: float = 0.05  # seconds for audio values to rise
     audio_release: float = 0.3  # ... and to fall
+    black_fade: float = 2.0  # seconds Fade to black takes (the header's button, and the API's default)
     geometry: list[int] | None = None
     maximized: bool = False
     splitters: dict[str, list[int]] = field(default_factory=dict)
@@ -84,6 +85,8 @@ class Settings:
             value = getattr(self, name)
             ok = isinstance(value, (int, float)) and not isinstance(value, bool) and 0.0 <= value <= 3.0
             setattr(self, name, float(value) if ok else default)
+        value = self.black_fade
+        self.black_fade = float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and 0.0 <= value <= 60.0 else defaults.black_fade
         self.maximized = bool(self.maximized)
         geometry = self.geometry
         if not (isinstance(geometry, list) and len(geometry) == 4 and all(isinstance(v, int) for v in geometry)):

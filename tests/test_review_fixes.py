@@ -199,7 +199,7 @@ class OwnSavesTests(unittest.TestCase):
 from datetime import datetime as _dt, timedelta as _td  # noqa: E402
 
 from centralight.automations import system_uptime, timed_continuous, upcoming  # noqa: E402
-from centralight.commands import PowerEvent, SetBlackout, SwapShow  # noqa: E402
+from centralight.commands import PowerEvent, SwapShow, ToBlack  # noqa: E402
 from centralight.live_state import LiveState  # noqa: E402
 from centralight.show_io import freeze  # noqa: E402
 from tests.test_automations import SUNDAY_MORNING, WELCOME, AutomationEngineTestCase, automation, uk_local  # noqa: E402
@@ -331,16 +331,16 @@ class AutomationReviewTests(AutomationEngineTestCase):
         self.assertIn("ProPresenter", Engine._ndi_names(self.show))  # kept connected, so it can be seen
 
     def test_a_lights_off_restart_lets_automations_light_the_room(self) -> None:
-        self.make(_dt(2026, 11, 8, 8, 59), [automation("welcome", SUNDAY_MORNING, WELCOME)],
-                  live=LiveState(blackout=True, blackout_by_quit=True))  # (from a "Turn lights off" quit)
-        self.assertTrue(self.engine._blackout)
+        old = LiveState.from_dict({"blackout": True, "blackout_by_quit": True})  # (a live.json from before M11)
+        self.make(_dt(2026, 11, 8, 8, 59), [automation("welcome", SUNDAY_MORNING, WELCOME)], live=old)
+        self.assertTrue(self.engine._quit_dark)
         self.run_until(_dt(2026, 11, 8, 9, 0, 30))
         self.assertEqual(self.base(), "warm-welcome")
-        self.assertFalse(self.engine._blackout)  # lifted by the automation
-        self.engine.submit(SetBlackout(on=True))  # a Blackout someone chooses isn't lifted
+        self.assertFalse(self.engine._quit_dark)  # the scheduled run lit the room
+        self.engine.submit(ToBlack(0.0, everything=True))  # then someone sends everything to black...
         self.engine.submit(PowerEvent("woke"))
         self.run_until(_dt(2026, 11, 8, 9, 2))
-        self.assertTrue(self.engine._blackout)
+        self.assertEqual(self.base(), "")  # ...and nothing runs again over it (the same occurrence)
 
 
 # ---------------------------------------------------------------- output and engine (batch C)
@@ -1109,17 +1109,19 @@ class SecondReviewAutomationTests(AutomationEngineTestCase):
         live.saved_at = self.clocks.wall
         return LiveState.from_dict(json.loads(json.dumps(live.to_dict())))
 
-    def test_a_clicked_blackout_survives_a_restart_and_a_starts_automation(self) -> None:
+    def test_cut_to_black_is_a_one_off_the_next_input_lights_things(self) -> None:
         starts = automation("starts", [{"type": "app_started"}], [{"do": "base", "input": "ping", "transition": "cut"}])
         self.make(_dt(2026, 11, 8, 20, 0), [starts])
-        self.engine.submit(SetBlackout(on=True))  # pressed by hand after the evening service
+        self.engine.tick()  # ("CentraLight starts" ran)
+        self.engine.submit(ToBlack(0.0, everything=True))  # pressed by hand after the evening service
         self.run_until(_dt(2026, 11, 8, 20, 1))
         live = self.saved()
-        self.assertFalse(live.blackout_by_quit)
-        self.clocks.advance(7 * 3600)  # Windows Update restarts the PC at 03:00
+        self.assertFalse(live.quit_dark)  # (not a quit: nothing is held back)
+        self.assertIsNone(live.base)
+        self.clocks.advance(7 * 3600)  # CentraLight restarts (not quit with "Turn lights off")
         engine = self.restart(live)
         engine.tick()
-        self.assertTrue(engine._blackout)  # still dark
+        self.assertEqual(self.base(), "ping")  # no latch: the next input lights things again
 
     def test_a_lights_off_quit_gives_way_only_to_a_real_timed_run(self) -> None:
         service = automation("service", SUNDAY_MORNING, [{"do": "base", "input": "warm-welcome"}],
@@ -1128,17 +1130,18 @@ class SecondReviewAutomationTests(AutomationEngineTestCase):
         self.make(_dt(2026, 11, 8, 8, 59), [service, starts])
         self.run_until(_dt(2026, 11, 8, 12, 0))
         live = self.quit_lights_off()  # "Turn lights off" at 12:00, inside 09:00-12:30
-        self.assertTrue(live.blackout_by_quit)
+        self.assertTrue(live.quit_dark)
         self.clocks.advance(15 * 3600)  # Monday 03:00
         engine = self.restart(live)
         self.clocks.advance(1.0)
         engine.tick()
-        self.assertTrue(engine._blackout)  # "CentraLight starts" didn't lift it...
+        self.assertTrue(engine._quit_dark)  # "CentraLight starts" was held back...
+        self.assertEqual(self.base(), "")
         self.assertNotIn("stopped matching", [h.what for h in engine._runner.history if h.automation == "service"][-1:])
         self.clocks.advance(6 * 86400 - 3 * 3600)  # ...nor a "when it stops" at startup; next Sunday 09:00 does
         engine.tick()
         self.run_until(_dt(2026, 11, 15, 9, 0, 30))
-        self.assertFalse(engine._blackout)
+        self.assertFalse(engine._quit_dark)
         self.assertEqual(self.base(), "warm-welcome")
 
     def test_key_lights_to_zero_isnt_lights_up(self) -> None:
@@ -1461,7 +1464,7 @@ class ThirdReviewAutomationTests(AutomationEngineTestCase):
         self.run_until(_dt(2026, 11, 9, 15, 0, 20), step=0.5)
         self.assertEqual(self.base(), "evening")  # the waiting step was cancelled
 
-    def test_a_feed_coming_back_at_night_doesnt_lift_a_quit_blackout(self) -> None:
+    def test_a_feed_coming_back_at_night_doesnt_light_things_after_a_lights_off_quit(self) -> None:
         follow = automation("follow", [{"type": "variable", "name": "mood", "compare": ">", "value": 0.5}],
                             [{"do": "base", "input": "ping", "transition": "cut"}])  # (a state condition, like a feed)
         both = automation("both", [{"type": "app_started"}, {"type": "days", "days": ["mon"]}],
@@ -1479,15 +1482,17 @@ class ThirdReviewAutomationTests(AutomationEngineTestCase):
         self.clocks.advance(5)
         engine.tick()
         self.assertEqual([h.automation for h in engine._runner.history if h.what == "ran"][-2:], ["both", "follow"])
-        self.assertTrue(engine._blackout)  # neither the start event nor the state condition lifted it
+        self.assertTrue(engine._quit_dark)  # neither the start event nor the state condition lit things
+        self.assertEqual(self.base(), "")
 
-    def test_a_clicked_blackout_stays_clicked_through_a_lights_off_quit(self) -> None:
+    def test_a_lights_off_quit_after_a_cut_to_black_holds_automations_back(self) -> None:
         self.make(_dt(2026, 11, 8, 20, 0), [])
-        self.engine.submit(SetBlackout(on=True))  # clicked after the evening service
+        self.engine.submit(ToBlack(0.0, everything=True))  # pressed by hand after the evening service
         self.run_until(_dt(2026, 11, 8, 20, 1))
         live = self.quit_lights_off()  # then Windows shuts down with "Turn the lights off" remembered
-        self.assertTrue(live.blackout)
-        self.assertFalse(live.blackout_by_quit)
+        self.assertTrue(live.quit_dark)
+        self.assertEqual(live.quit_at, self.clocks.wall)
+        self.assertIsNone(live.base)
 
     def test_a_start_event_with_a_feed_condition_still_runs(self) -> None:
         fallback = automation("fallback", [{"type": "app_started"}, {"type": "ndi", "source": "Media Background Pane", "invert": True}],
@@ -1651,7 +1656,7 @@ class FourthReviewAutomationTests(AutomationEngineTestCase):
             self.clocks.advance(1.0)
             self.engine.tick()
 
-    def test_a_whole_day_or_a_range_from_before_the_quit_doesnt_lift_a_quit_blackout(self) -> None:
+    def test_a_whole_day_or_a_range_from_before_the_quit_doesnt_light_things(self) -> None:
         sundays = automation("sundays", [{"type": "days", "days": ["sun"]}, FEED], [{"do": "base", "input": "ping", "transition": "cut"}])
         november = automation("november", [{"type": "dates", "from": "11-01", "to": "11-30"}, FEED],
                               [{"do": "house", "light": "dimmer-4", "level": 0.7}])
@@ -1667,10 +1672,12 @@ class FourthReviewAutomationTests(AutomationEngineTestCase):
         self.feeds.sending[MBP] = True  # ...and Media Background Pane starts sending at 03:05
         self.run_until(_dt(2026, 11, 8, 3, 6), step=1.0)
         self.assertEqual(sorted({h.automation for h in engine._runner.history if h.what == "ran"}), ["november", "outside", "sundays"])
-        self.assertTrue(engine._blackout)  # none of them lifted it
+        self.assertTrue(engine._quit_dark)  # none of them lit things
+        self.assertEqual(self.base(), "")
+        self.assertFalse(engine.frames.get().house["dimmer-4"].on)  # (November's key lights were held back too)
         self.run_until(_dt(2026, 11, 8, 9, 0, 30))
         self.assertEqual(len(self.runs("service")), 1)
-        self.assertFalse(engine._blackout)  # Sunday 09:00-12:30 began after the quit: that does
+        self.assertFalse(engine._quit_dark)  # Sunday 09:00-12:30 began after the quit: that does
 
     def test_a_service_range_lifts_it_even_when_the_feed_comes_late(self) -> None:
         service = automation("service", SUNDAY_MORNING + [FEED], WELCOME)
@@ -1680,11 +1687,11 @@ class FourthReviewAutomationTests(AutomationEngineTestCase):
         self.clocks.advance(11 * 3600)  # the PC is switched on at 09:01 on Sunday
         engine = self.restart(live)
         self.run_until(_dt(2026, 11, 8, 9, 20), step=10.0)
-        self.assertTrue(engine._blackout)  # no feed yet, so nothing ran
+        self.assertTrue(engine._quit_dark)  # no feed yet, so nothing ran
         self.feeds.sending[MBP] = True  # Media Background Pane is started at 09:20
         self.seconds(3)
         self.assertEqual(len(self.runs("service")), 1)
-        self.assertFalse(engine._blackout)
+        self.assertFalse(engine._quit_dark)
 
     def test_a_time_range_ending_keeps_the_waiting_step_though_it_also_needs_a_feed(self) -> None:
         countdown = automation("countdown", [{"type": "time", "from": "10:30", "to": "10:31"}, FEED],
@@ -1815,7 +1822,7 @@ class FifthReviewAutomationTests(AutomationEngineTestCase):
         self.clocks.advance(10 * 3600 + 44 * 60)  # the PC is switched on at 08:45 on Sunday: blacked out
         engine = self.restart(live)
         self.run_until(_dt(2026, 11, 8, 9, 3), step=10.0)
-        self.assertTrue(engine._blackout)
+        self.assertTrue(engine._quit_dark)
         return engine
 
     def feed_at_ten_past(self) -> None:
@@ -1830,7 +1837,7 @@ class FifthReviewAutomationTests(AutomationEngineTestCase):
         self.clocks.advance(60)  # ...and CentraLight restarts at 09:04 (a crash, say), before the feed is there
         engine = self.restart(live)
         self.feed_at_ten_past()
-        self.assertFalse(engine._blackout)  # the range began after the real quit (Saturday), not the last save
+        self.assertFalse(engine._quit_dark)  # the range began after the real quit (Saturday), not the last save
 
     def test_a_second_lights_off_quit_keeps_the_first_ones_time(self) -> None:
         self.blacked_out_on_sunday_morning()
@@ -1839,7 +1846,7 @@ class FifthReviewAutomationTests(AutomationEngineTestCase):
         self.clocks.advance(60)
         engine = self.restart(live)
         self.feed_at_ten_past()
-        self.assertFalse(engine._blackout)
+        self.assertFalse(engine._quit_dark)
 
 
 

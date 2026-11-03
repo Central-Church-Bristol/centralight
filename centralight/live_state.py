@@ -26,9 +26,8 @@ class HouseSetting:
 class LiveState:
     show: str = ""  # show folder this belongs to
     master: float = 1.0
-    blackout: bool = False
-    blackout_by_quit: bool = False  # the Blackout came from quitting with "Turn lights off" (not a person's click)
-    blackout_quit_at: float = 0.0  # when that quit was (kept through later saves, restarts and quits), or 0
+    quit_dark: bool = False  # quit with "Turn lights off": automations leave the lights off until a time range begins
+    quit_at: float = 0.0  # when that quit was (kept through later saves, restarts and quits), or 0
     house: dict[str, HouseSetting] = field(default_factory=dict)
     base: dict[str, Any] | None = None  # {"input": id, "time": seconds}
     overlays: list[dict[str, Any] | None] = field(default_factory=lambda: [None, None, None, None])
@@ -40,9 +39,8 @@ class LiveState:
         return {
             "show": self.show,
             "master": self.master,
-            "blackout": self.blackout,
-            "blackout_by_quit": self.blackout_by_quit,
-            "blackout_quit_at": self.blackout_quit_at,
+            "quit_dark": self.quit_dark,
+            "quit_at": self.quit_at,
             "house": {k: {"level": v.level, "on": v.on} for k, v in self.house.items()},
             "base": self.base,
             "overlays": self.overlays,
@@ -56,11 +54,14 @@ class LiveState:
         state = cls()
         state.show = str(data.get("show") or "")
         state.master = _unit(data.get("master"), 1.0)
-        state.blackout = bool(data.get("blackout", False))
-        state.blackout_by_quit = state.blackout and bool(data.get("blackout_by_quit", False))
-        quit_at = data.get("blackout_quit_at", 0.0)
-        if state.blackout_by_quit and isinstance(quit_at, (int, float)) and not isinstance(quit_at, bool) and quit_at > 0:
-            state.blackout_quit_at = float(quit_at)
+        state.quit_dark = bool(data.get("quit_dark", False))
+        quit_at = data.get("quit_at", 0.0)
+        blacked_out = bool(data.get("blackout", False))  # (a live.json from before Cut / Fade to black)
+        if blacked_out and bool(data.get("blackout_by_quit", False)):
+            state.quit_dark = True
+            quit_at = data.get("blackout_quit_at", 0.0)
+        if state.quit_dark and isinstance(quit_at, (int, float)) and not isinstance(quit_at, bool) and quit_at > 0:
+            state.quit_at = float(quit_at)
         house = data.get("house") or {}
         if isinstance(house, dict):
             for key, value in house.items():
@@ -78,6 +79,10 @@ class LiveState:
         state.automations = dict(automations) if isinstance(automations, dict) else {}
         saved = data.get("saved_at", 0.0)
         state.saved_at = float(saved) if isinstance(saved, (int, float)) and not isinstance(saved, bool) else 0.0
+        if blacked_out:  # it was blacked out then: it starts black now (nothing playing, house lights off, levels kept)
+            state.base = None
+            state.overlays = [None, None, None, None]
+            state.house = {k: HouseSetting(v.level, False) for k, v in state.house.items()}
         return state
 
     @classmethod

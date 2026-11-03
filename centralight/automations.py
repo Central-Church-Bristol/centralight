@@ -5,7 +5,7 @@ An automation runs its actions once when its conditions become true, for example
 when they stop being true. Conditions combine with All or Any, and each can be inverted.
 
 When it runs:
-- States (time of day, days, dates, what's live, variables, NDI, Blackout) are checked every
+- States (time of day, days, dates, what's live, variables, NDI, the colour lights being black) are checked every
   second and straight away when something changes. Events (PC started, CentraLight started,
   PC woke) are only true at the moment they happen.
 - An automation runs once when its combined condition goes from false to true; it doesn't repeat
@@ -33,10 +33,11 @@ from typing import Any
 
 from .colours import is_colour_text, parse_colour
 from .commands import (
+    BLACK_FADE,
     OverlayOff,
     SendToBase,
     SendToOverlay,
-    SetBlackout,
+    ToBlack,
     SetHouse,
     SetMaster,
     SetVariable,
@@ -55,7 +56,7 @@ CONDITIONS: dict[str, str] = {
     "input_live": "An input is live",
     "variable": "A global variable",
     "ndi": "An NDI feed is there",
-    "blackout": "Blackout is on",
+    "colour_black": "The colour lights are black",
     "audio": "Sound is loud enough",
     "app_started": "CentraLight starts",
     "pc_startup": "The PC starts",
@@ -68,7 +69,8 @@ ACTIONS: dict[str, str] = {
     "overlay_off": "Clear an overlay",
     "house": "Festoon or key lights",
     "master": "Master",
-    "blackout": "Blackout",
+    "cut_black": "Cut to black",
+    "fade_black": "Fade to black",
     "variable": "Set a global variable",
     "layout": "Switch layout",
     "automation": "Turn an automation on or off",
@@ -212,8 +214,8 @@ def check_action(action: Mapping[str, Any]) -> list[str]:
             problems.append(f'"{key}" must be a number from 0')
     if kind == "master" and not isinstance(action.get("level"), (int, float)):
         problems.append('"level" must be a number from 0 to 1')
-    if kind == "blackout" and not isinstance(action.get("on", True), bool):
-        problems.append('"on" must be true or false')
+    if kind in ("cut_black", "fade_black") and not isinstance(action.get("all", False), bool):
+        problems.append('"all" must be true or false (true: the Festoon and Key lights too)')
     if kind == "variable" and (not isinstance(action.get("name"), str) or "value" not in action):
         problems.append('a variable action needs "name" and "value"')
     if kind == "layout" and not isinstance(action.get("layout"), str):
@@ -304,8 +306,10 @@ def describe_action(action: Mapping[str, Any], show: Show | None = None) -> str:
         text = f"{label} {' '.join(parts) or 'unchanged'}"
     elif kind == "master":
         text = f"Master {round(_num(action.get('level'), 1.0) * 100)} %"
-    elif kind == "blackout":
-        text = "Blackout on" if action.get("on", True) else "Blackout off"
+    elif kind in ("cut_black", "fade_black"):
+        text = "cut to black" if kind == "cut_black" else f"fade to black ({_num(action.get('fade'), BLACK_FADE):g} s)"
+        if action.get("all"):
+            text += ", Festoon and Key lights too"
     elif kind == "variable":
         text = f"{action.get('name')} = {action.get('value')}"
     elif kind == "layout":
@@ -342,13 +346,13 @@ class Situation:
     overlays: tuple[str, ...] = ("", "", "", "")  # input showing in each overlay ("" = none)
     variables: Mapping[str, Any] = field(default_factory=dict)
     ndi: Mapping[str, bool] = field(default_factory=dict)  # feed name (lower case) -> sending now
-    blackout: bool = False
+    colour_black: bool = False  # nothing on Base or in the overlays (after a Cut / Fade to black, say)
     audio: Mapping[str, float] = field(default_factory=dict)  # audio.level and friends, now
     events: frozenset[str] = frozenset()  # app_started, pc_startup, pc_woke happening now
     previous_local: datetime | None = None  # local time at the last check (to spot clock changes)
     previous_now: float | None = None  # wall clock at the last check (a clock change moves local time, not this)
     ndi_known: bool = True  # False just after starting: a feed that isn't sending yet may still be connecting
-    quit_blackout_since: float | None = None  # wall time of the lights-off quit whose Blackout is still on, else None
+    quit_dark_since: float | None = None  # wall time of a "Turn lights off" quit whose hold is still on, else None
 
 
 def _in_range(start: int, end: int, minutes: int) -> bool:
@@ -430,15 +434,15 @@ def timed_continuous(automation: Automation, start: datetime, end: datetime) -> 
     return true_at(end)
 
 
-STATE_KINDS = ("input_live", "variable", "ndi", "blackout", "audio")  # conditions about how things are right now
+STATE_KINDS = ("input_live", "variable", "ndi", "colour_black", "audio")  # conditions about how things are right now
 
 
 def _stop_cancels_waiting(automation: Automation, before: list[bool] | None, after: list[bool] | None) -> bool:
     """Does this stop cancel the waiting "after N s" steps of the automation's run? Yes if a condition about how
-    things are (a feed, sound, a variable, an input, Blackout) is what went false: the wait was a grace period ("feed
-    lost for 10 s"). Yes if it has a "when it stops" to do instead, unless it's about an event such as "CentraLight
-    starts", which only lasts a moment. No when only the clock moved on ("at 10:30 do this, then 2 minutes later
-    that"), even if it also looks at a feed."""
+    things are (a feed, sound, a variable, an input, the colour lights being black) is what went false: the wait was
+    a grace period ("feed lost for 10 s"). Yes if it has a "when it stops" to do instead, unless it's about an event
+    such as "CentraLight starts", which only lasts a moment. No when only the clock moved on ("at 10:30 do this,
+    then 2 minutes later that"), even if it also looks at a feed."""
     went_false = {c.get("type") for c, was, now in zip(automation.conditions, before or (), after or ()) if was and not now}
     if went_false & set(STATE_KINDS):
         return True
@@ -459,7 +463,7 @@ def _comes_on_at_a_set_time(cond: Mapping[str, Any]) -> bool:
 
 def began_after(automation: Automation, since: datetime, local: datetime) -> bool:
     """Is one of the automation's time ranges (or an "after sunset"-style time) on now, having come on after `since`?
-    Only such a run lifts the Blackout left from a "Turn lights off" quit: Sunday 09:00-12:30 after a quit on
+    Only such a run lights things after a "Turn lights off" quit: Sunday 09:00-12:30 after a quit on
     Saturday. Never a whole day (Sundays, 1-31 Dec), a feed coming back at 03:00, or "CentraLight starts"."""
     if any(c.get("type") in EVENTS for c in automation.conditions):
         return False
@@ -710,8 +714,8 @@ class AutomationRunner:
             result = _variable_true(cond, situation.variables.get(cond.get("name", "")))
         elif kind == "ndi":
             result = _ndi_true(cond.get("source"), situation.ndi)
-        elif kind == "blackout":
-            result = situation.blackout
+        elif kind == "colour_black":
+            result = situation.colour_black
         elif kind == "audio":
             result = self._audio_true(automation, index, cond, situation)
         else:
@@ -847,18 +851,19 @@ class AutomationRunner:
                 continue  # paused: keep track quietly, run nothing
             if matched:
                 now_actions += self._run(automation, list(automation.actions), mono_now, situation.now, "ran", ", ".join(true),
-                                         lifts=self._lifts_quit_blackout(automation, situation))
+                                         lifts=self._lifts_quit_dark(automation, situation))
             elif automation.on_end:
                 now_actions += self._run(automation, list(automation.on_end), mono_now, situation.now, "stopped matching",
                                          count=False)
         return now_actions
 
     @staticmethod
-    def _lifts_quit_blackout(automation: Automation, situation: Situation) -> bool:
-        """Is a lights-off quit's Blackout still on, and did one of this automation's time ranges begin after it?"""
-        if situation.quit_blackout_since is None:
+    def _lifts_quit_dark(automation: Automation, situation: Situation) -> bool:
+        """Are the lights held off after a "Turn lights off" quit, and did one of this automation's time ranges begin
+        after it?"""
+        if situation.quit_dark_since is None:
             return False
-        since = situation.local - timedelta(seconds=max(0.0, situation.now - situation.quit_blackout_since))
+        since = situation.local - timedelta(seconds=max(0.0, situation.now - situation.quit_dark_since))
         return began_after(automation, since, situation.local)
 
     def _kept_by_untimed(self, automation: Automation) -> bool:
@@ -886,7 +891,7 @@ class AutomationRunner:
 
     def _run(self, automation: Automation, actions: list, mono_now: float, wall_now: float, what: str,
              detail: str = "", count: bool = True, why: str = "conditions", lifts: bool = False) -> list[tuple[str, dict]]:
-        """lifts: this run may lift the Blackout left from a lights-off quit (see began_after). It goes with each
+        """lifts: this run may light things after a "Turn lights off" quit (see began_after). It goes with each
         action as "_lifts", the waiting ones too."""
         state = self.states.setdefault(automation.id, AutomationState())
         if count:
@@ -967,8 +972,9 @@ def action_command(action: Mapping[str, Any], show: Show) -> Any | None:
         level = action.get("level", 1.0)
         level = min(1.0, max(0.0, float(level))) if isinstance(level, (int, float)) else 1.0
         return SetMaster(level) if fade is None else SetMaster(level, fade)
-    if kind == "blackout":
-        return SetBlackout(on=bool(action.get("on", True)))
+    if kind in ("cut_black", "fade_black"):
+        seconds = 0.0 if kind == "cut_black" else max(0.0, _num(action.get("fade"), BLACK_FADE))
+        return ToBlack(seconds, everything=action.get("all") is True)
     if kind == "variable":
         return SetVariable(str(action.get("name", "")), action.get("value"))
     return None
@@ -1056,8 +1062,10 @@ def default_action(kind: str, show: Show) -> dict[str, Any]:
         return {"do": "house", "light": light, "level": 0.7, "fade": 2}
     if kind == "master":
         return {"do": "master", "level": 1.0, "fade": 2}
-    if kind == "blackout":
-        return {"do": "blackout", "on": True}
+    if kind == "cut_black":
+        return {"do": "cut_black"}
+    if kind == "fade_black":
+        return {"do": "fade_black", "fade": BLACK_FADE}
     if kind == "variable":
         var = show.globals[0] if show.globals else None
         return {"do": "variable", "name": var.name if var else "", "value": var.default if var else 0}

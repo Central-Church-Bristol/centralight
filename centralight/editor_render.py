@@ -84,6 +84,7 @@ class EditorRenderer:
         self._thread: threading.Thread | None = None
         self._seq = 0
         self._memory_key: str | None = None  # the input whose formulas' cycle positions are remembered
+        self._stopping = threading.Event()  # (wakes a back-off wait when stopping)
         self._memory: dict = {}
         self._lock = threading.Lock()  # the thread and render_sync() share the drawing contexts
 
@@ -91,11 +92,13 @@ class EditorRenderer:
         if self._running:
             return
         self._running = True
+        self._stopping.clear()
         self._thread = threading.Thread(target=self._run, name="editor-render", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._running = False
+        self._stopping.set()
         self._requests.put(None)  # wake the thread
         if self._thread is not None:
             self._thread.join(2.0)
@@ -180,6 +183,8 @@ class EditorRenderer:
                 continue
             if picture is not None:
                 self.pictures.put(picture)
+            if self._engine_late():  # the lights come first: while the engine runs late, draw at most twice a second
+                self._stopping.wait(LATE_REFRESH)
 
     def _engine_late(self) -> bool:
         try:

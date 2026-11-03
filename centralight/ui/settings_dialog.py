@@ -232,6 +232,19 @@ class SettingsDialog(QDialog):
         self._meter_timer.timeout.connect(lambda: self.audio_meter.set_values(self._audio_values()))
         self._meter_timer.start()
 
+        black_box = QGroupBox("Cut / Fade to black")
+        black_form = QFormLayout(black_box)
+        self.black_fade = QDoubleSpinBox()
+        self.black_fade.setRange(0.1, 60.0)
+        self.black_fade.setSingleStep(0.5)
+        self.black_fade.setDecimals(1)
+        self.black_fade.setSuffix(" s")
+        self.black_fade.setValue(settings.black_fade)
+        black_form.addRow("Fade to black takes", self.black_fade)
+        black_form.addRow(hint("The header's buttons: a click sends the colour lights to black; holding one sends "
+                               "everything, the Festoon and Key lights too. The next input lights things again. "
+                               "The Stream Deck's /api/black/fade takes this time too, unless its URL gives ?seconds=."))
+
         quit_box = QGroupBox("Starting and quitting")
         self.quit_action = QComboBox()
         for value, label in QUIT_LABELS:
@@ -304,6 +317,7 @@ class SettingsDialog(QDialog):
         content_layout.addWidget(ndi_box)
         content_layout.addWidget(remote_box)
         content_layout.addWidget(audio_box)
+        content_layout.addWidget(black_box)
         content_layout.addWidget(quit_box)
         content_layout.addWidget(files_box)
         content_layout.addWidget(ai_box)
@@ -372,6 +386,7 @@ class SettingsDialog(QDialog):
         settings.artnet_ip = self.artnet_ip.text().strip() or settings.artnet_ip
         settings.artnet_universe = self.artnet_universe.value()
         settings.quit_action = str(self.quit_action.currentData() or QUIT_ASK)
+        settings.black_fade = round(self.black_fade.value(), 2)
         settings.start_with_windows = self.start_with_windows.isChecked()
         settings.remote_port = self.remote_port.value()
         settings.remote_lan = self.remote_lan.isChecked()

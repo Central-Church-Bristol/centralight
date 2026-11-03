@@ -30,6 +30,7 @@ import numpy as np
 
 from .compositor import direction_values, is_identity, radial_values
 from .elements import (
+    _LRU,
     RenderContext,
     _fit_of,
     _is_map,
@@ -224,6 +225,9 @@ def _painted_key_at(path: Path, what: str):
 # ---------------------------------------------------------------- pictures: Area
 
 
+TABLES_BYTES = 48_000_000  # pictures' tables kept for the lights (the newest used; a picture's is remade if needed)
+
+
 class AreaTable:
     """A picture ready to be averaged anywhere: its summed-area table. A solid picture (every NDI and video frame,
     most images) is summed as the 8-bit picture it is, which is fast and exact; one with see-through parts is
@@ -243,6 +247,7 @@ class AreaTable:
         self.width = w
         self.height = h
         self.solid = image.shape[2] != 4
+        self.nbytes = 0  # (set below: what it takes in memory)
         if self.solid:
             self.table = cv2.integral(np.ascontiguousarray(image[..., :3]), sdepth=cv2.CV_32S)  # (h + 1, w + 1, 3)
             self.unit = 1.0 / 255.0
@@ -251,6 +256,7 @@ class AreaTable:
             rgba[..., :3] *= rgba[..., 3:4]  # premultiplied
             self.table = cv2.integral(rgba, sdepth=cv2.CV_64F)  # (h + 1, w + 1, 4)
             self.unit = 1.0
+        self.nbytes = int(self.table.nbytes)
 
 
 
@@ -280,6 +286,9 @@ class BoxPlan:
         if not table.solid:
             return sums
         return np.vstack((sums, self.size[None, :]))  # solid: every pixel counts fully
+
+
+_tables = _LRU(96, TABLES_BYTES)
 
 
 def patch_boxes(x: np.ndarray, y: np.ndarray, area: float, minimum: float = 0.0) -> tuple[np.ndarray, ...]:
@@ -324,10 +333,13 @@ def _plan(w: int, h: int, fit: str, transform: tuple, area: float, lights) -> tu
     half_y = (y1 - y0) / 2.0 / scale
     cx = middle_u
     cy = middle_v * ASPECT
-    fx0 = np.clip((cx - half_x - ox) / k, 0.0, w)
-    fx1 = np.clip((cx + half_x - ox) / k, 0.0, w)
-    fy0 = np.clip((cy - half_y - oy) / k, 0.0, h)
-    fy1 = np.clip((cy + half_y - oy) / k, 0.0, h)
+    # what of the picture shows (Fill crops the overflow): moved, shrunk or turned, the cropped strips stay hidden
+    left, right = max(0.0, -ox / k), min(float(w), (1.0 - ox) / k)
+    top, bottom = max(0.0, -oy / k), min(float(h), (ASPECT - oy) / k)
+    fx0 = np.clip((cx - half_x - ox) / k, left, right)
+    fx1 = np.clip((cx + half_x - ox) / k, left, right)
+    fy0 = np.clip((cy - half_y - oy) / k, top, bottom)
+    fy1 = np.clip((cy + half_y - oy) / k, top, bottom)
     pixels = covered / (scale * scale * k * k)  # the patch's area in picture pixels (off the picture: transparent)
     return BoxPlan(fx0, fy0, fx1, fy1, w, h), np.maximum(pixels, 1e-12)
 
@@ -377,7 +389,10 @@ def smooth(layer: np.ndarray, ctx: RenderContext, brighter: float, darker: float
     then, current, previous = state
     dt = now - then
     if dt <= 0.0:
-        return current
+        if np.array_equal(layer, previous):
+            return current  # (worked out twice at the same moment)
+        states[key] = (now, layer.copy(), layer.copy())  # no time passing (the Editor paused): a change shows at once
+        return layer
     if snap:
         change = np.abs(layer[:3] - previous[:3]).max(axis=0)
         if layer.shape[1] and float((change > SNAP_CHANGE).mean()) > SNAP_SHARE:
@@ -398,15 +413,18 @@ def _frame_table(element: Mapping[str, Any], ctx: RenderContext) -> AreaTable | 
         path = media_path(ctx.folder, element.get("file"))
         if path is None:
             return None
-        image = load_image(path)
-        if image is None:
+        try:
+            key = ("image", str(path), path.stat().st_mtime_ns)
+        except OSError:
             return None
-        key = ("area-image", str(path))
-        cached = ctx.cache.get(key)
-        if cached is None or cached[0] is not image:
-            cached = (image, AreaTable(image))  # holding the picture keeps it from being mistaken for another
-            ctx.cache[key] = cached
-        return cached[1]
+        table = _tables.get_fresh(key)
+        if table is None:
+            image = load_image(path)
+            if image is None:
+                return None
+            table = AreaTable(image)
+            _tables.put(key, table)
+        return table
     if kind == "video":
         from .video_source import videos
 
@@ -422,11 +440,11 @@ def _frame_table(element: Mapping[str, Any], ctx: RenderContext) -> AreaTable | 
             if not clip.error:
                 ctx.waiting = True
             return None
-        key = ("area-video", str(path))
-        cached = ctx.cache.get(key)
+        key = ("video", str(path), ctx.video_threaded)
+        cached = _tables.get_fresh(key)
         if cached is None or cached[0] is not frame:
-            cached = (frame, AreaTable(frame))
-            ctx.cache[key] = cached
+            cached = (frame, AreaTable(frame))  # (the newest frame of each video: the frame tells them apart)
+            _tables.put(key, cached)
         return cached[1]
     if kind == "ndi":
         name = ndi_source_name(element)

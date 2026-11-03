@@ -1,7 +1,7 @@
 """The header across the top of every page.
 
 Left to right: the logo and wordmark, the page tabs, status chips, Lock, Settings, the
-Festoon / Key lights / Master faders, and Blackout. When the window is too narrow for
+Festoon / Key lights / Master faders, and Cut to black / Fade to black. When the window is too narrow for
 one line, the faders move to a slim second row; narrower still, the chips shrink to
 coloured dots (hover for the details).
 
@@ -11,11 +11,9 @@ or the Stream Deck), and only send changes when someone moves them.
 
 from __future__ import annotations
 
-import time
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
-    QApplication,
     QButtonGroup,
     QFrame,
     QHBoxLayout,
@@ -32,13 +30,13 @@ from ..output import BUSY, CLOSED, CONNECTED, CONNECTING, MISSING, OutputStatus
 from ..settings import OUTPUT_ARTNET, OUTPUT_SIMULATED
 from . import icons, theme
 from .widgets import (
-    DOUBLE_CLICK_GUARD_S,
     STATE_ERROR,
     STATE_OFF,
     STATE_OK,
     STATE_WARN,
     ElidedLabel,
     Fader,
+    HoldButton,
     StatusChip,
     ToggleSwitch,
     set_property,
@@ -46,8 +44,7 @@ from .widgets import (
 )
 
 PAGES = (("dashboard", "Dashboard"), ("editor", "Editor"), ("layout", "Layout"), ("automation", "Automation"))
-BLACKOUT_TEXT = "Blackout"
-BLACKOUT_ON_TEXT = "Lights off — click to restore"
+BLACK_TIP = "Click: colour lights. Hold: everything, including Festoon and Key lights (Shift-click too)."
 
 
 class PercentLabel(QLabel):
@@ -158,7 +155,7 @@ class Header(QFrame):
     settings_requested = Signal()
     house_changed = Signal(str, object, object)  # fixture id, level (or None), on (or None)
     master_changed = Signal(float)
-    blackout_clicked = Signal(bool)  # True = instant (Shift-click)
+    black_requested = Signal(bool, bool)  # (fade: False = cut, everything: the Festoon and Key lights too)
     lock_toggled = Signal(bool)
 
     def __init__(self, show_name: str, house: list[tuple[str, str]], parent: QWidget | None = None) -> None:
@@ -228,14 +225,22 @@ class Header(QFrame):
         self.master.level_moved.connect(self.master_changed.emit)
         levels_layout.addWidget(self.master)
 
-        self.blackout = QPushButton(BLACKOUT_TEXT)
-        self._last_blackout_click = -1e9
-        self.blackout.setObjectName("Blackout")
-        self.blackout.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.blackout.setToolTip("Fade every light to black (Shift-click: instantly)")
-        self.blackout.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.blackout.clicked.connect(self._blackout_clicked)
-        self.blackout.setProperty("active", False)
+        # Cut to black / Fade to black: one-off buttons (no "on" state). Click: the colour lights; hold: everything
+        self.cut_black = HoldButton("Cut to black", "Cut everything", theme.DANGER)
+        self.fade_black = HoldButton("Fade to black", "Fade everything", theme.DANGER)
+        self.black = QWidget()
+        black_layout = QHBoxLayout(self.black)
+        black_layout.setContentsMargins(0, 0, 0, 0)
+        black_layout.setSpacing(6)
+        for button, fade in ((self.cut_black, False), (self.fade_black, True)):
+            button.setObjectName("ToBlack")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setToolTip(BLACK_TIP)
+            button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            button.tapped.connect(lambda f=fade: self.black_requested.emit(f, False))
+            button.held.connect(lambda f=fade: self.black_requested.emit(f, True))
+            black_layout.addWidget(button)
+        self.black.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
         self.row1 = QHBoxLayout()
         self.row1.setContentsMargins(14, 8, 14, 8)
@@ -246,7 +251,7 @@ class Header(QFrame):
         self.row1.addWidget(self.chip_box)
         self.row1.addWidget(self.lock_button)
         self.row1.addWidget(self.settings_button)
-        self.row1.addWidget(self.blackout)
+        self.row1.addWidget(self.black)
 
         self.row2 = QWidget()
         self.row2.setObjectName("HeaderRow2")
@@ -261,7 +266,7 @@ class Header(QFrame):
         outer.addLayout(self.row1)
         outer.addWidget(self.row2)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        self._update_blackout_size()
+        self._update_black_size()
         self._arrange(force=True)
 
     # ------------------------------------------------------------ updates from the engine
@@ -272,19 +277,7 @@ class Header(QFrame):
             if view is not None:
                 control.set_view(view.level, view.on)
         self.master.set_view(frame.master)
-        self.set_blackout(frame.blackout)
         self.set_output_status(frame.output)
-
-    def set_blackout(self, on: bool) -> None:
-        text = BLACKOUT_ON_TEXT if on else BLACKOUT_TEXT
-        if self.blackout.text() != text:
-            self.blackout.setText(text)
-            self.blackout.setToolTip(
-                "The lights are off. Click to bring them back (Shift-click: instantly)"
-                if on
-                else "Fade every light to black (Shift-click: instantly)"
-            )
-        set_property(self.blackout, "active", on)
 
     def set_output_status(self, status: OutputStatus) -> None:
         chip = self.chips["output"]
@@ -368,28 +361,20 @@ class Header(QFrame):
             self.lock_button.setChecked(locked)
         for control in [*self.house_controls.values(), self.master]:
             control.setEnabled(not locked)
-        self.blackout.setEnabled(not locked)
+        self.cut_black.setEnabled(not locked)
+        self.fade_black.setEnabled(not locked)
 
     # ------------------------------------------------------------ layout
 
-    def _blackout_clicked(self) -> None:
-        now = time.monotonic()
-        if now - self._last_blackout_click < DOUBLE_CLICK_GUARD_S:
-            return  # a double-click (in a hurry) is one click, not off-and-on-again
-        self._last_blackout_click = now
-        instant = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
-        self.blackout_clicked.emit(instant)
-
-    def _update_blackout_size(self) -> None:
-        """Wide enough for 'Lights off — click to restore', so nothing jumps when it changes."""
-        fm = self.blackout.fontMetrics()
-        widest = max(fm.horizontalAdvance(BLACKOUT_ON_TEXT), fm.horizontalAdvance(BLACKOUT_TEXT))
-        self.blackout.setMinimumWidth(widest + 2 * 14 + 8)
+    def _update_black_size(self) -> None:
+        """Wide enough for 'Fade everything', so nothing jumps while a button is held."""
+        for button in (self.cut_black, self.fade_black):
+            button.setMinimumWidth(button.widest_text() + 2 * 12 + 8)
 
     def changeEvent(self, event) -> None:  # noqa: N802
         super().changeEvent(event)
         if event.type() in (event.Type.FontChange, event.Type.StyleChange):
-            self._update_blackout_size()
+            self._update_black_size()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -415,7 +400,7 @@ class Header(QFrame):
             chip_width,
             self.lock_button.sizeHint().width(),
             self.settings_button.sizeHint().width(),
-            max(self.blackout.sizeHint().width(), self.blackout.minimumWidth()),
+            max(self.black.sizeHint().width(), self.black.minimumSizeHint().width()),
         ]
         if with_levels:
             parts.append(self.levels.sizeHint().width())
@@ -443,7 +428,7 @@ class Header(QFrame):
         self.row1.removeWidget(self.levels)
         self.row2_layout.removeWidget(self.levels)
         if one_row:
-            self.row1.insertWidget(self.row1.indexOf(self.blackout), self.levels)
+            self.row1.insertWidget(self.row1.indexOf(self.black), self.levels)
             self.row2.setVisible(False)
         else:
             self.row2_layout.insertWidget(0, self.levels)

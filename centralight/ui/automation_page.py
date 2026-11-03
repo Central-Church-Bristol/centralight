@@ -74,7 +74,7 @@ EVENT_HINTS = {
     "pc_startup": "When Windows starts CentraLight at sign-in (Start with Windows), or CentraLight starts within 10 minutes of the PC starting.",
     "app_started": "Every time CentraLight starts (restarts too).",
     "pc_woke": "When the PC wakes from sleep.",
-    "blackout": "While Blackout is on.",
+    "colour_black": "While nothing is on Base or in the overlays (after Cut or Fade to black, say).",
 }
 SUN_WHEN_LABELS = (("after", "After"), ("before", "Before"))
 SUN_EVENT_LABELS = (("sunset", "sunset"), ("sunrise", "sunrise"))
@@ -379,10 +379,20 @@ class RuleRow(QFrame):
             level = _spin(0.0, 100.0, _num(d.get("level"), 1.0) * 100, " %", 0)
             level.valueChanged.connect(lambda v: self._set("level", round(v / 100, 3)))
             self._add(level, *self._fade_widgets())
-        elif kind == "blackout":
-            on = _combo(((True, "on"), (False, "off")), bool(d.get("on", True)))
-            on.currentIndexChanged.connect(lambda _i: self._set("on", on.currentData()))
-            self._add(on)
+        elif kind in ("cut_black", "fade_black"):
+            widgets = []
+            if kind == "fade_black":
+                seconds = _spin(0.0, 60.0, _num(d.get("fade"), 2.0), " s", 1)
+                seconds.setToolTip("How long the fade to black takes")
+                seconds.valueChanged.connect(lambda v: self._set("fade", round(v, 2)))
+                widgets.append(seconds)
+            everything = QCheckBox("Festoon and Key lights too")
+            everything.setChecked(d.get("all") is True)
+            everything.setToolTip("Off: only the colour lights go to black. On: the Festoon and Key lights too "
+                                  "(their switches go off; their levels stay)")
+            everything.toggled.connect(lambda on: self._set("all", True) if on else self._drop("all"))
+            widgets.append(everything)
+            self._add(*widgets)
         elif kind == "variable":
             pick = _combo([(g.name, g.name) for g in show.globals], d.get("name"))
             pick.currentIndexChanged.connect(lambda _i: self._set("name", pick.currentData()))

@@ -55,7 +55,8 @@ class Frozen:
     name: str = ""
 
 
-def _mode(ctx: RenderContext):
+def layer_kind(ctx: RenderContext):
+    """What a context's layers are: "lights", or a picture's (width, height)."""
     return "lights" if ctx.per_light else (ctx.width, ctx.height)
 
 
@@ -166,8 +167,10 @@ def _render_source(source: Instance | Frozen | None, now: float, ctx: RenderCont
     if source is None:
         return empty_layer(ctx)
     if isinstance(source, Frozen):
-        canvas = source.canvases.get(_mode(ctx))
-        return canvas if canvas is not None else empty_layer(ctx)
+        canvas = source.canvases.get(layer_kind(ctx))
+        blank = empty_layer(ctx)
+        # (frozen before a light was added or taken away, it doesn't fit the lights now: nothing, for the rest of it)
+        return canvas if canvas is not None and canvas.shape == blank.shape else blank
     return render_input(source, now, ctx)
 
 
@@ -178,12 +181,12 @@ def _owner(ctx: RenderContext) -> np.ndarray | None:
         return None
     if ctx.per_light:
         return lights.indices
-    key = ("nearest", lights.key, ctx.width, ctx.height)
-    nearest = ctx.cache.get(key)
-    if nearest is None:
-        nearest = lights.nearest_map(ctx.width, ctx.height)
-        ctx.cache[key] = nearest
-    return nearest
+    key = (lights.key, ctx.width, ctx.height)
+    cached = ctx.cache.get("nearest")
+    if cached is None or cached[0] != key:  # (only the newest: the lights moving doesn't pile them up)
+        cached = (key, lights.nearest_map(ctx.width, ctx.height))
+        ctx.cache["nearest"] = cached
+    return cached[1]
 
 
 def _points(ctx: RenderContext) -> tuple[np.ndarray, np.ndarray] | None:
@@ -231,7 +234,7 @@ class Bus:
             return
         contexts = _contexts(ctx)
         if self.transitioning(now) and contexts:
-            self.outgoing = Frozen({_mode(c): self.render(now, c) for c in contexts})  # freeze the mix as it is now
+            self.outgoing = Frozen({layer_kind(c): self.render(now, c) for c in contexts})  # freeze the mix as it is now
         else:
             self.outgoing = self.current
         self.transition = transition
@@ -299,6 +302,15 @@ class OverlaySlot:
             return
         self.content.send(inp, now, ctx, cut=True)
         self._start_reveal(1.0, now, inp.transition)
+
+    def clear_now(self) -> None:
+        """Off at once, with nothing left in it (its look went into a Cut / Fade to black's still mix)."""
+        self.content.current = None
+        self.content.outgoing = None
+        self.content.transition = Transition("cut", 0.0)
+        self.on = False
+        self.reveal_from = self.reveal_to = 0.0
+        self.reveal_transition = Transition("cut", 0.0)
 
     def off(self, now: float, cut: bool = False) -> None:
         if not self.on:

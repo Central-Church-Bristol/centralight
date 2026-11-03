@@ -11,7 +11,6 @@ from centralight.commands import (
     ClearBase,
     FlashLights,
     SendToBase,
-    SetBlackout,
     SetIdentify,
     SetMaster,
     SetTestColour,
@@ -221,11 +220,15 @@ class IdentifyAndTestTests(BaseTestCase):
         name, rgb = expected["slimpar-101"]
         self.assertEqual(self.rgb(5), tuple(round(v * 255) for v in rgb))
         self.assertTrue(engine.frames.get().identify)
-        engine.submit(SetBlackout(on=True, instant=True))
+        from centralight.commands import ToBlack
+
+        engine.submit(ToBlack(0.0))
         engine.tick()
-        self.assertEqual(self.rgb(5), (0, 0, 0))  # Blackout still wins
-        engine.submit(SetBlackout(on=False, instant=True))
+        self.assertEqual(self.rgb(5), tuple(round(v * 255) for v in rgb))  # Identify still shows which light is which
         engine.submit(SetIdentify(False))
+        engine.tick()
+        self.assertEqual(self.rgb(41), (0, 0, 0))  # and then the lights are black (nothing on Base)
+        engine.submit(SendToBase(FOLLOW_SCREEN_ID, cut=True))
         engine.tick()
         self.assertEqual(self.rgb(41), (51, 0, 0))  # back to the picture, at Master 20 %
 

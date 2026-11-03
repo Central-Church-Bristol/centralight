@@ -1,7 +1,7 @@
 """The engine: works out what every light should do, 40 times a second, on its own thread.
 
 Each tick:
-1. apply the commands that arrived (fader moves, Blackout, sending inputs...)
+1. apply the commands that arrived (fader moves, Cut / Fade to black, sending inputs...)
 2. render Base (a transition mixes two inputs) and Overlays 1-4 on top, into a
    160x90 picture. "Show on lights" (solo) replaces all of that with one input.
 3. sample the picture: each colour light takes the average colour of its patch
@@ -9,7 +9,7 @@ Each tick:
 5. Identify / test colours / flashes (the Layout page's tools)
 6. the house lights (festoon, key lights) with their fades. An input can set them
    when it goes on Base; a manual fader move wins until the next input.
-7. Blackout (always wins)
+7. (Cut / Fade to black isn't a step here: it's Base going to nothing, and house switches going off)
 8. encode the DMX universe and hand it to the output thread
 9. publish an EngineFrame for the screen, about 10 times a second
 
@@ -44,11 +44,11 @@ from .automations import (
     describe_action,
     system_uptime,
 )
-from .bus import Bus, Instance, OverlaySlot, composite, render_input
+from .bus import Bus, Frozen, Instance, OverlaySlot, composite, layer_kind, render_input
 from .commands import (
-    BLACKOUT_FADE,
     HOUSE_SLEW,
     HOUSE_SWITCH_FADE,
+    QUIT_FADE,
     ClearBase,
     Command,
     FlashLights,
@@ -60,7 +60,6 @@ from .commands import (
     SendToOverlay,
     SetAutomationEnabled,
     SetAutomationsPaused,
-    SetBlackout,
     SetHouse,
     SetIdentify,
     SetMaster,
@@ -70,12 +69,13 @@ from .commands import (
     SetVariable,
     SwapShow,
     SwitchLayout,
+    ToBlack,
 )
 from .compositor import to_rgb8
 from .elements import RenderContext, ndi_sources_used
 from .live_state import HouseSetting, LiveState
 from .log import log_exception, log_info
-from .model import EMPTY, Input, Show, frozen_map, has_finished, input_progress
+from .model import EMPTY, Input, Show, Transition, frozen_map, has_finished, input_progress
 from .video_source import videos
 from .ndi_source import SourceStatus
 from .output import RGB, OutputStatus, encode_dmx
@@ -89,6 +89,10 @@ TICK_RATE = 40
 AUDIO_OFF = MappingProxyType({"level": 0.0, "bass": 0.0, "mid": 0.0, "treble": 0.0, "beat": 0.0, "pitch": 0.0})
 PUBLISH_INTERVAL = 0.1  # seconds between EngineFrames for the screen
 PREVIEW_INTERVAL = 0.2  # seconds between preview pictures for the screen (only while a window shows one)
+LATE_PREVIEW_INTERVAL = 1.0  # ...while ticks run late (the lights come first; the picture slows, it doesn't stop)
+# commands a person sends (the window, the Stream Deck, the phone page) that mean they've taken charge of the lights:
+# after a "Turn lights off" quit, automations are held back only until one of these comes
+PERSON_TAKES_CHARGE = (SendToBase, ClearBase, SendToOverlay, SetHouse, ToBlack, RunAutomation, SetSolo)
 LATE_TICK = 0.005  # seconds: a tick that starts this much after its time is late (pictures for the screen wait then)
 TIMING_WINDOW = 60  # seconds of tick timings kept for the lateness figures
 TIDY_INTERVAL = 1.0
@@ -157,6 +161,9 @@ class _House:
         self.level = Ramp(clamp01(setting.level))
         self.on = bool(setting.on)
         self.switch = Ramp(1.0 if setting.on else 0.0)
+        # switched off by a Cut / Fade to black (everything): its first switch on comes back the same way, a cut
+        # (0) or a fade over the same seconds; None = switch as normal
+        self.mirror: float | None = None
 
     def out(self, now: float) -> float:
         return self.level.value(now) * self.switch.value(now)
@@ -166,7 +173,7 @@ class _House:
 class HouseView:
     level: float  # fader position now (moves during fades)
     on: bool  # the switch
-    out: float  # what's actually sent, after the switch fade and Blackout
+    out: float  # what's actually sent, after the switch's fade
 
 
 @dataclass(frozen=True)
@@ -196,8 +203,7 @@ class EngineFrame:
     colours: Mapping[str, RGB] = EMPTY  # colour light id -> (r, g, b) 0-1
     house: Mapping[str, HouseView] = EMPTY
     master: float = 1.0
-    blackout: bool = False
-    blackout_amount: float = 0.0  # 0 = normal, 1 = fully black (moves during the fade)
+    colour_black: bool = False  # nothing on Base or in the overlays (after a Cut / Fade to black, say)
     output: OutputStatus = OutputStatus()
     base: str = "Black"  # name of what's on Base
     base_id: str = ""  # its input id ("" = nothing)
@@ -277,16 +283,13 @@ class Engine:
         now = clock()
         live = live or LiveState()
         self._master = Ramp(clamp01(live.master))
-        self._blackout = bool(live.blackout)
-        self._blackout_ramp = Ramp(1.0 if live.blackout else 0.0)
-        # a Blackout from before the restart (e.g. quit with "Turn lights off") gives way to an automation that
-        # brings the lights up, so an unattended Sunday morning isn't left dark
-        self._blackout_restored = bool(live.blackout and live.blackout_by_quit)  # (never one a person clicked)
-        self._blackout_by_quit = self._blackout_restored
-        # when that quit was (an older live.json only says when it was last saved; failing that, at least before this
-        # start): only a time range that begins after it lifts the Blackout
-        quit_at = live.blackout_quit_at if live.blackout_quit_at > 0 else live.saved_at if live.saved_at > 0 else wall()
-        self._quit_at: float | None = quit_at if self._blackout_restored else None
+        # After a "Turn lights off" quit the lights start black and stay so against automations until a time range
+        # begins after the quit (e.g. Sunday 09:00), so a feed coming back at 03:00 doesn't light the church. A
+        # person sending anything takes charge at once. quit_at: when that quit was (an older live.json only says
+        # when it was last saved; failing that, at least before this start).
+        self._quit_dark = bool(live.quit_dark)
+        quit_at = live.quit_at if live.quit_at > 0 else live.saved_at if live.saved_at > 0 else wall()
+        self._quit_at: float | None = quit_at if self._quit_dark else None
         self._house: dict[str, _House] = {}
         self._house_driven: dict[str, str] = {}  # house light id -> the input that set it
         self._sync_house(live.house)
@@ -371,16 +374,10 @@ class Engine:
             self._watchdog.start()
 
     def stop(self, lights_off: bool = False, fade: bool = True) -> LiveState:
-        """Stop ticking. lights_off fades to black first (0.5 s). Returns the state to save."""
-        was_dark, was_by_quit = self._blackout, self._blackout_by_quit  # (a Blackout someone clicked stays theirs)
+        """Stop ticking. lights_off fades everything to black first (QUIT_FADE). Returns the state to save."""
         if lights_off and fade and self._running:
-            self.submit(SetBlackout(on=True))
-            deadline = time.perf_counter() + BLACKOUT_FADE + 0.5
-            while time.perf_counter() < deadline:
-                frame = self.frames.get()
-                if frame is not None and frame.blackout and frame.blackout_amount >= 1.0:
-                    break
-                time.sleep(0.02)
+            self.submit(ToBlack(QUIT_FADE, everything=True))
+            time.sleep(QUIT_FADE + 0.1)  # (the engine thread fades the lights meanwhile)
         with self._lock:
             was_running = self._running
             self._running = False
@@ -394,11 +391,10 @@ class Engine:
             except Exception as exc:
                 log_exception("engine final tick", exc)
         if lights_off:
-            self._blackout = True
-            # an automation after the restart may lift a quit's Blackout, never one someone had clicked before
-            self._blackout_by_quit = was_by_quit if was_dark else True
-            if not was_dark:
-                self._quit_at = self._wall()  # a new quit Blackout (one left from an earlier quit keeps that quit's time)
+            self._to_black(0.0, True, self._clock())  # (black for sure, faded or not)
+            if not self._quit_dark:
+                self._quit_at = self._wall()  # a new quit (one still held from an earlier quit keeps that quit's time)
+            self._quit_dark = True
         return self.live_state()
 
     @property
@@ -421,9 +417,8 @@ class Engine:
         return LiveState(
             show=self.show.folder,
             master=self._master.target,
-            blackout=self._blackout,
-            blackout_by_quit=self._blackout and self._blackout_by_quit,
-            blackout_quit_at=(self._quit_at or 0.0) if self._blackout and self._blackout_by_quit else 0.0,
+            quit_dark=self._quit_dark,
+            quit_at=(self._quit_at or 0.0) if self._quit_dark else 0.0,
             house={fid: HouseSetting(h.level.target, h.on) for fid, h in self._house.items()},
             base=base,
             overlays=overlays,
@@ -454,9 +449,8 @@ class Engine:
         for light_id, (r, g, b) in zip(self._lights.ids, sampled):
             colours[light_id] = (clamp01(r) * master, clamp01(g) * master, clamp01(b) * master)
         self._apply_overrides(colours, now)
-        keep = 1.0 - self._blackout_ramp.value(now)
-        out_colours = {fid: (r * keep, g * keep, b * keep) for fid, (r, g, b) in colours.items()}
-        house_out = {fid: h.out(now) * keep for fid, h in self._house.items()}
+        out_colours = colours
+        house_out = {fid: h.out(now) for fid, h in self._house.items()}
 
         if self._holding and not (self._ctx.waiting and now < self._hold_until):
             self._holding = False  # every feed has a picture (or it's been long enough): from now on, always send
@@ -468,7 +462,8 @@ class Engine:
             self.sources.tidy()
             videos.tidy()
         # the lights' frame is out: only now a picture for the screen, if one's wanted and the engine is on time
-        if self._preview_wanted and now - self._last_preview >= PREVIEW_INTERVAL and time.perf_counter() >= self._late_until:
+        interval = PREVIEW_INTERVAL if time.perf_counter() >= self._late_until else LATE_PREVIEW_INTERVAL
+        if self._preview_wanted and now - self._last_preview >= interval:
             self._last_preview = now
             picture = self._render_picture(now)
             if picture is not None:
@@ -513,6 +508,51 @@ class Engine:
             return self._last_canvas
         self._last_canvas = canvas
         return canvas
+
+    def _to_black(self, seconds: float, everything: bool, now: float) -> None:
+        """Cut or fade the colour lights to black: the mix as it is now (Base and the overlays, as one still look)
+        fades to nothing on Base, and the overlays are cleared at once (their look is in it). everything: the house
+        lights' switches go off too, over the same time, keeping their levels; each remembers how, so its next
+        plain switch on brings it back the same way."""
+        base = self._base
+        showing = base.current is not None or base.transitioning(now) or any(slot.visibility(now) > 0.0 for slot in self._overlays)
+        solo, self._solo = self._solo, None  # (the Editor's "Show on lights" ends too: black means black)
+        if seconds > 0.0 and (showing or solo is not None):
+            canvases = {}
+            for ctx in self._contexts():
+                ctx.globals, ctx.audio = self._ctx.globals, self._ctx.audio
+                if solo is not None:
+                    canvases[layer_kind(ctx)] = render_input(solo, now, ctx)  # what the lights were showing
+                else:
+                    canvases[layer_kind(ctx)] = composite(base.render(now, ctx), [slot.render(now, ctx) for slot in self._overlays])
+            base.outgoing = Frozen(canvases)
+            base.transition = Transition("fade", seconds)
+            base.t_start = now
+        else:
+            base.outgoing = None
+            base.transition = Transition("cut", 0.0)
+        base.current = None
+        for slot in self._overlays:
+            slot.clear_now()
+        self._house_driven.clear()
+        if everything:
+            for house in self._house.values():
+                if house.on:
+                    house.on = False
+                    house.switch.set(0.0, seconds, now)
+                    house.mirror = seconds
+
+    def colour_black(self, now: float | None = None) -> bool:
+        """Nothing on Base or in any overlay, and no fade still going: the colour lights are black."""
+        now = self._clock() if now is None else now
+        base = self._base
+        return (base.current is None and not base.transitioning(now)
+                and not any(slot.visibility(now) > 0.0 or slot.revealing(now) for slot in self._overlays))
+
+    def _end_quit_dark(self, why: str) -> None:
+        if self._quit_dark:
+            self._quit_dark = False
+            log_info(f"The lights are no longer held off after the \"Turn lights off\" quit: {why}")
 
     def _render_picture(self, now: float) -> np.ndarray | None:
         """A picture of what's on the lights, for the Dashboard (None if it can't be drawn: the lights carry on)."""
@@ -586,6 +626,8 @@ class Engine:
             except queue.Empty:
                 return applied
             try:
+                if self._quit_dark and isinstance(command, PERSON_TAKES_CHARGE):
+                    self._end_quit_dark("someone took charge")
                 self._apply(command, now)
                 applied = True
             except Exception as exc:
@@ -605,15 +647,15 @@ class Engine:
             on = (not house.on) if command.toggle else command.on
             if on is not None and on != house.on:
                 house.on = on
-                fade = HOUSE_SWITCH_FADE if command.fade is None else command.fade
+                if on and house.mirror is not None and command.fade is None and command.level is None:
+                    fade = house.mirror  # back on the way a Cut / Fade to black put it out (a plain switch on)
+                else:
+                    fade = HOUSE_SWITCH_FADE if command.fade is None else command.fade
                 house.switch.set(1.0 if on else 0.0, fade, now)
-        elif isinstance(command, SetBlackout):
-            target = (not self._blackout) if command.on is None else bool(command.on)
-            self._blackout_restored = False  # someone (or an automation) has taken charge of it
-            self._blackout_by_quit = False
-            if target != self._blackout or command.instant:
-                self._blackout = target
-                self._blackout_ramp.set(1.0 if target else 0.0, 0.0 if command.instant else BLACKOUT_FADE, now)
+            if house.on:
+                house.mirror = None  # it's on again: its switch works as normal from now on
+        elif isinstance(command, ToBlack):
+            self._to_black(max(0.0, float(command.seconds)), bool(command.everything), now)
         elif isinstance(command, SendToBase):
             inp = self._input(command.input_id)
             transition = command.transition or inp.transition if inp is not None else None
@@ -701,7 +743,8 @@ class Engine:
             for slot in self._overlays
         )
         base = self._base.current.input.id if self._base.current is not None else ""
-        key = (base, overlays, self._blackout, id(self._ctx.globals), tuple(sorted(self._ndi_sending.items())), id(self.show.automations))
+        colour_black = self.colour_black(now)
+        key = (base, overlays, colour_black, id(self._ctx.globals), tuple(sorted(self._ndi_sending.items())), id(self.show.automations))
         events = set()
         if self._first_check:
             events.add("app_started")
@@ -716,9 +759,9 @@ class Engine:
             # "feed lost" isn't true yet, so an automation about it waits
             situation = Situation(
                 now=wall, local=self._local_time(wall), base=base, overlays=overlays, variables=self._ctx.globals,
-                ndi=dict(self._ndi_sending), blackout=self._blackout, audio=dict(self._ctx.audio), events=frozenset(events),
+                ndi=dict(self._ndi_sending), colour_black=colour_black, audio=dict(self._ctx.audio), events=frozenset(events),
                 ndi_known=now >= self._feeds_until,
-                quit_blackout_since=self._quit_at if self._blackout and self._blackout_restored else None,
+                quit_dark_since=self._quit_at if self._quit_dark else None,
             )
             self._first_check = False
             self._woke = False
@@ -747,11 +790,18 @@ class Engine:
         if command is None:
             log_info(f"Automation {who}: couldn't {describe_action(action, self.show)} (is it still there?)", key=f"automation-skip-{who}")
             return
-        if lifts and self._blackout and self._blackout_restored and _brings_lights_up(command):
-            # a lights-off quit's Blackout gives way to a run made by a time range that began after the quit (e.g.
-            # Sunday 09:00), not to "CentraLight starts", a feed coming back or a "when it stops" step
-            log_info(f"Automation {who}: lifting the Blackout left from before CentraLight restarted")
-            self._apply(SetBlackout(on=False), now)
+        if self._quit_dark and _brings_lights_up(command):
+            if not lifts:
+                # after a "Turn lights off" quit, only a run made by a time range that began after the quit (e.g.
+                # Sunday 09:00) lights things: not "CentraLight starts", a feed coming back or "when it stops"
+                log_info(f"Automation {who}: left the lights off (CentraLight was quit with \"Turn lights off\"; "
+                         "a scheduled time that begins after that lights them)", key=f"quit-dark-{who}")
+                return
+            self._end_quit_dark(f"automation {who} began its time")
+        if isinstance(command, SetHouse):
+            house = self._house.get(command.fixture)
+            if house is not None:
+                house.mirror = None  # automations set house lights their own way, whatever the blackout was
         self._apply(command, now)
 
     def _on_wake(self) -> None:
@@ -971,8 +1021,7 @@ class Engine:
             colours=frozen_map(colours),
             house=frozen_map(house),
             master=self._master.value(now),
-            blackout=self._blackout,
-            blackout_amount=self._blackout_ramp.value(now),
+            colour_black=self.colour_black(now),
             output=self.output.status(),
             base=current.input.name if current is not None else "Black",
             base_id=current.input.id if current is not None else "",

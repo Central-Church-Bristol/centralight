@@ -97,7 +97,7 @@ QLabel#Percent[dim="true"] {
     color: @text_3;
 }
 
-QPushButton#Blackout {
+QPushButton#ToBlack {
     background: transparent;
     color: @danger;
     border: 2px solid @danger;
@@ -107,14 +107,10 @@ QPushButton#Blackout {
     font-weight: 600;
     min-height: 22px;
 }
-QPushButton#Blackout:hover {
+QPushButton#ToBlack:hover {
     background: #2A1220;
 }
-QPushButton#Blackout[active="true"] {
-    background: @danger;
-    color: #FFFFFF;
-}
-QPushButton#Blackout:disabled {
+QPushButton#ToBlack:disabled {
     color: @text_3;
     border-color: @border_strong;
     background: transparent;

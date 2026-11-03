@@ -80,13 +80,21 @@ Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -Name Centr
 - [ ] Same for **Key lights**.
 - [ ] Drag **Master** to 50 %: the SlimPARs dim; the festoon and key lights don't change.
 
-## 4. Blackout
+## 4. Cut to black and Fade to black
 
-- [ ] Click **Blackout**: everything fades to black in half a second and the button turns solid red,
-      **Lights off — click to restore**.
-- [ ] Click it again: everything comes back as it was.
-- [ ] Shift-click: instant, both ways.
-- [ ] Click the **padlock**: the faders and Blackout stop responding (a blue banner says so). Click it again.
+They're one-off buttons, not a switch: the next input you send lights things again.
+
+- [ ] With an input on Base and the Key lights on, click **Cut to black**: the colour lights go black at once; the
+      Key lights stay on.
+- [ ] Send an input again, then click **Fade to black**: the colour lights fade to black over 2 s.
+- [ ] Press and **hold** **Fade to black**: it fills up and says **Fade everything**; when it's full, everything fades
+      to black, the Festoon and Key lights too. Their switches go off; their faders keep their levels.
+- [ ] Switch the Key lights back on: they fade back up over the same 2 s. (After a held **Cut to black**, they come
+      back at once.) Switch them off and on again: now the usual half-second fade.
+- [ ] Shift-click **Cut to black**: everything at once, the same as holding it.
+- [ ] The time Fade to black takes is in Settings (gear) → **Cut / Fade to black**: note what you like.
+- [ ] Click the **padlock**: the faders and both black buttons stop responding (a blue banner says so). Click it
+      again.
 
 ## 5. Layout and Identify (find out where each light is)
 
@@ -168,7 +176,8 @@ Worship blue.
       "Send to Base" URL, tick **GET request in background**. Press the key: that input goes to Base.
 - [ ] Minimise CentraLight and press the key again: it still works. Open Settings (gear) and press it: still works.
 - [ ] Another key with `http://127.0.0.1:8746/api/var/speed?value=3`: the breathing in step 11 speeds up.
-- [ ] (Optional) A key with `http://127.0.0.1:8746/api/blackout/toggle`.
+- [ ] (Optional) Keys with `http://127.0.0.1:8746/api/black/fade` (the colour lights, over the time set in Settings) and
+      `http://127.0.0.1:8746/api/black/cut?all=1` (everything, at once).
 
 ## 13. A hotkey
 
@@ -264,6 +273,8 @@ Worship blue.
 - [ ] Ctrl+Shift+D (or the tray icon's menu → Diagnostics): the engine runs at about 40 ticks a second, the output
       shows the Eurolite sending, and CentraLight's CPU is a few % of one core at most. Click **Copy** and paste it
       somewhere: it's all there as text.
+- [ ] Its **On time** line: the engine's ticks start about 1 ms late, and none (or almost none) over 5 ms late,
+      even with the Editor playing a video. That's the lights coming first; the pictures on screen give way.
 
 ## 16. Unplug and replug the Eurolite (while it's running)
 
@@ -280,11 +291,11 @@ Worship blue.
 - [ ] Tray icon → **Quit CentraLight…** → Yes → **Leave lights as they are**: the lights stay exactly as they were.
 - [ ] `.\run.bat` again: the lights don't flicker or change when the app opens, overlays included.
 - [ ] Tray icon → **Quit CentraLight…** → Yes → **Turn lights off**: everything fades to black.
-- [ ] `.\run.bat` again: it opens blacked out (**Lights off — click to restore**); one click brings it all back.
-      (An automation lifts this Blackout by itself only when one of its time ranges begins after the quit, e.g.
-      Sunday 09:00–12:30 after a quit on Saturday, so an unattended Sunday morning isn't left dark. "CentraLight
-      starts", a feed coming back or a whole day such as "Sundays" never lifts it, and a Blackout someone clicks is
-      never lifted by an automation.)
+- [ ] `.\run.bat` again: it opens with everything black and nothing on Base. Send an input: the lights come back.
+      (Automations leave the lights off after a "Turn lights off" quit until one of their time ranges begins after
+      the quit, e.g. Sunday 09:00–12:30 after a quit on Saturday, so an unattended Sunday morning isn't left dark.
+      "CentraLight starts", a feed coming back or a whole day such as "Sundays" doesn't light them. Anything you
+      send yourself lights them at once.)
 - [ ] Optional, to see that happen: Automation tab → **+ New automation** → change **Days of the week** to today and
       **Time of day** to start two minutes from now, for five minutes → **+ Add an action ▾ → Send an input to Base**:
       Warm white. Straight away, quit with **Turn lights off** and start again: when the time range begins, the

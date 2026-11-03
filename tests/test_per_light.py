@@ -14,7 +14,7 @@ from centralight.compositor import blend
 from centralight.elements import RenderContext, element_is_dynamic
 from centralight.light_elements import AreaTable, colour_boost, light_picture, patch_boxes, shape_cover
 from centralight.lights import ASPECT, DEFAULT_AREA, IDENTIFY_PALETTE, area_half_size, identify_colours, lights_for
-from centralight.model import Fixture, Input, MapSpot
+from centralight.model import Fixture, Input, MapSpot, Transition
 from centralight.new_show import show_from_patch
 from centralight.schema import element_specs
 from centralight.show_io import freeze, input_from_dict, input_to_dict
@@ -408,10 +408,13 @@ class LightsFirstTests(unittest.TestCase):
         seq = engine.frames.get().preview_seq
         self.assertIsNotNone(engine.frames.get().preview)
         engine._late_until = time.perf_counter() + 10.0  # a tick just started late
-        for _ in range(5):
+        for _ in range(3):
             self.clock.advance(0.25)
             engine.tick()
         self.assertEqual(engine.frames.get().preview_seq, seq)  # the picture waited; the lights carried on
+        self.clock.advance(0.3)
+        engine.tick()
+        self.assertEqual(engine.frames.get().preview_seq, seq + 1)  # ...it slows to once a second, it doesn't stop
         self.assertTrue(engine.is_late())
         engine.set_preview_wanted(False)
         self.assertIsNone(engine._preview)
@@ -480,6 +483,105 @@ class LightsFirstTests(unittest.TestCase):
             window.deleteLater()
             process(app)
             folder.cleanup()
+
+
+class M10ReviewTests(unittest.TestCase):
+    """What a review of M10 found."""
+
+    def test_a_fill_pictures_cropped_strips_stay_hidden_when_it_moves(self) -> None:
+        image = np.zeros((240, 320, 3), dtype=np.uint8)  # 4:3: Fill crops a strip off the top and the bottom
+        image[:30] = (255, 0, 0)  # red, cropped away
+        image[-30:] = (0, 0, 255)  # blue, cropped away
+        image[30:-30] = (0, 255, 0)
+        ctx = lights_ctx([light("top", 0.5, 0.21), light("bottom", 0.5, 0.79), light("middle", 0.5, 0.5)])
+        small = light_picture({"kind": "image", "area": 0.0, "transform": {"scale": 0.5}}, ctx, AreaTable(image))
+        np.testing.assert_allclose(small[:, 0], 0.0)  # (0.5, 0.21) is above the shrunk picture: nothing, not red
+        np.testing.assert_allclose(small[:, 1], 0.0)  # and below it: nothing, not blue
+        np.testing.assert_allclose(small[:3, 2], (0.0, 1.0, 0.0))
+        moved = light_picture({"kind": "image", "area": 0.0, "transform": {"y": 0.62}}, ctx, AreaTable(image))
+        self.assertEqual(float(moved[0, 0]), 0.0)  # moved down: no red strip shows at the top either
+
+    def test_the_editors_dots_follow_changes_while_paused_with_smoothing_on(self) -> None:
+        from centralight.editor_render import EditorRenderer, EditorRequest
+        from centralight.input_edit import set_element_value
+        from centralight.new_show import FOLLOW_SCREEN_ID, follow_screen_input
+
+        sources = StubSources()
+        sources.put("Media Background Pane", np.full((180, 320, 3), (255, 0, 0), dtype=np.uint8))
+        inp = follow_screen_input()
+        show = show_from_patch().with_inputs({FOLLOW_SCREEN_ID: inp}, (FOLLOW_SCREEN_ID,))
+        show = set_element_value(show, FOLLOW_SCREEN_ID, "E1", "smooth", {"up": 1.0, "down": 1.0, "snap": False})
+        renderer = EditorRenderer(sources)
+        renderer.render_now(EditorRequest(show, FOLLOW_SCREEN_ID, None, 5.0))
+        sources.put("Media Background Pane", np.full((180, 320, 3), (0, 0, 255), dtype=np.uint8))
+        picture = renderer.render_now(EditorRequest(show, FOLLOW_SCREEN_ID, None, 5.0))  # paused: the same playhead
+        np.testing.assert_allclose(picture.colours["slimpar-101"], (0.0, 0.0, 1.0), atol=1e-6)  # it shows, not stuck
+
+    def test_the_editor_draws_less_while_the_engine_is_late_even_while_playing(self) -> None:
+        from centralight.editor_render import EditorRenderer
+        from centralight.new_show import FOLLOW_SCREEN_ID, follow_screen_input
+
+        sources = StubSources()
+        sources.put("Media Background Pane", np.full((180, 320, 3), (255, 0, 0), dtype=np.uint8))
+        show = show_from_patch().with_inputs({FOLLOW_SCREEN_ID: follow_screen_input()}, (FOLLOW_SCREEN_ID,))
+
+        def pictures_while_playing(late: bool) -> int:
+            renderer = EditorRenderer(sources, late=lambda: late)
+            renderer.start()
+            try:
+                began = time.perf_counter()
+                while time.perf_counter() - began < 0.8:  # playing: a new playhead every 20 ms
+                    renderer.request(show, FOLLOW_SCREEN_ID, None, time.perf_counter() - began)
+                    time.sleep(0.02)
+            finally:
+                renderer.stop()
+            return renderer._seq
+
+        self.assertLessEqual(pictures_while_playing(True), 3)  # at most twice a second while the lights run late
+        self.assertGreaterEqual(pictures_while_playing(False), 6)  # (and many more when they don't)
+
+    def test_a_light_added_mid_transition_doesnt_black_out_the_rest(self) -> None:
+        from dataclasses import replace
+
+        from centralight.commands import SendToBase, SwapShow
+        from centralight.engine import Engine
+        from tests.fakes import FakeClock, FakeOutput
+
+        def solid(input_id, hex_colour):
+            return Input(id=input_id, name=input_id, transition=Transition("fade", 2.0),
+                         tracks=freeze([[{"id": "E1", "kind": "paint", "fill": {"type": "colour", "colour": hex_colour}}], [], [], []]))
+
+        show = show_from_patch().with_inputs({"red": solid("red", "#FF0000"), "blue": solid("blue", "#0000FF")}, ("red", "blue"))
+        clock = FakeClock()
+        output = FakeOutput()
+        engine = Engine(show, output, None, initial_base="red", clock=clock)
+        engine.tick()
+        engine.submit(SendToBase("blue"))
+        engine.tick()
+        clock.advance(0.5)
+        engine.submit(SendToBase("red"))  # sent mid-fade: the mix is frozen, per light
+        engine.tick()
+        fewer = replace(show, fixtures=tuple(fx for fx in show.fixtures if fx.id != "slimpar-108"))
+        engine.submit(SwapShow(fewer))  # a light taken off the map meanwhile
+        clock.advance(0.5)
+        engine.tick()
+        self.assertEqual(engine._faults, 0)  # no tick failed
+        self.assertGreater(output.last[40], 0)  # SlimPAR 105 still lit (fading to red)
+        engine.submit(SendToBase("blue", cut=True))  # and a send now isn't lost
+        engine.tick()
+        self.assertEqual(engine.frames.get().base_id, "blue")
+
+    def test_pictures_tables_are_kept_in_a_size_limited_store(self) -> None:
+        from centralight import light_elements
+
+        self.assertIsNotNone(light_elements._tables.max_bytes)
+        ctx = RenderContext(160, 90, lights=lights_for(show_from_patch().fixtures))
+        from centralight.bus import _owner
+
+        for step in range(5):  # the lights moving: only the newest nearest-light map is kept
+            ctx.lights = lights_for([light("a", 0.1 + step * 0.1, 0.5)])
+            _owner(ctx)
+        self.assertEqual(sum(1 for key in ctx.cache if key == "nearest" or (isinstance(key, tuple) and key[:1] == ("nearest",))), 1)
 
 
 if __name__ == "__main__":

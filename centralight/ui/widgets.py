@@ -6,6 +6,7 @@ Everything is sized from the font, so it scales with Windows display scaling.
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLayout,
     QLayoutItem,
+    QPushButton,
     QSizePolicy,
     QSlider,
     QSplitter,
@@ -195,7 +197,9 @@ class WheelGuard(QObject):
 
 
 _wheel_guard: WheelGuard | None = None
-# A second click on Blackout (or an overlay button) this soon after the first is the same click: a hurried
+HOLD_SECONDS = 0.6  # holding a Cut / Fade to black button this long does it to everything
+HOLD_RELABEL = 0.15  # (its label changes only once it's clearly being held, so a click doesn't flicker it)
+# A second click on an overlay button this soon after the first is the same click: a hurried
 # double-click. A person correcting an accidental click takes longer than this, so that still works.
 DOUBLE_CLICK_GUARD_S = 0.35
 
@@ -214,6 +218,100 @@ def install_wheel_guard(app) -> None:
         for widget in app.allWidgets():  # (the ones that already exist)
             if isinstance(widget, (QAbstractSpinBox, QComboBox)):
                 _no_wheel_focus(widget)
+
+
+class HoldButton(QPushButton):
+    """A one-off button with two strengths: a click does one thing (tapped), holding it does the bigger thing
+    (held). While it's held it fills up and its label says the bigger thing, which happens when it's full. Shift with
+    a click (or with Space / Enter) does the bigger thing at once."""
+
+    tapped = Signal()
+    held = Signal()
+
+    def __init__(self, text: str, held_text: str, fill: str, parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self.text_normal = text
+        self.text_held = held_text
+        self._fill = QColor(fill)
+        self._pressed_at: float | None = None
+        self._fired = False
+        self.progress = 0.0  # 0-1 while it's held
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._step)
+
+    def widest_text(self) -> int:
+        fm = self.fontMetrics()
+        return max(fm.horizontalAdvance(self.text_normal), fm.horizontalAdvance(self.text_held))
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                event.accept()
+                self.held.emit()  # Shift-click: the bigger thing, at once
+                return
+            self._pressed_at = time.monotonic()
+            self._fired = False
+            self._timer.start()
+        super().mousePressEvent(event)
+
+    def _step(self) -> None:
+        if self._pressed_at is None:
+            self._timer.stop()
+            return
+        held = time.monotonic() - self._pressed_at
+        self.progress = min(1.0, held / HOLD_SECONDS)
+        if held >= HOLD_RELABEL and self.text() != self.text_held:
+            self.setText(self.text_held)
+        self.update()
+        if self.progress >= 1.0 and not self._fired:
+            self._fired = True
+            self._timer.stop()
+            self.held.emit()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self._pressed_at is not None:
+            fired = self._fired
+            inside = self.rect().contains(event.position().toPoint())
+            self._reset()
+            if not fired and inside:
+                self.tapped.emit()
+        super().mouseReleaseEvent(event)
+
+    def _reset(self) -> None:
+        self._timer.stop()
+        self._pressed_at = None
+        self.progress = 0.0
+        self.setText(self.text_normal)
+        self.update()
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.EnabledChange and not self.isEnabled():
+            self._reset()  # (locked while being held: nothing fires)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter) and not event.isAutoRepeat():
+            event.accept()
+            (self.held if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else self.tapped).emit()
+            return
+        super().keyPressEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if self.progress <= 0.0:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        box = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        painter.setClipRect(QRectF(box.left(), box.top(), box.width() * self.progress, box.height()))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._fill)
+        painter.drawRoundedRect(box, 7, 7)
+        painter.setPen(QColor("#FFFFFF"))
+        painter.setFont(self.font())
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, self.text())
+        painter.end()
 
 
 class Fader(QSlider):

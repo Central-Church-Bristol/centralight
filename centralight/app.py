@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not settings.remote_key:
         settings.remote_key = new_key()  # only used if "Allow other computers" is switched on
-    remote = RemoteServer(engine, settings.remote_port, settings.remote_lan, settings.remote_key)
+    remote = RemoteServer.from_settings(engine, settings)
     remote.start()  # if the port is taken, the header's Remote chip says so
 
     window = MainWindow(settings, show, engine, output, remote=remote)
