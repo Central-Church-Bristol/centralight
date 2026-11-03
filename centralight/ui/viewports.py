@@ -12,7 +12,9 @@
 - Result: the whole input, with a strip underneath showing each light's colour,
   worked out exactly as the engine does it.
 
-Both have a Lights toggle that shows or hides the dots, rings and names.
+Both have a Lights toggle that shows or hides the dots and names. With an Image, Video or NDI
+element selected, the Selected viewport also draws each light's patch: the part of the picture
+it averages at the element's Area (lights are points: this is the only place patches show).
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..model import PATCH_RADIUS, Show
+from ..model import Show
 from ..output import RGB, to_byte
 from ..assets import ASSET_H, ASSET_W
 from ..params import evaluate, expression_of
@@ -94,6 +96,7 @@ class ViewportCanvas(QWidget):
         self._lights = True
         self._checker = QBrush(_checkerboard()) if checkerboard else None
         self.excluded: set[str] = set()
+        self.patches: tuple = ()  # (light id, x0, y0, x1, y1): the patch each light averages (Selected, pictures only)
         self.setMouseTracking(True)
         self.setMinimumSize(240, 135)
         policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -121,6 +124,11 @@ class ViewportCanvas(QWidget):
     def set_lights_visible(self, visible: bool) -> None:
         self._lights = visible
         self.update()
+
+    def set_patches(self, patches: tuple) -> None:
+        if patches != self.patches:
+            self.patches = patches
+            self.update()
 
     def canvas_rect(self) -> QRectF:
         area = QRectF(self.rect()).adjusted(1, 1, -1, -1)
@@ -169,17 +177,18 @@ class ViewportCanvas(QWidget):
         painter.setFont(font)
         fm = QFontMetrics(font)
         taken: list[QRectF] = []
+        for light_id, x0, y0, x1, y1 in self.patches:  # what each light averages of the selected picture
+            box = QRectF(self.to_widget(x0, y0), self.to_widget(x1, y1))
+            edge = QPen(QColor(theme.DANGER if light_id in self.excluded else "#C8D2E0"), 1, Qt.PenStyle.DashLine)
+            edge.setCosmetic(True)
+            painter.setPen(edge)
+            painter.setBrush(QColor(255, 255, 255, 18))
+            painter.drawRect(box)
         for fx in sorted(self._show.colour_fixtures(), key=lambda f: (f.map.y, f.map.x) if f.map else (0, 0)):
             if fx.map is None:
                 continue
             centre = self.to_widget(fx.map.x, fx.map.y)
-            radius = PATCH_RADIUS * canvas.width()
             excluded = fx.id in self.excluded
-            ring = QPen(QColor(theme.DANGER if excluded else "#C8D2E0"), 1, Qt.PenStyle.DashLine)
-            ring.setCosmetic(True)
-            painter.setPen(ring)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawEllipse(centre, radius, radius)
             painter.setPen(QPen(QColor("#000000"), 1.5))
             painter.setBrush(QColor(theme.DANGER if excluded else theme.TEXT))
             painter.drawEllipse(centre, 4.0, 4.0)
@@ -462,21 +471,28 @@ class SelectedViewport(ViewportCanvas):
         self._update_preview(force=True)
 
     def _light_area(self, point: QPointF):
-        """The patch of the (element's own) picture that the light under the pointer follows, or None."""
+        """A dab round the dot of the light nearest the pointer, in the element's own picture, or None if no light is
+        near. Paint is read exactly at a light's dot, so the dab only has to cover it: it stays clear of the next
+        light (at most 8 % of the width across)."""
         import cv2
         import numpy as np
 
-        from ..sampler import Sampler
-
         fx, fy = self.to_fraction(point)
-        sampler = Sampler(self._show.fixtures, ASSET_W, ASSET_H)
-        px, py = int(min(ASSET_W - 1, max(0, fx * ASSET_W))), int(min(ASSET_H - 1, max(0, fy * ASSET_H)))
-        index = int(sampler.owner[py, px])
-        if index < 0:
+        spots = [(fixture.map.x, fixture.map.y) for fixture in self._show.colour_fixtures() if fixture.map is not None]
+        if not spots:
             return None
-        area = (sampler.owner == index).astype(np.uint8)
+        aspect = ASSET_H / ASSET_W
+        distances = [math.hypot(x - fx, (y - fy) * aspect) for x, y in spots]
+        nearest = min(range(len(spots)), key=distances.__getitem__)
+        if distances[nearest] > 0.15:
+            return None
+        lx, ly = spots[nearest]
+        others = [math.hypot(x - lx, (y - ly) * aspect) for i, (x, y) in enumerate(spots) if i != nearest]
+        radius = min(0.04, 0.45 * min(others, default=1.0))
+        area = np.zeros((ASSET_H, ASSET_W), dtype=np.uint8)
+        cv2.circle(area, (round(lx * ASSET_W), round(ly * ASSET_H)), max(2, round(radius * ASSET_W)), 1, -1)
         transform = self.element.get("transform") if self.element is not None else None
-        if hasattr(transform, "get") and transform:  # the patch, seen in the element's own picture
+        if hasattr(transform, "get") and transform:  # the dab, seen in the element's own picture
             t = self.time
             matrix = cv2.getRotationMatrix2D((ASSET_W / 2.0, ASSET_H / 2.0), -evaluate(transform.get("rotation", 0.0), t, 0.0),
                                              max(1e-4, evaluate(transform.get("scale", 1.0), t, 1.0)))
@@ -910,7 +926,7 @@ class ViewportPanel(QFrame):
         self.canvas = canvas
         self.title = QLabel(title.upper())
         self.title.setObjectName("PanelTitle")
-        self.lights = _toggle("Lights", "Show or hide the lights' dots, rings and names", True)
+        self.lights = _toggle("Lights", "Show or hide the lights' dots and names", True)
         self.lights.toggled.connect(self._lights)
         self.toolbar = QHBoxLayout()
         self.toolbar.setSpacing(6)

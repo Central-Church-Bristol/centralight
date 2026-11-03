@@ -435,9 +435,16 @@ class DetailsPanel(QScrollArea):
         specs = element_specs(kind)
         title = Panel(f"{KIND_TITLES.get(kind, kind.title())} element · {self.element_id}")
         form = self._form(title)
+        group = ""
         for spec in specs:
             if not visible(spec, element, specs):
                 continue
+            if spec.group != group:
+                group = spec.group
+                if group:  # a small heading over settings that go together (e.g. Smoothing: Brighter, Darker, On cuts)
+                    heading = QLabel(group)
+                    heading.setObjectName("RowDetail")
+                    form.addRow(heading)
             field = self._field_for(spec, lambda value, final, path=spec.path: self._set_element(path, value, final))
             if spec.type == "file":
                 field.choose_requested.connect(lambda kind=kind: self._choose_file(kind))
@@ -678,7 +685,7 @@ class DetailsPanel(QScrollArea):
         raw = get_param(element, where)
         t = self.element_time()
         kind = "colour" if spec is not None and spec.type == "colour" else "number"
-        name = f"{element_name(element)}: {spec.label.lower() if spec else where}"
+        name = f"{element_name(element)}: {spec.title.lower() if spec else where}"
         if key_at(raw, t) is not None:
             self._apply(remove_key(self.show_data, self.input_id, self.element_id, where, t), f"{name}: remove keyframe at {t:.2f} s")
             return
@@ -720,7 +727,7 @@ class DetailsPanel(QScrollArea):
         data = {k: v for k, v in raw.items() if k != "keys"} if hasattr(raw, "items") else {}
         fixed = {**data, "value": value} if "expr" in data else value
         self._apply(set_param(self.show_data, self.input_id, self.element_id, where, fixed),
-                    f"{element_name(element)}: no keyframes on {spec.label.lower() if spec else where}")
+                    f"{element_name(element)}: no keyframes on {spec.title.lower() if spec else where}")
 
     # ------------------------------------------------------------ expressions
 
@@ -785,7 +792,7 @@ class DetailsPanel(QScrollArea):
             if target is None or spec is None:
                 return None
             raw = get_path(target, path, spec.default)
-            title, kind = spec.label, "colour" if spec.type == "colour" else "number"
+            title, kind = spec.title, "colour" if spec.type == "colour" else "number"
             subject = element_name(self.current_element()) if where == "element" else shape_name(target)
             element_key = f"{inp.id}/{self.element_id}"
         default = base_value(raw, 0.0, (1.0, 1.0, 1.0) if kind == "colour" else 0.0, kind)
@@ -920,7 +927,7 @@ class DetailsPanel(QScrollArea):
         if is_keyframed(raw):  # a keyframed setting: the change is a key at the playhead
             t = self._gesture_time(key)
             self._apply(set_key(self.show_data, self.input_id, self.element_id, path, t, value),
-                        f"{element_name(element)}: {spec.label.lower() if spec else path} keyframe at {t:.2f} s",
+                        f"{element_name(element)}: {spec.title.lower() if spec else path} keyframe at {t:.2f} s",
                         f"{key}/key/{t:.3f}/{self._gesture}")
         else:
             text = change_name(element_name(element), spec, get_path(element, path, spec.default), value) if spec else f"Change {element_name(element)}"
@@ -938,7 +945,7 @@ class DetailsPanel(QScrollArea):
         if is_keyframed(raw):
             t = self._gesture_time(key)
             self._apply(set_key(self.show_data, self.input_id, self.element_id, param_path(self.shape_id, path), t, value),
-                        f"{shape_name(shape)}: {spec.label.lower() if spec else path} keyframe at {t:.2f} s",
+                        f"{shape_name(shape)}: {spec.title.lower() if spec else path} keyframe at {t:.2f} s",
                         f"{key}/key/{t:.3f}/{self._gesture}")
         else:
             text = change_name(shape_name(shape), spec, get_path(shape, path, spec.default), value) if spec else f"Change {shape_name(shape)}"

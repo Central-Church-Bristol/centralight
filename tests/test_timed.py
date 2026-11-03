@@ -41,7 +41,7 @@ from centralight.params import (
     with_key_moved,
     without_key,
 )
-from centralight.sampler import CANVAS_H, CANVAS_W, sampler_for
+from centralight.lights import lights_for
 from centralight.show_io import freeze, input_from_dict, input_to_dict
 from tests.fakes import FakeClock, FakeOutput
 
@@ -124,10 +124,8 @@ class InputTimeTests(unittest.TestCase):
 class TimedRenderTests(unittest.TestCase):
     def colours(self, inp: Input, t: float) -> dict:
         show = show_from_patch()
-        ctx = RenderContext(CANVAS_W, CANVAS_H)
-        ctx.sampler = sampler_for(show.fixtures, None)
-        canvas = render_input(Instance(inp, 0.0), t, ctx)
-        return dict(zip(ctx.sampler.ids, ctx.sampler.sample(canvas)))
+        ctx = RenderContext(0, 0, lights=lights_for(show.fixtures), per_light=True)
+        return ctx.lights.colours(render_input(Instance(inp, 0.0), t, ctx))
 
     def red(self, inp: Input, t: float) -> float:
         return float(self.colours(inp, t)["slimpar-105"][0])

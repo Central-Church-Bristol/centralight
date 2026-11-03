@@ -217,14 +217,14 @@ class AIDialog(QDialog):
         prompt = edit_prompt(self.document.show, editing, text) if editing else create_prompt(self.document.show, text, self.name.text())
         QGuiApplication.clipboard().setText(prompt)
         self.copy_button.setText("Copied ✓")
-        QTimer.singleShot(2500, lambda: self.copy_button.setText("Copy prompt"))
+        QTimer.singleShot(2500, self.copy_button, lambda: self.copy_button.setText("Copy prompt"))  # (cancelled if it's gone)
         return prompt
 
     def copy_fix(self) -> str:
         message = fix_message(self.problems)
         QGuiApplication.clipboard().setText(message)
         self.fix_button.setText("Copied ✓")
-        QTimer.singleShot(2500, lambda: self.fix_button.setText("Copy error for the AI"))
+        QTimer.singleShot(2500, self.fix_button, lambda: self.fix_button.setText("Copy error for the AI"))  # (cancelled if it's gone)
         return message
 
     # ------------------------------------------------------------ checking the reply

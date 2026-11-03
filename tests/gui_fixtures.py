@@ -146,9 +146,19 @@ def rainbow_canvas(width: int = 160, height: int = 90) -> np.ndarray:
 
 
 def rainbow(engine: FakeEngine):
-    """A render function giving every colour light its own bright colour."""
-    canvas = rainbow_canvas()
-    return lambda _now: canvas
+    """A render function giving every colour light its own bright colour (from where it is across a rainbow)."""
+    made: dict = {}
+
+    def render(_now):
+        lights = engine._lights
+        if made.get("key") != lights.key:
+            layer = np.ones((4, lights.count), dtype=np.float32)
+            for i, x in enumerate(lights.x):
+                layer[:3, i] = colorsys.hsv_to_rgb(min(0.999, float(x)) * 0.85, 0.85, 1.0)
+            made.update(key=lights.key, layer=layer)
+        return made["layer"]
+
+    return render
 
 
 def busy_show_engine(show: Show | None = None) -> FakeEngine:

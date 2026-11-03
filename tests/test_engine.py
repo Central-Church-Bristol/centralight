@@ -102,7 +102,7 @@ class BlackoutAndMasterTests(EngineTestCase):
 
     def test_master_scales_colour_lights_only(self) -> None:
         engine, clock, output = self.make(LiveState(house={"dimmer-4": HouseSetting(1.0, True)}))
-        engine._render = lambda now: np.ones((4, 90, 160), dtype=np.float32)  # a white picture
+        engine._render = lambda now: np.ones((4, engine._lights.count), dtype=np.float32)  # white at every light
         engine.tick()
         self.assertEqual(output.last[SLIMPAR_101_RED], 255)
         engine.submit(SetMaster(0.5))

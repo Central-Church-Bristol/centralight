@@ -112,14 +112,16 @@ class LayoutPageTests(M1WindowTestCase):
         return window, engine, window.layout_page
 
     def test_the_map_is_positions_only(self) -> None:
-        from centralight.model import PATCH_RADIUS
-        from centralight.ui.layout_page import SCENE_W
+        from centralight.ui.layout_page import CORE
 
         _window, _engine, page = self.open_layout()
         self.assertFalse(hasattr(page, "r_spin"))  # no Size box
-        self.assertEqual({round(item.radius, 3) for item in page._items.values()}, {round(PATCH_RADIUS * SCENE_W, 3)})
+        self.assertFalse(hasattr(page, "territory"))  # no tinted patches: lights are points
+        for item in page._items.values():
+            self.assertFalse(hasattr(item, "radius"))  # and no rings
+            self.assertLessEqual(item.boundingRect().width(), 2 * (CORE + 6))  # just the dot
         self.assertEqual([i for i in page.scene.items() if i.parentItem() in page._items.values()
-                          and i not in [it.label for it in page._items.values()]], [])  # no size knobs on the rings
+                          and i not in [it.label for it in page._items.values()]], [])  # nothing else on the dots
 
     def drag_item(self, page, fixture_id: str, dx: int, dy: int) -> None:
         item = page._items[fixture_id]

@@ -163,17 +163,46 @@ class ShapeEditingTests(EditorTestCase):
 
 
 class EditorControlsTests(EditorTestCase):
-    def test_blur_on_the_screen_element(self) -> None:
+    def test_area_boost_and_smoothing_on_the_screen_element(self) -> None:
         window, _engine = self.make()
         window.open_editor("follow-screen")
         page = window.editor_page
         page.select_element("E1")
         process(self.app)
-        field = page.details._fields["element:blur"]
+        self.assertNotIn("element:blur", page.details._fields)  # Blur is gone
+        field = page.details._fields["element:area"]
         self.assertIn("whole picture", field.toolTip())  # the help says what it does
+        self.assertAlmostEqual(field.spin.value(), 25.0)  # the default: about the patch each light followed before
         field.spin.setValue(40.0)
-        self.assertEqual(self.element(window, "follow-screen", "E1")["blur"], 0.4)
-        self.assertIn("blur", window.document.undo_group.undoText().lower())
+        self.assertEqual(self.element(window, "follow-screen", "E1")["area"], 0.4)
+        self.assertIn("area", window.document.undo_group.undoText().lower())
+        page.details._fields["element:boost"].spin.setValue(30.0)
+        page.details._fields["element:smooth.up"].spin.setValue(0.3)
+        page.details._fields["element:smooth.down"].spin.setValue(0.6)
+        element = self.element(window, "follow-screen", "E1")
+        self.assertEqual((element["boost"], element["smooth"]["up"], element["smooth"]["down"]), (0.3, 0.3, 0.6))
+        snap = page.details._fields["element:smooth.snap"]
+        self.assertTrue(snap.currentData())  # on to start with
+        snap.setCurrentIndex(snap.findData(False))
+        self.assertIs(self.element(window, "follow-screen", "E1")["smooth"]["snap"], False)
+
+    def test_patches_show_only_in_the_selected_view_for_pictures(self) -> None:
+        window, _engine = self.make()
+        window.open_editor("follow-screen")
+        page = window.editor_page
+        page.select_element("E1")  # the screen feed
+        process(self.app)
+        page.render_sync()
+        patches = page.selected_canvas.patches
+        self.assertEqual(len(patches), len([fx for fx in window.document.show.colour_fixtures() if fx.map]))
+        _id, x0, y0, x1, y1 = patches[0]
+        self.assertAlmostEqual(x1 - x0, 0.125, places=3)  # the default Area: a patch 1/8 of the width across
+        self.assertEqual(page.result_canvas.patches, ())  # never on the Result view
+        window.open_editor("warm-white")  # a Paint element: plain dots
+        page.select_element("E1")
+        process(self.app)
+        page.render_sync()
+        self.assertEqual(page.selected_canvas.patches, ())
 
     def test_typing_then_picking_something_else(self) -> None:
         """The details panel is rebuilt when another element is picked. A half-typed NDI source used to be

@@ -67,7 +67,7 @@ class EditorPage(QWidget):
         self.playhead = 0.0  # the input's time shown in the viewports (seconds)
         self.playing = True
         self._play_origin = time.monotonic()  # when time 0 would have been, while playing
-        self._renderer = EditorRenderer(sources)
+        self._renderer = EditorRenderer(sources, late=getattr(engine, "is_late", None))  # (fewer pictures while the engine runs late)
         self._renderer_running = False
         self._picture_version = -1
         self._live = False
@@ -501,8 +501,10 @@ class EditorPage(QWidget):
             tint = mask_tint(picture.keep) if (self.selected_canvas.mask_mode and picture.keep is not None) else None
             # (no picture yet, e.g. an NDI feed with no signal: show nothing, not the last element's picture)
             self.selected_canvas.set_image(rgba_image(picture.selected) if picture.selected is not None else None, tint)
+            self.selected_canvas.set_patches(picture.patches)
         elif not self.element_id:
             self.selected_canvas.set_image(None)
+            self.selected_canvas.set_patches(())
 
     def render_sync(self) -> None:
         """Draw the viewports straight away, without waiting for the render thread (tests, screenshots)."""

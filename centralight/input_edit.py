@@ -516,6 +516,8 @@ def set_excluded(show: Show, input_id: str, element_id: str, light_ids: list[str
 
 # ---------------------------------------------------------------- shapes
 
+NEW_SHAPE_SOFTNESS = 0.2  # a new shape's edge is a little soft, so a moving bar fades through a light (lights are points)
+
 
 def add_shape(show: Show, input_id: str, element_id: str, shape_type: str = "rect",
               x: float = 0.5, y: float = 0.5, w: float = 0.3, h: float = 0.4, colour: str = "#FFFFFF") -> tuple[Show, str]:
@@ -525,7 +527,8 @@ def add_shape(show: Show, input_id: str, element_id: str, shape_type: str = "rec
         return show, ""
     shape_id = new_element_id(inp, "S")
     shapes = thaw(found[2].get("shapes", [])) or []
-    shapes.append({"id": shape_id, "type": shape_type, "x": round(x, 4), "y": round(y, 4), "w": round(w, 4), "h": round(h, 4), "colour": colour})
+    shapes.append({"id": shape_id, "type": shape_type, "x": round(x, 4), "y": round(y, 4), "w": round(w, 4), "h": round(h, 4),
+                   "softness": NEW_SHAPE_SOFTNESS, "colour": colour})
     return set_element_value(show, input_id, element_id, "shapes", shapes), shape_id
 
 

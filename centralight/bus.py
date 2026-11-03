@@ -13,6 +13,9 @@ Overlays (4 is the top layer; transparent parts show the layers below):
 - Each slot has an opacity.
 
 Every running copy of an input keeps its own clock, starting at 0 when it's sent.
+
+The same buses work out the lights (a context with per_light: layers (4, lights)) and draw
+pictures for people (layers (4, h, w)); a mix frozen mid-transition keeps one of each.
 """
 
 from __future__ import annotations
@@ -45,10 +48,22 @@ class Instance:
 
 @dataclass
 class Frozen:
-    """A picture held still (the mix at the moment a transition was interrupted)."""
+    """A mix held still (at the moment a transition was interrupted): for the lights and for each picture size that
+    was being drawn then (one that wasn't is left out: it shows nothing)."""
 
-    canvas: np.ndarray
+    canvases: dict
     name: str = ""
+
+
+def _mode(ctx: RenderContext):
+    return "lights" if ctx.per_light else (ctx.width, ctx.height)
+
+
+def empty_layer(ctx: RenderContext) -> np.ndarray:
+    """Nothing: no light lit, or a transparent picture."""
+    if ctx.per_light:
+        return ctx.lights.empty()
+    return transparent(ctx.height, ctx.width)
 
 
 def track_elements(track, t: float, inp: Input) -> list:
@@ -82,6 +97,8 @@ def render_input(instance: Instance, now: float, ctx: RenderContext) -> np.ndarr
     inp = instance.input
     t = input_time(inp, instance.time(now))
     canvas = None
+    ctx.memory = instance.memory
+    ctx.now = now
     scope = scope_for(inp, t, ctx.globals, ctx.audio, instance.memory)
     with use_scope(scope):
         for track in inp.tracks:
@@ -95,11 +112,12 @@ def render_input(instance: Instance, now: float, ctx: RenderContext) -> np.ndarr
                 new_start = element_span(new, inp)[0]
                 progress = (t - new_start) / max(old_end - new_start, 1e-6)
                 spec = new.get("in") if hasattr(new.get("in"), "get") else {}
-                blank = transparent(ctx.height, ctx.width)
+                blank = empty_layer(ctx)
                 layer = mix(str(spec.get("kind", "fade")), old_layer if old_layer is not None else blank,
                             new_layer if new_layer is not None else blank, min(1.0, max(0.0, progress)),
                             direction=float(spec.get("direction", 0.0)), softness=float(spec.get("softness", 0.25)),
-                            owner=_owner(ctx), seed=seed_for(f"{inp.id}/{new.get('id')}"), cache=ctx.cache)
+                            owner=_owner(ctx), seed=seed_for(f"{inp.id}/{new.get('id')}"), cache=ctx.cache,
+                            points=_points(ctx))
                 mode = blend_mode(new if progress >= 0.5 else old)
             else:
                 element, layer = layers[0]
@@ -109,7 +127,7 @@ def render_input(instance: Instance, now: float, ctx: RenderContext) -> np.ndarr
                     layer = _in_and_out(inp, element, layer, t, ctx)
                 mode = blend_mode(element)
             canvas = blend(canvas, layer, mode)
-    return canvas if canvas is not None else transparent(ctx.height, ctx.width)
+    return canvas if canvas is not None else empty_layer(ctx)
 
 
 def _element_layer(inp: Input, element, t: float, ctx: RenderContext, scope) -> np.ndarray | None:
@@ -117,6 +135,7 @@ def _element_layer(inp: Input, element, t: float, ctx: RenderContext, scope) -> 
     ctx.time = t - element_span(element, inp)[0] if not inp.infinite else t
     key = f"{inp.id}/{element.get('id', '?')}"
     scope.element = key
+    ctx.element_key = key
     try:
         return render_element(element, ctx)
     except Exception as exc:  # a broken element draws nothing; the rest of the input carries on
@@ -138,20 +157,43 @@ def _in_and_out(inp: Input, element, layer: np.ndarray, t: float, ctx: RenderCon
             continue
         layer = reveal(str(spec.get("kind", "fade")), layer, max(0.0, into / duration),
                        direction=float(spec.get("direction", 0.0)), softness=float(spec.get("softness", 0.25)),
-                       owner=_owner(ctx), seed=seed_for(f"{inp.id}/{element.get('id')}/{which}"), cache=ctx.cache)
+                       owner=_owner(ctx), seed=seed_for(f"{inp.id}/{element.get('id')}/{which}"), cache=ctx.cache,
+                       points=_points(ctx))
     return layer
 
 
 def _render_source(source: Instance | Frozen | None, now: float, ctx: RenderContext) -> np.ndarray:
     if source is None:
-        return transparent(ctx.height, ctx.width)
+        return empty_layer(ctx)
     if isinstance(source, Frozen):
-        return source.canvas
+        canvas = source.canvases.get(_mode(ctx))
+        return canvas if canvas is not None else empty_layer(ctx)
     return render_input(source, now, ctx)
 
 
 def _owner(ctx: RenderContext) -> np.ndarray | None:
-    return ctx.sampler.owner if ctx.sampler is not None else None
+    """Which light each light (or each pixel of a picture: its nearest light) goes with, for Random."""
+    lights = ctx.lights
+    if lights is None:
+        return None
+    if ctx.per_light:
+        return lights.indices
+    key = ("nearest", lights.key, ctx.width, ctx.height)
+    nearest = ctx.cache.get(key)
+    if nearest is None:
+        nearest = lights.nearest_map(ctx.width, ctx.height)
+        ctx.cache[key] = nearest
+    return nearest
+
+
+def _points(ctx: RenderContext) -> tuple[np.ndarray, np.ndarray] | None:
+    return (ctx.lights.x, ctx.lights.y) if ctx.per_light else None
+
+
+def _contexts(ctx) -> tuple:
+    if ctx is None:
+        return ()
+    return tuple(ctx) if isinstance(ctx, (tuple, list)) else (ctx,)
 
 
 class Bus:
@@ -166,7 +208,8 @@ class Bus:
     def send(self, inp: Input, now: float, ctx: RenderContext | None = None, cut: bool = False,
              transition: Transition | None = None) -> bool:
         """Start inp on this bus (with its own transition, or the one given). Returns False if
-        nothing changed (an infinite input re-sent)."""
+        nothing changed (an infinite input re-sent). ctx: the context, or contexts (the lights' and the
+        pictures'), to freeze a mix in if a transition is interrupted."""
         if self.current is not None and self.current.input.id == inp.id and inp.infinite and not self.transitioning(now):
             return False
         self._start_transition(now, ctx, cut, transition or inp.transition, inp.id)
@@ -186,8 +229,9 @@ class Bus:
             self.outgoing = None
             self.transition = Transition("cut", 0.0)
             return
-        if self.transitioning(now) and ctx is not None:
-            self.outgoing = Frozen(self.render(now, ctx))  # freeze the mix as it is now
+        contexts = _contexts(ctx)
+        if self.transitioning(now) and contexts:
+            self.outgoing = Frozen({_mode(c): self.render(now, c) for c in contexts})  # freeze the mix as it is now
         else:
             self.outgoing = self.current
         self.transition = transition
@@ -220,7 +264,7 @@ class Bus:
         before = _render_source(self.outgoing, now, ctx)
         tr = self.transition
         return mix(tr.kind, before, current, progress, direction=tr.direction, softness=tr.softness,
-                   owner=_owner(ctx), seed=self._seed, cache=ctx.cache)
+                   owner=_owner(ctx), seed=self._seed, cache=ctx.cache, points=_points(ctx))
 
     def inputs_in_use(self) -> set[str]:
         return {i.input.id for i in (self.current, self.outgoing) if isinstance(i, Instance)}
@@ -292,7 +336,7 @@ class OverlaySlot:
         if visible < 1.0:
             # the reveal's own progress, from hidden (0) to shown (1), whichever way it's going
             layer = reveal(tr.kind, layer, visible, direction=tr.direction, softness=tr.softness,
-                           owner=_owner(ctx), seed=seed_for(f"overlay{self.number}"), cache=ctx.cache)
+                           owner=_owner(ctx), seed=seed_for(f"overlay{self.number}"), cache=ctx.cache, points=_points(ctx))
         if self.opacity < 1.0:
             layer = layer * self.opacity
         return layer

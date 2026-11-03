@@ -18,7 +18,8 @@ from centralight.input_edit import set_element_value
 from centralight.model import Input
 from centralight.new_show import create_show
 from centralight.painting import Canvas, brush_kernel
-from centralight.sampler import CANVAS_H, CANVAS_W, Sampler, sampler_for
+from centralight.light_elements import bilinear
+from centralight.lights import lights_for
 from centralight.show_io import freeze, load_show, save_whole_show
 
 
@@ -90,12 +91,17 @@ class BrushTests(unittest.TestCase):
         self.assertGreater(round_one.data[180, 320, 3], 0.95)
         self.assertLess(round_one.data[180, 425, 3], 0.01)
         self.assertAlmostEqual(float(round_one.data[130, 320, 3]), float(round_one.data[180, 370, 3]), places=2)
+        import cv2
+
         show = create_show(Path(tempfile.mkdtemp()) / "Show")
-        sampler = Sampler(show.fixtures, 640, 360)
-        patch = sampler.owner == sampler.ids.index("slimpar-106")
+        lights = lights_for(show.fixtures)
+        here = lights.ids.index("slimpar-106")
+        patch = np.zeros((360, 640), dtype=np.uint8)  # a dab round its dot, as the Light colour tool paints
+        cv2.circle(patch, (round(lights.x[here] * 640), round(lights.y[here] * 360)), 20, 1, -1)
         lit = Canvas()
-        lit.fill_area(patch, (0.5, 0.0, 1.0))
-        colours = dict(zip(sampler.ids, sampler.sample(np.ascontiguousarray(lit.data.transpose(2, 0, 1)))))
+        lit.fill_area(patch > 0, (0.5, 0.0, 1.0))
+        values = bilinear(lit.data, lights.x, lights.y)  # each light reads Paint at its dot
+        colours = {light_id: tuple(values[:3, i]) for i, light_id in enumerate(lights.ids)}
         np.testing.assert_allclose(colours["slimpar-106"], (0.5, 0.0, 1.0), atol=1e-3)
         np.testing.assert_allclose(colours["slimpar-107"], (0.0, 0.0, 0.0), atol=1e-3)
 
@@ -155,11 +161,9 @@ class PaintedElementTests(unittest.TestCase):
 
     def colours(self, element: dict) -> dict:
         inp = Input(id="painted", name="Painted", tracks=freeze([[element], [], [], []]))
-        ctx = RenderContext(CANVAS_W, CANVAS_H)
-        ctx.sampler = sampler_for(self.show.fixtures, None)
+        ctx = RenderContext(0, 0, lights=lights_for(self.show.fixtures), per_light=True)
         ctx.folder = self.show.folder
-        canvas = render_input(Instance(inp, 0.0), 0.0, ctx)
-        return dict(zip(ctx.sampler.ids, ctx.sampler.sample(canvas)))
+        return ctx.lights.colours(render_input(Instance(inp, 0.0), 0.0, ctx))
 
     def test_strokes_and_masks_on_the_lights(self) -> None:
         strokes = Canvas()

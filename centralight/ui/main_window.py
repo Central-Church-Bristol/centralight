@@ -264,6 +264,7 @@ class MainWindow(QWidget):
             self.editor_page.on_leave()
         self._page = key
         self.stack.setCurrentWidget(page)
+        self._update_preview_wanted()
         self.header.set_page(key)
         self.settings.page = key
         if key == "layout" and self.last_frame is not None:
@@ -556,7 +557,8 @@ class MainWindow(QWidget):
             self.diagnostics.raise_()
             self.diagnostics.activateWindow()
             return self.diagnostics
-        self.diagnostics = DiagnosticsDialog(lambda: self.last_frame, self, age_provider=self.frame_age)
+        self.diagnostics = DiagnosticsDialog(lambda: self.last_frame, self, age_provider=self.frame_age,
+                                             timing_provider=getattr(self.engine, "tick_timing", None))
         self.diagnostics.show()
         return self.diagnostics
 
@@ -740,6 +742,7 @@ class MainWindow(QWidget):
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
             self.bridge.set_slow(self.isMinimized())
+            self._update_preview_wanted()
             if self.isMinimized():
                 self._leave_live_modes()
             elif self.isVisible():
@@ -760,8 +763,16 @@ class MainWindow(QWidget):
                 pass
 
     def _back_in_sight(self) -> None:
+        self._update_preview_wanted()
         if self._page == "editor":
             self.editor_page.on_enter()  # its viewports draw again
+
+    def _update_preview_wanted(self) -> None:
+        """The engine draws the live picture only while the Dashboard is on screen (the lights never need it)."""
+        wanted = self._page == "dashboard" and self.isVisible() and not self.isMinimized() and not self._shut_down
+        setter = getattr(self.engine, "set_preview_wanted", None)
+        if setter is not None:
+            setter(wanted)
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -827,6 +838,7 @@ class MainWindow(QWidget):
     def hideEvent(self, event) -> None:  # noqa: N802
         super().hideEvent(event)
         self.dashboard.set_active(False)  # no drawing while hidden
+        self._update_preview_wanted()
         self._leave_live_modes()
 
     def closeEvent(self, event) -> None:  # noqa: N802

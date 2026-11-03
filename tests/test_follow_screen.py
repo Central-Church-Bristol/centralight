@@ -21,7 +21,7 @@ from centralight.engine import Engine
 from centralight.live_state import LiveState
 from centralight.model import Input, MapSpot, Transition
 from centralight.new_show import FOLLOW_SCREEN_ID, follow_screen_input, show_from_patch
-from centralight.sampler import identify_colours
+from centralight.lights import identify_colours
 from centralight.show_io import freeze
 from tests.fakes import FakeClock, FakeOutput, StubSources
 
@@ -74,7 +74,11 @@ class FollowScreenTests(BaseTestCase):
         self.assertEqual(self.output.last[41 - 1 + 7], 255)  # its dimmer channel at full
         frame = engine.frames.get()
         self.assertEqual((frame.base, frame.base_id), ("Follow screen", FOLLOW_SCREEN_ID))
-        self.assertEqual(frame.preview.shape, (90, 160, 3))
+        self.assertIsNone(frame.preview)  # no window shows the live picture: none is drawn
+        engine.set_preview_wanted(True)  # the Dashboard is on screen
+        self.clock.advance(0.25)
+        engine.tick()
+        self.assertEqual(engine.frames.get().preview.shape, (90, 160, 3))
         self.assertEqual(self.sources.keep, {"media background pane"})
 
     def test_lights_follow_the_newest_picture(self) -> None:
@@ -177,22 +181,22 @@ class BaseBusTests(BaseTestCase):
             [{"id": "E3", "kind": "paint", "fill": {"type": "colour", "colour": "#00FF00", "boom": True}}],
             [],
         ]))
-        import centralight.elements as elements
+        import centralight.light_elements as light_elements
 
-        original = elements.RENDERERS["paint"]
+        original = light_elements.light_paint
 
-        def fragile(element, ctx):
+        def fragile(element, ctx, u, v):
             if element.get("fill", {}).get("boom"):
                 raise ValueError("bad paint")
-            return original(element, ctx)
+            return original(element, ctx, u, v)
 
-        elements.RENDERERS["paint"] = fragile
+        light_elements.light_paint = fragile
         try:
             show = self.show.with_inputs({**self.show.inputs, "broken": broken})
             engine = Engine(show, self.output, None, sources=self.sources, initial_base="broken", clock=self.clock)
             engine.tick()
         finally:
-            elements.RENDERERS["paint"] = original
+            light_elements.light_paint = original
         # track 2's NDI picture covers track 1, and the broken track 3 is skipped
         self.assertEqual(self.rgb(41), (255, 0, 0))
         self.assertIn("broken/E3", engine._ctx.faults)

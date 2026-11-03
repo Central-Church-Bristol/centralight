@@ -1402,11 +1402,10 @@ class SecondReviewWindowTests(unittest.TestCase):
         self.window.setWindowState(_Qt.WindowState.WindowNoState)
         dialog.reject()
 
-    def test_the_layout_tabs_territories_follow_a_drag(self) -> None:
+    def test_a_dragged_light_is_followed_by_the_lights_at_once(self) -> None:
         self.window.show_page("layout")
         page = self.window.layout_page
         process(self.app, 2)
-        key = page._territory_key
         page.begin_drag()
         item = page._items["slimpar-101"]
         item.setPos(item.pos().x() + 40, item.pos().y())
@@ -1414,7 +1413,10 @@ class SecondReviewWindowTests(unittest.TestCase):
         page._push_drag_preview()
         page.end_drag()
         process(self.app)
-        self.assertNotEqual(page._territory_key, key)  # redrawn for where the light is now
+        self.engine.settle(0.1)
+        spot = self.window.document.show.fixture("slimpar-101").map
+        index = self.engine._lights.ids.index("slimpar-101")
+        self.assertAlmostEqual(float(self.engine._lights.x[index]), spot.x)  # the light reads from where it is now
 
     def test_dashboard_redo_redoes_only_what_its_undo_undid(self) -> None:
         from centralight.input_edit import update_input

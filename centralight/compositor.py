@@ -3,7 +3,9 @@
 Every picture is premultiplied RGBA float32 stored as four planes, shape (4, h, w):
 red, green, blue and alpha, with the colour already multiplied by its alpha (so "over
 black" is just the first three planes). Planes make every step a plain array sum
-(numpy is about 7× faster that way than with pixels stored as (h, w, 4)).
+(numpy is about 7× faster that way than with pixels stored as (h, w, 4)). The lights' own
+layers are the same with one value per light, shape (4, lights), so everything here works
+on them unchanged.
 
 Blend modes (how a track mixes with the tracks below it):
 - normal:   above + below·(1 − a_above)
@@ -64,35 +66,6 @@ def scale_alpha(layer: np.ndarray, amount: float | np.ndarray) -> np.ndarray:
 
 def is_identity(x: float, y: float, scale: float, rotation: float) -> bool:
     return abs(x - 0.5) < 1e-6 and abs(y - 0.5) < 1e-6 and abs(scale - 1.0) < 1e-6 and abs(rotation % 360.0) < 1e-6
-
-
-def blur(layer: np.ndarray, amount: float) -> np.ndarray:
-    """Soften a picture (planar premultiplied RGBA) so each light averages a wider area: 0 = as it is, 1 = every
-    pixel the whole picture's average. Sizes are in screen widths, so it looks the same at any canvas size."""
-    import cv2
-
-    amount = min(1.0, max(0.0, float(amount)))
-    if amount <= 0.0:
-        return layer
-    height, width = layer.shape[1:]
-    mean = layer.reshape(4, -1).mean(axis=1).astype(np.float32)
-    toward_mean = 0.0 if amount <= 0.6 else ease((amount - 0.6) / 0.4)  # ends at exactly the average
-    out = np.empty_like(layer)
-    if toward_mean >= 1.0:
-        out[:] = mean[:, None, None]
-        return out
-    # a box this wide, three times over: close to a Gaussian whose spread is half the box (50 % blur: a quarter of
-    # the picture's width, so lights near the middle clearly mix with their neighbours)
-    size = max(1, round(amount * width))
-    kernel = (min(size, width), min(size, height))
-    for plane in range(4):
-        smooth = layer[plane]
-        for _ in range(3):
-            smooth = cv2.blur(smooth, kernel, borderType=cv2.BORDER_REFLECT)
-        out[plane] = smooth
-    if toward_mean > 0.0:
-        out += (mean[:, None, None] - out) * np.float32(toward_mean)
-    return out
 
 
 def warp(layer: np.ndarray, x: float, y: float, scale: float, rotation: float) -> np.ndarray:
@@ -162,6 +135,21 @@ def direction_ramp(width: int, height: int, angle_degrees: float) -> np.ndarray:
     extent = abs(width / 2.0 * dx) + abs(height / 2.0 * dy)
     projection = xs[None, :] * np.float32(dx) + ys[:, None] * np.float32(dy)
     return np.clip(0.5 + projection / np.float32(2.0 * max(extent, 1e-6)), 0.0, 1.0)
+
+
+def direction_values(u: np.ndarray, v: np.ndarray, angle_degrees: float) -> np.ndarray:
+    """direction_ramp read at points (0-1 across and down), e.g. at the lights' dots."""
+    angle = math.radians(angle_degrees)
+    dx, dy = math.cos(angle), math.sin(angle)
+    extent = abs(8.0 * dx) + abs(4.5 * dy)  # (on a 16 x 9 screen: the same at any size)
+    projection = (np.asarray(u) - 0.5) * (16.0 * dx) + (np.asarray(v) - 0.5) * (9.0 * dy)
+    return np.clip(0.5 + projection / (2.0 * max(extent, 1e-6)), 0.0, 1.0)
+
+
+def radial_values(u: np.ndarray, v: np.ndarray, cx: float, cy: float, radius_widths: float) -> np.ndarray:
+    """radial_ramp read at points (0-1 across and down)."""
+    distance = np.sqrt((np.asarray(u) - cx) ** 2 + ((np.asarray(v) - cy) * (9.0 / 16.0)) ** 2)
+    return np.clip(distance / max(radius_widths, 1e-6), 0.0, 1.0)
 
 
 def radial_ramp(width: int, height: int, cx: float, cy: float, radius_widths: float) -> np.ndarray:

@@ -30,7 +30,7 @@ from centralight.elements import RenderContext
 from centralight.expressions import FUNCTIONS
 from centralight.model import GlobalVar
 from centralight.new_show import create_show, show_from_patch
-from centralight.sampler import CANVAS_H, CANVAS_W, sampler_for
+from centralight.lights import lights_for
 from centralight.schema import SHAPE, TRANSITION, element_specs
 from tests.gui_fixtures import with_inputs
 
@@ -284,12 +284,10 @@ Send it to an overlay to have the pillars breathe over whatever is on Base.'''
         show = show_with_globals()
         inp, problems, notes = check_input_data(parse_reply(self.REPLY), show)
         self.assertEqual(problems, [])
-        ctx = RenderContext(CANVAS_W, CANVAS_H)
-        ctx.sampler = sampler_for(show.fixtures, None)
+        ctx = RenderContext(0, 0, lights=lights_for(show.fixtures), per_light=True)
         colours = {}
         for moment in (0.0, 3.0):
-            canvas = render_input(Instance(inp, 0.0), moment, ctx)
-            colours[moment] = dict(zip(ctx.sampler.ids, ctx.sampler.sample(canvas)))
+            colours[moment] = ctx.lights.colours(render_input(Instance(inp, 0.0), moment, ctx))
         self.assertGreater(colours[0.0]["slimpar-106"][2], 0.5)  # a pillar: purple
         self.assertLess(sum(colours[0.0]["slimpar-101"]), 0.01)  # not a pillar: left alone (clear)
         self.assertNotEqual(tuple(colours[0.0]["slimpar-106"]), tuple(colours[3.0]["slimpar-106"]))  # and it breathes

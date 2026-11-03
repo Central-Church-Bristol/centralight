@@ -231,6 +231,9 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
         for element in track:
             if not isinstance(element, dict) or not isinstance(element.get("kind"), str):
                 raise InputFileError(f'every element on track {index} must be an object with a "kind"')
+        if any("blur" in element for element in track):  # (from before 4 Nov: each picture element's Area replaces it)
+            track = [{k: v for k, v in element.items() if k != "blur"} for element in track]
+            warnings.append(f'unknown field "blur" on track {index} was ignored (Area does that job now)')
         tracks.append(freeze(track))
     while len(tracks) < TRACK_COUNT:
         tracks.append(())

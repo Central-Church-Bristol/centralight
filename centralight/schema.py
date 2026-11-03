@@ -12,12 +12,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .lights import DEFAULT_AREA
 from .show_io import freeze, thaw
 
 BLEND_MODES = (("normal", "Normal"), ("add", "Add (brighter)"), ("multiply", "Multiply (darker)"), ("screen", "Screen (lighter)"))
 FIT_MODES = (("fill", "Fill (crop the edges)"), ("fit", "Fit (show it all)"))
 FILL_TYPES = (("none", "None"), ("colour", "Colour"), ("linear", "Straight gradient"), ("radial", "Round gradient"))
 SHAPE_TYPES = (("rect", "Rectangle"), ("ellipse", "Ellipse"))
+SNAP_CHOICES = ((True, "Snap"), (False, "Glide"))
 TRANSITION_CHOICES = (("cut", "Cut"), ("fade", "Fade"), ("dip", "Dip to black"), ("wipe", "Wipe"), ("iris", "Iris"), ("random", "Random by light"))
 ELEMENT_KINDS = (("paint", "Paint"), ("image", "Image"), ("video", "Video"), ("ndi", "NDI"))
 
@@ -36,6 +38,15 @@ class Spec:
     animatable: bool = True
     help: str = ""
     show_if: tuple[str, tuple[str, ...]] | None = None  # (path, values): only shown when that setting is one of these
+    group: str = ""  # shown under a small heading of this name, with the settings next to it in the same group
+    long_label: str = ""  # its full name, where the short label would be unclear on its own
+
+    @property
+    def title(self) -> str:
+        """The setting's full name, for undo steps, the expression editor and the AI guide."""
+        if self.long_label:
+            return self.long_label
+        return f"{self.group} ({self.label.lower()})" if self.group else self.label
 
 
 COMMON = (
@@ -71,9 +82,21 @@ SHAPE = (
     Spec("opacity", "Opacity", "number", 1.0, unit="%"),
 )
 
-BLUR = Spec("blur", "Blur", "number", 0.0, unit="%",
-            help="How much of the picture around each light it averages: 0 % = just around its own dot, "
-                 "100 % = the whole picture (calmer, smoother colours)")
+# Image, Video and NDI: how each light reads the picture (worked out at the lights' dots, light_elements.py)
+AREA = Spec("area", "Area", "number", DEFAULT_AREA, unit="%",
+            help="How much of the picture around each light it averages: 0 % = just the colour under its dot, "
+                 "100 % = the whole picture's average (bigger is calmer)")
+BOOST = Spec("boost", "Boost", "number", 0.0, unit="%", long_label="Colour boost",
+             help="Colour boost: puts back the colour that averaging a busy picture loses (more saturation, the same hue)")
+SMOOTHING = (
+    Spec("smooth.up", "Brighter", "number", 0.0, 0.0, 5.0, 0.05, unit="s", group="Smoothing",
+         help="How long each light takes to glide to a brighter colour (0 = straight away)"),
+    Spec("smooth.down", "Darker", "number", 0.0, 0.0, 5.0, 0.05, unit="s", group="Smoothing",
+         help="How long each light takes to glide to a darker colour (0 = straight away)"),
+    Spec("smooth.snap", "On cuts", "choice", True, choices=SNAP_CHOICES, animatable=False, group="Smoothing",
+         help="When most of the picture changes at once (a slide change, a cut): Snap = the lights jump straight there, "
+              "Glide = they glide like any other change"),
+)
 NDI = (Spec("source", "NDI source", "source", "Media Background Pane", animatable=False, help="Any NDI source whose name contains this"),)
 IMAGE = (Spec("file", "Picture", "file", "", animatable=False, help="A picture in the show's media folder"),)
 VIDEO = (Spec("file", "Video", "file", "", animatable=False, help="A video in the show's media folder"),
@@ -92,11 +115,11 @@ def element_specs(kind: str) -> tuple[Spec, ...]:
     if kind == "paint":
         return PAINT + COMMON
     if kind == "image":
-        return IMAGE + (BLUR,) + COMMON + (MEDIA_FIT,)
+        return IMAGE + (AREA, BOOST) + COMMON + (MEDIA_FIT,)
     if kind == "video":
-        return VIDEO + (BLUR,) + COMMON + (MEDIA_FIT,)
+        return VIDEO + (AREA, BOOST) + SMOOTHING + COMMON + (MEDIA_FIT,)
     if kind == "ndi":
-        return NDI + (BLUR,) + COMMON + (MEDIA_FIT,)
+        return NDI + (AREA, BOOST) + SMOOTHING + COMMON + (MEDIA_FIT,)
     return COMMON
 
 

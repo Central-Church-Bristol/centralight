@@ -27,7 +27,7 @@ from centralight.live_state import LiveState
 from centralight.model import Input, Transition
 from centralight.new_show import FOLLOW_SCREEN_ID, follow_screen_input, show_from_patch
 from centralight.params import base_value, evaluate, is_dynamic
-from centralight.sampler import Sampler
+from centralight.lights import lights_for
 from centralight.schema import element_specs, get_path, set_path, visible
 from centralight.show_io import freeze, input_from_dict, input_to_dict
 from centralight.transitions import mix, mix_map, reveal
@@ -217,7 +217,7 @@ class TransitionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.old = solid(1, 0, 0)
         self.new = solid(0, 0, 1)
-        self.owner = Sampler(show_from_patch().fixtures).owner
+        self.owner = lights_for(show_from_patch().fixtures).nearest_map(W, H)  # (a picture: each pixel's nearest light)
 
     def test_every_kind_starts_old_and_ends_new(self) -> None:
         for kind in ("cut", "fade", "dip", "wipe", "iris", "random"):

@@ -27,7 +27,7 @@ from .elements import media_path
 from .expressions import AUDIO_NAMES, FUNCTIONS, ExpressionError, compile_expression
 from .files import json_text, write_atomic
 from .log import log_info
-from .model import PATCH_RADIUS, ROLE_COLOUR, TRACK_COUNT, TRANSITION_KINDS, Input, Show, slugify
+from .model import ROLE_COLOUR, TRACK_COUNT, TRANSITION_KINDS, Input, Show, slugify
 from .schema import (
     BLEND_MODES,
     ELEMENT_KINDS,
@@ -47,6 +47,7 @@ SKILL_NAME = "centralight-inputs"
 SPECIAL_NAMES = {"t", "time", "value", "pi"}
 PICTURE_TYPES = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"}
 VIDEO_TYPES = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".wmv"}
+_PICTURE_SETTINGS = ("area", "boost", "smooth.up", "smooth.down", "smooth.snap", "transform.fit")  # (as each kind has them)
 
 
 class AIReplyError(Exception):
@@ -124,7 +125,7 @@ def examples(show: Show) -> list[tuple[str, dict]]:
 
 
 def _value_schema(spec: Spec) -> dict[str, Any]:
-    text = spec.label + (f" ({spec.help})" if spec.help else "")
+    text = spec.title + (f" ({spec.help})" if spec.help else "")
     if spec.type == "number":
         unit = {"%": " 0-1 (shown as %)", "°": " in degrees", "s": " in seconds", "×": " (1 = normal)"}.get(spec.unit, "")
         plain: dict[str, Any] = {"type": "number"}
@@ -133,7 +134,7 @@ def _value_schema(spec: Spec) -> dict[str, Any]:
         plain = {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}
         text += f'. A colour "#RRGGBB"; default "{spec.default}".'
     elif spec.type == "choice":
-        return {"enum": [value for value, _label in spec.choices], "description": f"{text}. Default {spec.default!r}."}
+        return {"enum": [value for value, _label in spec.choices], "description": f"{text}. Default {json.dumps(spec.default)}."}
     else:
         return {"type": "string", "description": f"{text}. Default {spec.default!r}."}
     if not spec.animatable:
@@ -241,11 +242,11 @@ def _spec_rows(specs: tuple[Spec, ...]) -> list[list[str]]:
         elif spec.type == "colour":
             values = '"#RRGGBB"'
         elif spec.type == "choice":
-            values = ", ".join(f'"{v}" ({label})' for v, label in spec.choices)
+            values = ", ".join(f"{json.dumps(v)} ({label})" for v, label in spec.choices)
         else:
             values = "text"
         animatable = "" if spec.animatable else " (fixed: no expression)"
-        rows.append([f"`{spec.path}`", (spec.label + (f": {spec.help}" if spec.help else "")) + animatable, values, f"`{json.dumps(spec.default)}`"])
+        rows.append([f"`{spec.path}`", (spec.title + (f": {spec.help}" if spec.help else "")) + animatable, values, f"`{json.dumps(spec.default)}`"])
     return rows
 
 
@@ -331,29 +332,32 @@ def guide_text(show: Show, full: bool = True) -> str:
         "### NDI (`\"kind\": \"ndi\"`): a live video feed",
         "`source`: any NDI source whose name contains this text. `\"Media Background Pane\"` is the church's own "
         "screen feed (what's on the projector).",
-        _table(_spec_rows(tuple(s for s in element_specs("ndi") if s.path in ("source", "blur", "transform.fit")))),
+        _table(_spec_rows(tuple(s for s in element_specs("ndi") if s.path in _PICTURE_SETTINGS + ("source",)))),
         "### Image (`\"kind\": \"image\"`)",
         "`file`: a picture inside the show folder, e.g. `media/sunrise.jpg`.",
-        _table(_spec_rows(tuple(s for s in element_specs("image") if s.path in ("file", "blur", "transform.fit")))),
+        _table(_spec_rows(tuple(s for s in element_specs("image") if s.path in _PICTURE_SETTINGS + ("file",)))),
         "### Video (`\"kind\": \"video\"`)",
         "`file`: a video inside the show folder, e.g. `media/candles.mp4`. It loops for as long as the element lasts; "
         "`speed` plays it faster or slower.",
-        _table(_spec_rows(tuple(s for s in element_specs("video") if s.path in ("file", "speed", "blur", "transform.fit")))),
+        _table(_spec_rows(tuple(s for s in element_specs("video") if s.path in _PICTURE_SETTINGS + ("file", "speed")))),
+        "How lights read a picture (NDI, Image and Video): each light shows the average of a square patch of this "
+        "element's picture around its dot, as big as `area` (0 = just the colour under the dot, 0.25 = a small patch, "
+        "the usual, 1 = the whole picture's average, the same for every light; bigger is calmer). `boost` puts back "
+        "the colour that averaging a busy picture loses. NDI and Video can also glide: `smooth.up` and `smooth.down` "
+        "are how many seconds each light takes to reach a brighter or darker colour (0 = at once), and with "
+        "`smooth.snap` (on unless it's `false`) a slide change or a cut still lands at once. These only change this "
+        "element, so a sharp Paint shape on another track stays sharp.",
         "### Painting (made in the Editor)",
         "A Paint element can have `strokes`: `paint/<code>.png`, brush painting made in the Editor, drawn between its "
         "fill and its shapes. Any element can have a painted mask, `\"mask\": {\"paint\": \"masks/<code>.png\"}` (white "
         "shows the element, black hides it), as well as `exclude`. These files are made by CentraLight: keep them as "
         "they are when you edit an input, and don't make up new names.",
-        "`blur` (NDI, Image and Video): every light follows the same small patch of the picture around its dot; blur makes "
-        "the lights average more of this element's picture, for calmer colours (100 % = the whole picture's average). "
-        "It only softens this element, so a sharp Paint shape on another track stays sharp.",
         "### Leaving lights alone (masks)",
-        "`\"mask\": {\"exclude\": [\"light-id\", ...]}` on any element: those lights ignore that element (their patch of "
-        "the picture is left clear for the tracks below, or for whatever is underneath in an overlay). This is how "
-        "\"only the pillars\" works.",
+        "`\"mask\": {\"exclude\": [\"light-id\", ...]}` on any element: those lights ignore that element (they show the "
+        "tracks below, or whatever is underneath in an overlay). This is how \"only the pillars\" works.",
         "## The lights",
-        lights + f"\n\nEach light shows the average colour of the picture within {PATCH_RADIUS:g} of the picture's "
-        "width of its dot (the same for every light).",
+        lights + "\n\nEach light is a point (its dot). Paint is read exactly at the dot, so a shape's `softness` decides "
+        "whether a light fades or switches as an edge passes it; pictures are averaged around the dot (`area`).",
         "## Settings that change: keyframes and expressions",
         "Any number or colour setting can be:\n"
         "- fixed: `0.5` or `\"#FF8800\"`\n"

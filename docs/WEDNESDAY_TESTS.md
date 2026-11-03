@@ -58,9 +58,20 @@ Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -Name Centr
       Background Pane isn't sending pictures (on 2 Nov it was stuck sending one picture per connection — see
       the build log); the lights then hold their last colours.
 - [ ] Colour changes reach the lights quickly (measured without the lights: about 50 ms).
-- [ ] **Blur**: Editor → Follow screen → click its NDI element → drag **Blur** up. The lights get calmer and
-      closer to each other in colour; at 100 % they all show the screen's average colour. Set it to what looks
-      best in the room (0 % is how it was before) and note the value.
+- [ ] **Area**: Editor → Follow screen → click its NDI element. **Area** says 25 %: about the patch each light
+      followed before, so the lights look as they did. The Selected view (left) shows each light's patch as a
+      dashed square.
+  - [ ] Drag Area to **0 %**: each light shows exactly the colour under its dot (busier, more varied).
+  - [ ] **50 %**: calmer; the lights get closer to each other in colour.
+  - [ ] **100 %**: every light shows the screen's average colour (what `ndi_pixel_mapper.py` did on Sunday).
+  - [ ] Set it to what looks best in the room and note the value.
+- [ ] **Colour boost**: with something busy and colourful on the screen, drag **Boost** to about 50 %: the lights'
+      colours get richer, with the same hues. Note what looks best (0 % is as before).
+- [ ] **Smoothing**: under **Smoothing**, set **Brighter** to about 0.3 s and **Darker** to about 0.6 s, and play
+      something that moves: the lights glide instead of jumping, and fade down more slowly than up.
+  - [ ] Change slide (a cut from one picture to another): with **On cuts: Snap**, the lights change at once.
+  - [ ] Set **On cuts** to **Glide** and change slide again: now they glide across the change.
+  - [ ] Note the times that look best (0 s is as before).
 
 ## 3. Festoon, key lights, Master
 
@@ -81,8 +92,8 @@ Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -Name Centr
 
 - [ ] **Layout** tab → switch on **Identify**: every SlimPAR shows a different colour, matching the dots and
       the list on the right.
-- [ ] Drag each dot to where that light is in the room (the map is the shape of the screen). The faint ring
-      round each dot is the part of the picture that light follows (the same size for every light).
+- [ ] Drag each dot to where that light is in the room (the map is the shape of the screen). A light is just its
+      dot: how much of a picture it averages is the picture element's **Area** (step 2).
 - [ ] Click a dot: that light flashes white three times.
 - [ ] Type where each light is in the **Where** column (e.g. "front left, above the drums"). It's saved to
       `fixture_map.csv`, the same file `usb_dmx_patch_test.py` uses.
@@ -210,7 +221,7 @@ Worship blue.
       view matches the lights. **Send to Base** again: it starts again.
 - [ ] Set **At the end: Stop** and send it: at the end it leaves Base.
 - [ ] **Video**: drag Video onto a track, **Choose…** a short video (it's copied into the show), send it to Base: the
-      lights follow the video. Try **Speed** and **Blur**. While it plays, glance at Task Manager: CentraLight should
+      lights follow the video. Try **Speed**, **Area** and **Smoothing**. While it plays, glance at Task Manager: CentraLight should
       stay small (note the CPU %).
 
 ## 14d. Painting and masks

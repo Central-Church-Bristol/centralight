@@ -24,6 +24,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M9 Polish (launcher .exe, Diagnostics) | **done** (3 Nov, 03:54) |
 | A review of the whole app (five reviewers, 46 problems) | **done** (3 Nov: part 1 at 05:21, part 2 at 06:00; 522 tests pass) |
 | Reviews of those fixes (four more rounds, each checking the one before) | **done** (3 Nov, 09:50; 563 tests pass) |
+| M10 Per-light colours (your change of 3 Nov) | **done** (3 Nov, 10:31; 570 tests pass; engine 0.16 ms a tick) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -47,6 +48,58 @@ Run all the tests (about five minutes, including the layout check at every scali
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## M10 Per-light colours — done (3 Nov)
+
+Your change of 3 Nov: work out each light's colour directly, instead of drawing a picture and sampling it.
+- **Lights are points.** Each light's colour is worked out at its dot, element by element
+  (`centralight\light_elements.py`). **Paint** is read exactly at the dot: its fill, gradients, brush strokes and
+  shapes. A shape's **Softness** decides whether a light fades or switches as an edge passes it, and new shapes get a
+  little Softness (20 %), so a moving bar fades through a light.
+- **Area** replaces Blur on Image, Video and NDI: how much of that element's own picture each light averages, as a
+  square patch round its dot. 0 % is the colour under the dot. The default, **25 %**, matches the patch every light
+  followed before: on test pictures the lights came out within 1–3 of 255 steps of before (1.2 on average), so
+  Follow screen looks the same. 100 % is exactly the whole picture's average for every light (what
+  `ndi_pixel_mapper.py` did on Sunday). It's a few lookups in a summed-area table of the picture, so it costs the
+  same at any Area. Each element has its own, and like any setting it can be keyed or given an expression.
+- **Colour boost** (shown as **Boost**; Image, Video and NDI; 0 % to start with): more saturation for each light
+  after averaging, with the same hue and brightness.
+- **Smoothing** (Video and NDI, off to start with): each light glides to its new colour, with separate times for
+  getting **Brighter** and **Darker**. **On cuts: Snap** (the default) lets a slide change or a video cut land at
+  once; **Glide** glides across it too. It's the same at any tick rate, and it's worked out on the element's own
+  colours, before opacity, masks, blending and transitions.
+- Layers, opacity, blend modes, the painted mask (read at each dot), lights left alone and every transition (wipe
+  and iris reach each light as their edge passes it; Random goes light by light) work per light. The sampler, its
+  owner map, weights and fixed patch are gone, and so is Blur: an old file's `blur` is ignored with a warning.
+- **Pictures are only for people now.** The Dashboard's live picture is drawn 5 times a second, only while the
+  Dashboard is on screen, and only after the lights' frame has gone out. The Editor's viewports are drawn as before
+  (without Blur); their light strip and dots come from the lights' own maths. Patches are drawn only in the Editor's
+  Selected view, for a selected Image, Video or NDI element, at its Area at the playhead. The Result view, the
+  Dashboard and the Layout tab show dots only (the Layout tab's rings, tinted patches and "use Blur" hint are gone).
+- The Light colour tool paints a dab round the dot of the light nearest the pointer (Paint is read at the dot).
+- **The lights come first.** The engine records how late each tick starts. While ticks are late, the Dashboard's
+  picture waits and the Editor redraws twice a second instead of eight times. Diagnostics (Ctrl+Shift+D) has a new
+  "On time" line with the last minute's figures.
+- A small fix found on the way: the AI window's Copy buttons could touch a closed window 2.5 s after a click (it
+  was harmless, but logged an error).
+
+**Engine time per tick** (`tests\test_m2_core.py`, one NDI element with a new picture every tick): typical
+**0.16 ms** (was 0.26 ms), worst case (a transition and four busy overlays) 2.2 ms (was about 4.7 ms).
+
+**The lights come first: measured** with `tools\tick_timing.py` (the real app, no visible window, Simulated output,
+a 960×540, 24 fps test feed on Base; 30 s each, 1,200 ticks). Lateness is how long after its time each tick started;
+a tick is the engine's own work. None of the ticks started more than 5 ms late, before M10 or after:
+
+| Situation | Late: median / 99th / worst | Ticks over 5 ms late | Tick: median / 99th / worst | Before M10: tick median |
+|---|---|---|---|---|
+| No window open | 0.49 / 1.00 / 1.1 ms | 0 | 0.25 / 0.45 / 0.5 ms | 0.38 ms |
+| The Dashboard showing | 0.50 / 1.06 / 2.6 ms | 0 | 0.26 / 0.80 / 2.0 ms | 0.41 ms |
+| The Editor playing a video (640×360) | 0.52 / 1.24 / 1.6 ms | 0 | 0.29 / 1.21 / 2.3 ms | 0.43 ms |
+
+The Editor's viewports kept up at full size (12.8 pictures a second while the video played; they aim for 8), so
+there's no need for a lower preview resolution. The engine never waited noticeably for Python's lock, so Python's
+thread switch interval is left as it is (5 ms). How late ticks start varies a little from run to run (medians of
+0.3–0.9 ms in other runs): that's Windows' timer, the same before and after.
 
 ## A fifth look (3 Nov, morning)
 
@@ -715,6 +768,16 @@ Problems the tests found and that are fixed:
 
 ## Decisions (made without you, as agreed — easy to change)
 
+- **M10's numbers** (all easy to change):
+  - **Area** grows as its square: a patch's half-width is Area² screen widths, so 25 % is 0.0625 (matching the old
+    patch), 50 % a quarter of the screen and 100 % the whole screen from anywhere. The patch is a square: it matched
+    the old round patch within 1.2 of 255 steps on average, and a square is exact and cheap to average.
+  - **Colour boost** 100 % multiplies a light's saturation by up to 4 (never past full).
+  - **Snap on cuts:** when more than half of an element's lights change by more than a quarter (of full) between
+    two looks at the picture, they jump instead of gliding.
+  - **New shapes** get 20 % Softness. Shapes already in your inputs keep theirs (0 % unless you set it).
+  - **The Light colour tool** paints a dab up to 8 % of the width across, and never as far as halfway to the next
+    light.
 - **Output defaults to Simulated.** Settings → Output → Eurolite (USB) drives the lights. Leaving the Eurolite
   (switching to Simulated or Art-Net) blacks its lights out first, so they're never left stuck on.
 - **House lights** start off, with their faders at 100 %. Dragging a fader turns that light on; the switch fades

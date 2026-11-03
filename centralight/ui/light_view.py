@@ -17,10 +17,11 @@ from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QImage, QPainter, QPen, QRadialGradient
 from PySide6.QtWidgets import QSizePolicy, QToolTip, QWidget
 
-from ..model import PATCH_RADIUS, Fixture, Show
+from ..model import Fixture, Show
 from ..output import RGB, to_byte
 from . import icons, theme
 
+GLOW_SIZE = 0.08  # each light's glow on the map, in screen widths (only how it looks: lights are points)
 HOUSE_STRIP = 30  # logical px under the map for the house-light bulbs
 HOUSE_GAP = 22  # logical px between one house light's legend and the next
 
@@ -92,7 +93,7 @@ class LightView(QWidget):
         if spot is None:
             return QPointF(), 0.0
         centre = QPointF(canvas.left() + spot.x * canvas.width(), canvas.top() + spot.y * canvas.height())
-        return centre, max(3.0, PATCH_RADIUS * canvas.width())
+        return centre, max(3.0, GLOW_SIZE * canvas.width())
 
     # ------------------------------------------------------------ painting
 
@@ -154,10 +155,6 @@ class LightView(QWidget):
         painter.setBrush(colour)
         painter.setPen(QPen(QColor(theme.BORDER_STRONG if brightness < 0.15 else theme.TEXT), 1.2))
         painter.drawEllipse(centre, core, core)
-        ring = QPen(QColor(theme.BORDER_STRONG), 1, Qt.PenStyle.DotLine)
-        painter.setPen(ring)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawEllipse(centre, radius, radius)
 
     def _paint_labels(self, painter: QPainter, dots, canvas: QRectF) -> None:
         font = theme.ui_font(11)

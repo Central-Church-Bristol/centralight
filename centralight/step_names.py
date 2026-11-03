@@ -63,7 +63,7 @@ def describe(spec: Spec, raw: Any) -> str:
 
 def change_name(subject: str, spec: Spec, old: Any, new: Any) -> str:
     """'Paint E2: opacity 80 % → 60 %'."""
-    return f"{subject}: {lower_first(spec.label)} {describe(spec, old)} → {describe(spec, new)}"
+    return f"{subject}: {lower_first(spec.title)} {describe(spec, old)} → {describe(spec, new)}"
 
 
 def level_name(level: Any) -> str:

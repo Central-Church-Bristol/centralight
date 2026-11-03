@@ -82,8 +82,10 @@ class ProcessMeter:
         return counters.PrivateUsage / 1e6
 
 
-def report(frame, meter: ProcessMeter | None = None, cores: int | None = None, age: float | None = None) -> list[tuple[str, str]]:
-    """(what, how it is) lines for a frame from the engine. age: seconds since the engine's last new frame."""
+def report(frame, meter: ProcessMeter | None = None, cores: int | None = None, age: float | None = None,
+           timing: dict | None = None) -> list[tuple[str, str]]:
+    """(what, how it is) lines for a frame from the engine. age: seconds since the engine's last new frame.
+    timing: the engine's last minute of ticks (Engine.tick_timing)."""
     lines: list[tuple[str, str]] = []
     if frame is None:
         return [("Engine", "not started yet")]
@@ -93,6 +95,10 @@ def report(frame, meter: ProcessMeter | None = None, cores: int | None = None, a
     else:
         lines.append(("Engine", f"{frame.tick_rate:.0f} ticks a second · {frame.tick_ms:.2f} ms a tick on average, "
                                 f"{frame.tick_max_ms:.1f} ms at worst"))
+    if timing:  # the lights come first: how late the engine's ticks started, over the last minute
+        lines.append(("On time", f"ticks start {timing['late_median_ms']:.1f} ms late (99 % within "
+                                 f"{timing['late_p99_ms']:.1f} ms, worst {timing['late_worst_ms']:.0f} ms) · "
+                                 f"{int(timing['late_over_5ms'])} of {int(timing['ticks'])} over 5 ms late"))
     trouble = []
     if frame.faults:
         trouble.append(f"{frame.faults} ticks failed")
@@ -132,11 +138,12 @@ def report(frame, meter: ProcessMeter | None = None, cores: int | None = None, a
 
 class DiagnosticsDialog(QDialog):
     def __init__(self, frame_provider: Callable[[], object], parent: QWidget | None = None,
-                 age_provider: Callable[[], float] | None = None) -> None:
+                 age_provider: Callable[[], float] | None = None, timing_provider: Callable[[], dict] | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Diagnostics")
         self._frame = frame_provider
         self._age = age_provider
+        self._timing = timing_provider
         self._meter = ProcessMeter()  # its first look (in the first refresh) starts the measuring
         self._rows: dict[str, QLabel] = {}
         self._lines: list[tuple[str, str]] = []
@@ -170,7 +177,8 @@ class DiagnosticsDialog(QDialog):
         self.resize(640, 420)
 
     def lines(self) -> list[tuple[str, str]]:
-        return report(self._frame(), self._meter, age=self._age() if self._age is not None else None)
+        return report(self._frame(), self._meter, age=self._age() if self._age is not None else None,
+                      timing=self._timing() if self._timing is not None else None)
 
     def refresh(self) -> None:
         self._lines = self.lines()

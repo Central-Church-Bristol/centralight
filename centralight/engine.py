@@ -71,7 +71,7 @@ from .commands import (
     SwapShow,
     SwitchLayout,
 )
-from .compositor import to_rgb8, transparent
+from .compositor import to_rgb8
 from .elements import RenderContext, ndi_sources_used
 from .live_state import HouseSetting, LiveState
 from .log import log_exception, log_info
@@ -81,14 +81,16 @@ from .ndi_source import SourceStatus
 from .output import RGB, OutputStatus, encode_dmx
 from .params import evaluate, is_dynamic
 from .variables import coerce_global, initial_globals, reconcile_globals, saveable, scope_for, use_scope
-from .sampler import CANVAS_H, CANVAS_W, identify_colours, sampler_for
+from .lights import CANVAS_H, CANVAS_W, identify_colours, lights_for
 from .slot import LatestSlot
 from .timing import sleep_until
 
 TICK_RATE = 40
 AUDIO_OFF = MappingProxyType({"level": 0.0, "bass": 0.0, "mid": 0.0, "treble": 0.0, "beat": 0.0, "pitch": 0.0})
 PUBLISH_INTERVAL = 0.1  # seconds between EngineFrames for the screen
-PREVIEW_INTERVAL = 0.2  # seconds between preview pictures for the screen
+PREVIEW_INTERVAL = 0.2  # seconds between preview pictures for the screen (only while a window shows one)
+LATE_TICK = 0.005  # seconds: a tick that starts this much after its time is late (pictures for the screen wait then)
+TIMING_WINDOW = 60  # seconds of tick timings kept for the lateness figures
 TIDY_INTERVAL = 1.0
 WATCHDOG_INTERVAL = 1.0
 STALL_SECONDS = 2.0
@@ -288,8 +290,10 @@ class Engine:
         self._house: dict[str, _House] = {}
         self._house_driven: dict[str, str] = {}  # house light id -> the input that set it
         self._sync_house(live.house)
-        self._sampler = sampler_for(show.fixtures, None)
-        self._ctx = RenderContext(CANVAS_W, CANVAS_H, self.sources, folder=show.folder, sampler=self._sampler)
+        # the lights' colours are worked out at their dots every tick; a picture is drawn only for a window showing one
+        self._lights = lights_for(show.fixtures, None)
+        self._ctx = RenderContext(0, 0, self.sources, folder=show.folder, lights=self._lights, per_light=True)
+        self._picture_ctx = RenderContext(CANVAS_W, CANVAS_H, self.sources, folder=show.folder, lights=self._lights)
         self._globals = initial_globals(show, live.globals)
         self._ctx.globals = frozen_map(self._globals)
         # automations
@@ -315,7 +319,7 @@ class Engine:
         self._solo: Instance | None = None
         self._solo_fixed = False  # the solo input came with its command (not from the show)
         self._restore_buses(live, initial_base, now)
-        self._last_canvas = transparent(CANVAS_H, CANVAS_W)
+        self._last_canvas = self._lights.empty()
         # At startup the lights keep showing what they showed (the dongle repeats it) until the feeds Base and the
         # overlays use have their first picture, instead of going black for a second or two meanwhile
         self._holding = True
@@ -330,6 +334,10 @@ class Engine:
         self._seq = 0
         self._preview_seq = 0
         self._preview: np.ndarray | None = None
+        self._preview_wanted = False  # a window shows the live picture (set_preview_wanted)
+        self._lateness: deque[float] = deque(maxlen=rate * TIMING_WINDOW)  # seconds each tick started after its time
+        self._work: deque[float] = deque(maxlen=rate * TIMING_WINDOW)  # seconds each tick took
+        self._late_until = 0.0  # pictures for the screen wait until then (a tick was late)
         self._last_publish = -1e9
         self._last_preview = -1e9
         self._last_tidy = -1e9
@@ -440,10 +448,10 @@ class Engine:
 
         self._ctx.waiting = False
         canvas = self._render(now)
-        sampled = self._sampler.sample(canvas)
+        sampled = canvas[:3].T  # (premultiplied colour is already "over black")
         master = self._master.value(now)
         colours: dict[str, RGB] = {}
-        for light_id, (r, g, b) in zip(self._sampler.ids, sampled):
+        for light_id, (r, g, b) in zip(self._lights.ids, sampled):
             colours[light_id] = (clamp01(r) * master, clamp01(g) * master, clamp01(b) * master)
         self._apply_overrides(colours, now)
         keep = 1.0 - self._blackout_ramp.value(now)
@@ -459,12 +467,16 @@ class Engine:
             self._last_tidy = now
             self.sources.tidy()
             videos.tidy()
-        if now - self._last_preview >= PREVIEW_INTERVAL:
+        # the lights' frame is out: only now a picture for the screen, if one's wanted and the engine is on time
+        if self._preview_wanted and now - self._last_preview >= PREVIEW_INTERVAL and time.perf_counter() >= self._late_until:
             self._last_preview = now
-            self._preview = to_rgb8(canvas)
-            self._preview_seq += 1
+            picture = self._render_picture(now)
+            if picture is not None:
+                self._preview = to_rgb8(picture)
+                self._preview_seq += 1
         elapsed = time.perf_counter() - started
         self._tick_times.append(elapsed)
+        self._work.append(elapsed)
         self._tick_stamps.append(started)
         if applied or now - self._last_publish >= PUBLISH_INTERVAL:
             self._publish(now, out_colours, house_out)
@@ -501,6 +513,54 @@ class Engine:
             return self._last_canvas
         self._last_canvas = canvas
         return canvas
+
+    def _render_picture(self, now: float) -> np.ndarray | None:
+        """A picture of what's on the lights, for the Dashboard (None if it can't be drawn: the lights carry on)."""
+        ctx = self._picture_ctx
+        ctx.globals = self._ctx.globals
+        ctx.audio = self._ctx.audio
+        try:
+            if self._solo is not None:
+                return render_input(self._solo, now, ctx)
+            canvas = self._base.render(now, ctx)
+            return composite(canvas, [slot.render(now, ctx) for slot in self._overlays])
+        except Exception as exc:
+            log_exception("drawing the live picture", exc)
+            return None
+
+    def set_preview_wanted(self, wanted: bool) -> None:
+        """A window shows the live picture (or stops showing it): it's only drawn while one does."""
+        self._preview_wanted = bool(wanted)
+        if not wanted:
+            self._preview = None
+
+    def _contexts(self) -> tuple:
+        """Where a mix interrupted mid-transition is frozen: the lights, and the live picture while it's shown."""
+        return (self._ctx, self._picture_ctx) if self._preview_wanted else (self._ctx,)
+
+    def tick_timing(self) -> dict[str, float]:
+        """The last minute's ticks: how late they started and how long they took (median, 99th percentile and
+        worst, in ms), and how many started over 5 ms late."""
+        late = sorted(self._lateness)
+        work = sorted(self._work)
+        if not late or not work:
+            return {}
+
+        def pick(values, share):
+            return values[min(len(values) - 1, int(share * (len(values) - 1) + 0.5))] * 1000.0
+
+        return {"ticks": float(len(late)), "late_median_ms": pick(late, 0.5), "late_p99_ms": pick(late, 0.99),
+                "late_worst_ms": late[-1] * 1000.0, "late_over_5ms": float(sum(1 for v in late if v > LATE_TICK)),
+                "work_median_ms": pick(work, 0.5), "work_p99_ms": pick(work, 0.99), "work_worst_ms": work[-1] * 1000.0}
+
+    def reset_timing(self) -> None:
+        """Start the tick timings afresh (for measuring one situation)."""
+        self._lateness.clear()
+        self._work.clear()
+
+    def is_late(self) -> bool:
+        """A tick started late in the last second: pictures for people should wait (the Editor draws fewer)."""
+        return time.perf_counter() < self._late_until
 
     def _apply_overrides(self, colours: dict[str, RGB], now: float) -> None:
         """Identify, test colours and flashes (after Master: they're always full brightness)."""
@@ -557,16 +617,16 @@ class Engine:
         elif isinstance(command, SendToBase):
             inp = self._input(command.input_id)
             transition = command.transition or inp.transition if inp is not None else None
-            if inp is not None and self._base.send(inp, now, self._ctx, cut=command.cut, transition=command.transition):
+            if inp is not None and self._base.send(inp, now, self._contexts(), cut=command.cut, transition=command.transition):
                 self._start_input_house(inp, now, 0.0 if command.cut else transition.duration)
         elif isinstance(command, ClearBase):
-            self._base.clear(now, self._ctx, cut=command.cut)
+            self._base.clear(now, self._contexts(), cut=command.cut)
             self._house_driven.clear()
         elif isinstance(command, SendToOverlay):
             slot = self._slot(command.slot)
             inp = self._input(command.input_id)
             if slot is not None and inp is not None:
-                slot.send(inp, now, self._ctx, command.state)
+                slot.send(inp, now, self._contexts(), command.state)
         elif isinstance(command, OverlayOff):
             slot = self._slot(command.slot)
             if slot is not None:
@@ -779,9 +839,12 @@ class Engine:
             self._globals = reconcile_globals(show, old, self._globals)
             self._ctx.globals = frozen_map(self._globals)
         self._sync_house({})
-        self._sampler = sampler_for(show.fixtures, self._sampler)
-        self._ctx.sampler = self._sampler
-        self._ctx.folder = show.folder
+        lights = lights_for(show.fixtures, self._lights)
+        if lights is not self._lights:
+            self._lights = lights
+            self._last_canvas = lights.empty()
+        self._ctx.lights = self._picture_ctx.lights = lights
+        self._ctx.folder = self._picture_ctx.folder = show.folder
         self._base.update_inputs(show.inputs)
         for slot in self._overlays:
             slot.update_inputs(show.inputs)
@@ -950,6 +1013,10 @@ class Engine:
         period = 1.0 / self._rate
         next_tick = time.perf_counter()
         while self._running:
+            late = time.perf_counter() - next_tick
+            self._lateness.append(max(0.0, late))
+            if late > LATE_TICK:
+                self._late_until = time.perf_counter() + 1.0
             try:
                 self.tick()
             except Exception as exc:

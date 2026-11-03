@@ -1,5 +1,7 @@
 """Element renderers: each element of an input becomes a premultiplied RGBA picture
-(four planes, see compositor.py).
+(four planes, see compositor.py). Pictures are for people (the Dashboard, the Editor): the
+lights' own colours are worked out at their dots by light_elements.py, which a context with
+per_light set uses instead.
 
 Kinds:
 - "paint": a fill (none, a colour, or a straight / round gradient) plus shapes
@@ -9,7 +11,7 @@ Kinds:
 - "video": arrives in M5 (draws nothing until then)
 
 Every element also has opacity, a blend mode, a transform (move, scale, rotate) and a
-mask: lights it leaves alone ("exclude": their patches of the picture stay clear).
+mask: a painted mask, and lights it leaves alone ("exclude": only the lights see that).
 Unknown kinds draw nothing, so a show from a newer CentraLight still plays.
 
 Elements that never change (no keyframes or expressions, not a live feed) are drawn once
@@ -28,12 +30,11 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from .compositor import blur, direction_ramp, from_image, over, radial_ramp, scale_alpha, solid_layer, transparent, warp
+from .compositor import direction_ramp, from_image, over, radial_ramp, scale_alpha, solid_layer, transparent, warp
 from .ndi_source import SourceFrame
 from .params import evaluate, is_dynamic
 
 DEFAULT_NDI_SOURCE = "Media Background Pane"
-BLUR_KINDS = ("image", "video", "ndi")  # picture elements: their Blur makes each light average more of them
 MEDIA_CACHE_SIZE = 32
 _MAP_TYPES = (dict, MappingProxyType)
 _NUMBER_TYPES = (int, float)
@@ -87,7 +88,8 @@ class RenderContext:
     sources: Sources | None = None
     time: float = 0.0  # element time, seconds
     folder: str = ""  # the show folder (for media files)
-    sampler: Any = None  # the Sampler for this size (for light masks)
+    lights: Any = None  # the LightSet: where the lights are (lights.py)
+    per_light: bool = False  # work out each light's colour (layers (4, lights)) instead of drawing a picture
     cache: dict[Any, Any] = field(default_factory=dict)
     faults: dict[str, str] = field(default_factory=dict)  # "input/element" -> what went wrong
     globals: Mapping[str, Any] = MappingProxyType({})  # global variables' current values
@@ -95,6 +97,10 @@ class RenderContext:
     static: _LRU = field(default_factory=lambda: _LRU(512, STATIC_CACHE_BYTES))  # drawn static elements
     video_threaded: bool = True  # videos decode ahead in their own thread (the engine); False: exact frames (Editor, tests)
     waiting: bool = False  # an NDI feed or video in this picture hasn't got its first picture yet
+    memory: dict | None = None  # the running input's memory (its formulas' cycles, its elements' smoothing)
+    element_key: str = ""  # "input/element" being worked out
+    now: float = 0.0  # the clock the running input's time comes from (smoothing measures time with it)
+    smoothing: bool = True  # Video and NDI smoothing applies (not for a one-off preview, which has no clock)
 
 
 # ---------------------------------------------------------------- helpers
@@ -413,12 +419,15 @@ def render_content(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray
 
 
 def render_element(element: Mapping[str, Any], ctx: RenderContext, use_mask: bool = True) -> np.ndarray | None:
-    """The element's picture, ready to blend: content, then transform, opacity and mask.
-    Elements that never change are finished once and remembered."""
+    """The element's picture, ready to blend: content, then transform, opacity and mask (or, with per_light, its
+    colour at each light: light_elements.py). Elements that never change are finished once and remembered."""
+    if ctx.per_light:
+        from .light_elements import light_element
+
+        return light_element(element, ctx, use_mask)
     if element_is_dynamic(element):
         return _finish_element(element, ctx, use_mask)
-    sampler_key = ctx.sampler.key if (use_mask and ctx.sampler is not None) else None
-    key = ("finished", id(element), ctx.width, ctx.height, ctx.folder, use_mask, sampler_key)
+    key = ("finished", id(element), ctx.width, ctx.height, ctx.folder, use_mask)
     cached = ctx.static.get_fresh(key)
     if cached is not None and cached[0] is element:
         return cached[1]
@@ -436,17 +445,13 @@ def _finish_element(element: Mapping[str, Any], ctx: RenderContext, use_mask: bo
 
 
 def finish_layer(element: Mapping[str, Any], layer: np.ndarray, ctx: RenderContext, use_mask: bool = False) -> np.ndarray:
-    """An element's own picture made ready to blend: moved / scaled / turned, blurred, its opacity, its mask."""
+    """An element's own picture made ready to blend: moved / scaled / turned, its opacity, its painted mask."""
     t = ctx.time
     x = param(element, "transform.x", t, 0.5)
     y = param(element, "transform.y", t, 0.5)
     scale = param(element, "transform.scale", t, 1.0)
     rotation = param(element, "transform.rotation", t, 0.0)
     layer = warp(layer, x, y, scale, rotation)
-    if element.get("kind") in BLUR_KINDS:  # each light averages more of this element's own picture
-        amount = param(element, "blur", t, 0.0)
-        if amount > 0.0:
-            layer = blur(layer, amount)
     opacity = min(1.0, max(0.0, param(element, "opacity", t, 1.0)))
     if opacity < 1.0:
         layer = scale_alpha(layer, opacity)
@@ -458,21 +463,15 @@ def finish_layer(element: Mapping[str, Any], layer: np.ndarray, ctx: RenderConte
 
 
 def element_keep(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | None:
-    """The element's mask (1 = show, 0 = hidden), or None for no mask: the lights it leaves alone, times the
-    mask painted in the Editor (white shows, black hides)."""
+    """The element's painted mask in a picture (1 = show, 0 = hidden), or None for no mask. (The lights it leaves
+    alone are only left alone by the lights themselves: the light dots show that, not the picture.)"""
     mask = element.get("mask")
     if not _is_map(mask):
         return None
-    keep = None
-    excluded = mask.get("exclude")
-    if ctx.sampler is not None and isinstance(excluded, Sequence) and not isinstance(excluded, str) and excluded:
-        keep = ctx.sampler.keep([str(e) for e in excluded])
     painted = mask.get("paint")
     if isinstance(painted, str) and painted:
-        grey = painted_mask(media_path(ctx.folder, painted), ctx)
-        if grey is not None:
-            keep = grey if keep is None else keep * grey
-    return keep
+        return painted_mask(media_path(ctx.folder, painted), ctx)
+    return None
 
 
 _painted: _LRU = _LRU(64, 64_000_000)

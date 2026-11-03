@@ -1,8 +1,9 @@
 """Transitions: how one picture turns into another.
 
 Each kind gives a "mix map": for every pixel, 0 = still the old picture, 1 = the new one.
-The same maps are used when an input is sent to Base, when an overlay turns on or off,
-and (from M5) for element transitions. Time is eased with t²(3 − 2t).
+The lights use the same maps read at their dots (points), so a wipe reaches each light as
+its edge passes it. The same maps are used when an input is sent to Base, when an overlay
+turns on or off, and for element transitions. Time is eased with t²(3 − 2t).
 
 - cut:    switches at once
 - fade:   the whole picture mixes evenly
@@ -20,7 +21,7 @@ import zlib
 
 import numpy as np
 
-from .compositor import direction_ramp, ease, ease_array, lerp, radial_ramp
+from .compositor import direction_ramp, direction_values, ease, ease_array, lerp, radial_ramp, radial_values
 
 KINDS = ("cut", "fade", "dip", "wipe", "iris", "random")
 RANDOM_SPREAD = 0.6  # how much of the transition the lights' start times are spread over
@@ -58,14 +59,18 @@ def mix_map(
     owner: np.ndarray | None = None,
     seed: int = 0,
     cache: dict | None = None,
+    points: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> float | np.ndarray:
-    """How far each pixel has changed at time t (0-1): a number, or an (h, w) map."""
+    """How far each pixel has changed at time t (0-1): a number, or an (h, w) map; with points (x and y, 0-1),
+    one value per point instead. owner: which light each pixel (or point) goes with, for Random."""
     t = 0.0 if t <= 0.0 else 1.0 if t >= 1.0 else t
     if kind == "cut":
         return 1.0 if t > 0.0 else 0.0
     if kind in ("fade", "dip") or kind not in KINDS:
         return ease(t)
     if kind == "wipe":
+        if points is not None:
+            return sweep(t, direction_values(points[0], points[1], direction), softness)
         key = ("wipe-ramp", width, height, round(direction, 3))
         ramp = cache.get(key) if cache is not None else None
         if ramp is None:
@@ -74,6 +79,8 @@ def mix_map(
                 cache[key] = ramp
         return sweep(t, ramp, softness)
     if kind == "iris":
+        if points is not None:
+            return sweep(t, radial_values(points[0], points[1], 0.5, 0.5, _IRIS_RADIUS), softness)
         key = ("iris-ramp", width, height)
         ramp = cache.get(key) if cache is not None else None
         if ramp is None:
@@ -81,7 +88,7 @@ def mix_map(
             if cache is not None:
                 cache[key] = ramp
         return sweep(t, ramp, softness)
-    # random: every light's patch starts at its own moment; pixels no light owns just fade
+    # random: every light starts at its own moment (in a picture, each pixel goes with its nearest light)
     if owner is None:
         return ease(t)
     count = int(owner.max()) + 1 if owner.size else 0
@@ -104,17 +111,19 @@ def mix(
     owner: np.ndarray | None = None,
     seed: int = 0,
     cache: dict | None = None,
+    points: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> np.ndarray:
-    """The picture part-way (t from 0 to 1) from old to new."""
+    """The picture (or, with points, the lights) part-way (t from 0 to 1) from old to new."""
     if t >= 1.0:
         return new
     if kind == "dip":
         if t < 0.5:
             return old * (1.0 - ease(2.0 * t))
         return new * ease(2.0 * t - 1.0)
-    height, width = new.shape[1:]
-    amount = mix_map(kind, t, width, height, direction=direction, softness=softness, owner=owner, seed=seed, cache=cache)
-    return lerp(old, new, amount)  # a number, or an (h, w) map applied to every plane
+    height, width = new.shape[1:] if points is None else (0, 0)
+    amount = mix_map(kind, t, width, height, direction=direction, softness=softness, owner=owner, seed=seed, cache=cache,
+                     points=points)
+    return lerp(old, new, amount)  # a number, or a map applied to every plane
 
 
 def reveal(
@@ -127,12 +136,14 @@ def reveal(
     owner: np.ndarray | None = None,
     seed: int = 0,
     cache: dict | None = None,
+    points: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> np.ndarray:
     """An overlay appearing (t 0 -> 1) with a transition. Dip appears as a fade."""
     if t >= 1.0:
         return layer
     if kind == "dip":
         kind = "fade"
-    height, width = layer.shape[1:]
-    amount = mix_map(kind, t, width, height, direction=direction, softness=softness, owner=owner, seed=seed, cache=cache)
+    height, width = layer.shape[1:] if points is None else (0, 0)
+    amount = mix_map(kind, t, width, height, direction=direction, softness=softness, owner=owner, seed=seed, cache=cache,
+                     points=points)
     return layer * amount

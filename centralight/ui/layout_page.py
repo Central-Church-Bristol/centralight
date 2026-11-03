@@ -1,10 +1,9 @@
 """The Layout page: where the lights are, and which light is which.
 
 - Map: drag a light's dot to where it is in the room (the map is 16:9, like the screen).
-  Click a dot to flash that light. The faint ring and the tinted patches show which part
-  of the picture each light follows (the same size for every light: how much picture the
-  lights average is the Blur setting on picture elements, in the Editor). A photo of the
-  room can go behind the map.
+  Click a dot to flash that light. A light is just its dot: how much of a picture it
+  averages is each Image, Video or NDI element's Area, in the Editor. A photo of the room
+  can go behind the map.
 - Saved layouts: "Layout: Main ▾" at the top switches between named arrangements of the
   map (positions and the room photo); Save as, Rename and Delete are there too.
 - Undo / Redo / History at the top right cover everything on this page.
@@ -21,7 +20,6 @@ import hashlib
 import random
 from pathlib import Path
 
-import numpy as np
 from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QActionGroup, QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
@@ -63,10 +61,10 @@ from ..engine import EngineFrame
 from ..files import write_atomic
 from ..layouts import delete_layout, rename_layout, save_layout_as, set_backdrop, set_backdrop_opacity, sorted_layouts, switch_layout
 from ..log import log_exception
-from ..model import PATCH_RADIUS, ROLE_COLOUR, MapSpot, Show
+from ..model import ROLE_COLOUR, MapSpot, Show
 from ..notes import load_notes, save_notes
 from ..output import RGB
-from ..sampler import EDITOR_H, EDITOR_W, Sampler, identify_colours
+from ..lights import EDITOR_H, EDITOR_W, identify_colours
 from ..show_edit import (
     add_colour_light,
     channel_conflicts,
@@ -110,14 +108,12 @@ TEST_COLOURS = (
 
 
 class LightItem(QGraphicsObject):
-    """One colour light on the map: its dot, a faint ring showing the patch of picture it follows (the same
-    size for every light), and its name."""
+    """One colour light on the map: its dot and its name."""
 
     def __init__(self, page: LayoutPage, fixture_id: str, name: str, x: float, y: float) -> None:
         super().__init__()
         self.page = page
         self.fixture_id = fixture_id
-        self.radius = PATCH_RADIUS * SCENE_W
         self.colour = QColor(0, 0, 0)
         self.tint = QColor(theme.TEXT_3)
         self._pressed_at: QPointF | None = None
@@ -162,25 +158,25 @@ class LightItem(QGraphicsObject):
             self.update()
 
     def boundingRect(self) -> QRectF:  # noqa: N802
-        extent = max(self.radius, CORE) + 6
+        extent = CORE + 6
         return QRectF(-extent, -extent, extent * 2, extent * 2)
 
     def shape(self):  # noqa: D401 (Qt name)
         from PySide6.QtGui import QPainterPath
 
         path = QPainterPath()
-        path.addEllipse(QPointF(0, 0), CORE + 4, CORE + 4)  # grab by the dot, not the whole ring
+        path.addEllipse(QPointF(0, 0), CORE + 4, CORE + 4)  # (a little bigger than the dot: easier to grab)
         return path
 
     def paint(self, painter: QPainter, _option, _widget=None) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         selected = self.isSelected()
-        ring = QPen(QColor(theme.ACCENT if selected else theme.BORDER_STRONG), 1.6 if selected else 1.0)
-        ring.setStyle(Qt.PenStyle.SolidLine if selected else Qt.PenStyle.DashLine)
-        ring.setCosmetic(True)
-        painter.setPen(ring)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawEllipse(QPointF(0, 0), self.radius, self.radius)
+        if selected:  # a ring round the dot shows it's selected
+            ring = QPen(QColor(theme.ACCENT), 1.6)
+            ring.setCosmetic(True)
+            painter.setPen(ring)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(0, 0), CORE + 4, CORE + 4)
         painter.setPen(QPen(QColor(theme.ACCENT if selected else theme.TEXT), 1.5))
         painter.setBrush(self.colour)
         painter.drawEllipse(QPointF(0, 0), CORE, CORE)
@@ -436,7 +432,6 @@ class LayoutPage(QWidget):
         self._syncing_selection = False
         self._identify_on = False
         self._last_frame: EngineFrame | None = None
-        self._territory_key = None
         self._backdrop_key = None
 
         # --- map
@@ -445,9 +440,6 @@ class LayoutPage(QWidget):
         self.backdrop.setZValue(-3)
         self.backdrop.setOpacity(0.55)
         self.scene.addItem(self.backdrop)
-        self.territory = QGraphicsPixmapItem()
-        self.territory.setZValue(-2)
-        self.scene.addItem(self.territory)
         self.view = MapView(self.scene)
         self.view.resized.connect(self._update_labels)
         self.scene.selectionChanged.connect(self.map_selection_changed)
@@ -462,8 +454,8 @@ class LayoutPage(QWidget):
         self.read_only_hint.setWordWrap(True)
         map_panel.body.addWidget(self.read_only_hint)
         map_panel.body.addWidget(self.view, 1)
-        hint = QLabel("Drag a dot to where the light is in the room · click a dot to flash its light. Every light "
-                      "follows the picture inside its ring; to average more of it, use Blur on the element in the Editor.")
+        hint = QLabel("Drag a dot to where the light is in the room · click a dot to flash its light. How much of a "
+                      "picture each light averages is the Area of an Image, Video or NDI element, in the Editor.")
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         map_panel.body.addWidget(hint)
@@ -696,8 +688,6 @@ class LayoutPage(QWidget):
                         item.setPos(x, y)
             item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not read_only)
         self._update_labels()
-        if not self._dragging:  # (a 640x360 sampler per step of a drag kept the window busy: it's redrawn at the end)
-            self._update_territory(show)
         renamed = [fx.id for fx in show.fixtures if self.notes.get(fx.id) and self._noted_names.get(fx.id) not in (None, fx.name)]
         if renamed:  # (undo / redo of a rename): the file follows, with the note under the light's name now
             self._save_notes(show)
@@ -750,20 +740,6 @@ class LayoutPage(QWidget):
 
     def _identify_colours(self, show: Show) -> dict[str, RGB]:
         return {k: rgb for k, (_n, rgb) in identify_colours([fx.id for fx in show.colour_fixtures()], show.identify_seed).items()}
-
-    def _update_territory(self, show: Show) -> None:
-        key = tuple((fx.id, fx.map.x, fx.map.y) for fx in show.colour_fixtures() if fx.map) + (show.identify_seed,)
-        if key == self._territory_key:
-            return
-        self._territory_key = key
-        sampler = Sampler(show.fixtures, SCENE_W, SCENE_H)
-        colours = self._identify_colours(show)
-        image = np.zeros((SCENE_H, SCENE_W, 4), dtype=np.uint8)
-        for index, light_id in enumerate(sampler.ids):
-            r, g, b = colours.get(light_id, (1.0, 1.0, 1.0))
-            image[sampler.owner == index] = (round(r * 255), round(g * 255), round(b * 255), 46)
-        qimage = QImage(image.data, SCENE_W, SCENE_H, SCENE_W * 4, QImage.Format.Format_RGBA8888).copy()
-        self.territory.setPixmap(QPixmap.fromImage(qimage))
 
     def _update_labels(self) -> None:
         """Hide names that would bump into each other (hovering a dot always shows it).
@@ -945,7 +921,6 @@ class LayoutPage(QWidget):
         self._drag_spots.clear()
         self.document.end_drag(f"Move {self.lights_label(moved)}")
         self._update_labels()
-        self._update_territory(self.show_data)  # (skipped during the drag)
 
     def lights_label(self, fixture_ids) -> str:
         """'SlimPAR 103' for one light, '3 lights' for more (for undo step names)."""
@@ -956,7 +931,6 @@ class LayoutPage(QWidget):
         self._dragging = False
         self._drag_spots.clear()
         self.document.end_drag("")
-        self._update_territory(self.show_data)
 
     # ------------------------------------------------------------ selection
 

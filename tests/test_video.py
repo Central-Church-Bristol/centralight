@@ -15,7 +15,7 @@ from centralight.bus import Instance, render_input
 from centralight.elements import RenderContext
 from centralight.model import Input
 from centralight.new_show import create_show
-from centralight.sampler import CANVAS_H, CANVAS_W, sampler_for
+from centralight.lights import lights_for
 from centralight.show_io import freeze
 from centralight.video_source import MAX_FPS, VideoClip, VideoLibrary
 
@@ -126,11 +126,10 @@ class VideoElementTests(unittest.TestCase):
 
     def colour_at(self, element: dict, t: float) -> str:
         inp = Input(id="clip", name="Clip", tracks=freeze([[element], [], [], []]))
-        ctx = RenderContext(CANVAS_W, CANVAS_H, video_threaded=False)
-        ctx.sampler = sampler_for(self.show.fixtures, None)
+        ctx = RenderContext(0, 0, video_threaded=False, lights=lights_for(self.show.fixtures), per_light=True)
         ctx.folder = self.show.folder
-        canvas = render_input(Instance(inp, 0.0), t, ctx)
-        r, g, b = ctx.sampler.sample(canvas)[0]
+        layer = render_input(Instance(inp, 0.0), t, ctx)
+        r, g, b = (float(v) for v in layer[:3, 0])
         return max((("red", r), ("green", g), ("blue", b)), key=lambda item: item[1])[0] if max(r, g, b) > 0.2 else "dark"
 
     def test_on_the_lights(self) -> None:
