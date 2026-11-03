@@ -42,6 +42,7 @@ from .automations import (
     Situation,
     action_command,
     describe_action,
+    show_matches,
     system_uptime,
 )
 from .bus import Bus, Frozen, Instance, OverlaySlot, composite, frozen_for_lights, frozen_mix, layer_kind, render_input
@@ -52,6 +53,7 @@ from .commands import (
     ClearBase,
     Command,
     FlashLights,
+    ForgetShow,
     LoadShow,
     OverlayOff,
     PowerEvent,
@@ -71,6 +73,7 @@ from .commands import (
     SetTestColour,
     SetVariable,
     ShowLoadFailed,
+    ShowLoadWaiting,
     SwapShow,
     SwitchLayout,
     ToBlack,
@@ -109,7 +112,10 @@ WAKE_GAP = 60.0  # seconds: a jump this big in the clocks means the PC slept (or
 WAKE_DEBOUNCE = 60.0  # seconds: wake signals this close together are the same wake
 STARTUP_HOLD = 3.0  # seconds: at most this long at startup, nothing is sent while the screen feed's first picture comes
 FEED_WAIT = 10.0  # seconds: at startup, an automation about a feed waits at most this long for it to start sending
-LOAD_WAIT = 5.0  # seconds: a show a global automation loads; the loaded show's automations wait this long for it at most
+# seconds: a show a global automation loads; the loaded show's automations wait this long for it at most. The window
+# answers within a frame (it's loaded, or it can't be), so this only matters if it's busy (a slow sign-in, say); while
+# a dialog that's open holds the load, the window asks for longer (ShowLoadWaiting)
+LOAD_WAIT = 20.0
 BLACK: RGB = (0.0, 0.0, 0.0)
 WHITE: RGB = (1.0, 1.0, 1.0)
 
@@ -340,9 +346,6 @@ class Engine:
         self._uptime = uptime
         self._runner = AutomationRunner()
         self._runner.restore(live.automations, wall(), saved_at=live.saved_at)
-        self._saved_at = live.saved_at
-        self._other_runners: dict[str, AutomationRunner] = {}  # other shows' automations, as they were left
-        self._other_runner_data: dict[str, dict] = {_folder_key(k): dict(v) for k, v in live.show_automations.items()}
         self._after_load: list[tuple[str, dict]] = []  # global actions waiting for the show they loaded
         self.global_automations = global_automations if global_automations is not None else Show(name="Global automations")
         self._global_runner = AutomationRunner()
@@ -479,7 +482,6 @@ class Engine:
             globals=saveable(self._globals),
             show_globals={k: dict(v) for k, v in self._show_globals.items()},
             automations=self._runner.to_dict(),
-            show_automations={**self._other_runner_data, **{k: r.to_dict() for k, r in self._other_runners.items()}},
             global_automations=self._global_runner.to_dict(),
         )
 
@@ -762,9 +764,15 @@ class Engine:
         elif isinstance(command, RequestShow):
             self.gui_requests.put((command.who, {"do": "load_show", "folder": command.folder}))
         elif isinstance(command, ShowLoadFailed):
-            self._pending_load = None
-            self._after_load_done(now)
-            self._auto_key = None
+            if self._pending_load is not None and command.wanted == self._pending_load[0]:  # (that request's, no other)
+                self._pending_load = None
+                self._after_load_done(now)
+                self._auto_key = None
+        elif isinstance(command, ShowLoadWaiting):
+            if self._pending_load is not None and command.wanted == self._pending_load[0]:
+                self._pending_load = (self._pending_load[0], now + max(0.0, float(command.seconds)))
+        elif isinstance(command, ForgetShow):
+            self._show_globals.pop(_folder_key(command.folder), None)
         elif isinstance(command, SetGlobalAutomations):
             self.global_automations = command.automations
             self.sources.set_keep(self._ndi_names())
@@ -776,6 +784,7 @@ class Engine:
             self._global_runner.paused, self._global_runner.paused_since = self._runner.paused, self._runner.paused_since
             if paused:
                 self._global_runner.pending.clear()  # nothing waiting runs while paused
+                self._after_load.clear()  # (a global automation's actions waiting for a show to load too)
         elif isinstance(command, RunAutomation):
             scope = "global" if command.scope == "global" else "show"
             runner, container = (self._global_runner, self.global_automations) if scope == "global" else (self._runner, self.show)
@@ -901,15 +910,12 @@ class Engine:
         return bool(waiting)
 
     def _show_names(self) -> frozenset[str]:
-        """What a global automation can call the loaded show: its id, its folder's name and its name (any case)."""
+        """What else a global automation can call the loaded show, besides its id: its folder's name and its name."""
         folder = str(self.show.folder or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
-        names = {show_id(self.show.folder), folder.casefold(), self.show.name.casefold(), slugify(self.show.name, "show")}
-        return frozenset(name for name in names if name)
+        return frozenset(name for name in (folder.casefold(), self.show.name.casefold()) if name)
 
     def _is_loaded(self, wanted: str) -> bool:
-        wanted = str(wanted or "").strip()
-        names = self._show_names()
-        return bool(wanted) and (wanted.casefold() in names or slugify(wanted, "show") in names)
+        return show_matches(wanted, show_id(self.show.folder), self._show_names())
 
     def _do_action(self, who: str, action: dict, now: float, scope: str = "show") -> None:
         action = dict(action)
@@ -1074,6 +1080,12 @@ class Engine:
                            and not any(slot.visibility(now) > 0.0 for slot in self._overlays))
         if fading_to_black:  # (a Fade to black, say: frozen now, the lights would stay as they are this moment)
             held = None
+            if isinstance(base.outgoing, Instance):  # (Stop: the old show's input fading out, held still as it fades)
+                outgoing, contexts = base.outgoing, self._contexts()
+                for ctx in contexts:
+                    ctx.globals, ctx.audio = self._ctx.globals, self._ctx.audio
+                base.outgoing = frozen_mix({layer_kind(ctx): render_input(outgoing, now, ctx) for ctx in contexts}, contexts,
+                                           name=old.name)
         else:
             held = None if self._black_now(now) and solo is None else self._still_mix(now, solo)
             base.current = None
@@ -1085,14 +1097,13 @@ class Engine:
         self._house_driven.clear()
         if old.folder:
             self._show_globals[_folder_key(old.folder)] = saveable(self._globals)
-            self._other_runners[_folder_key(old.folder)] = self._runner
         self._swap_show(show)
         self._globals = initial_globals(show, self._show_globals.pop(_folder_key(show.folder), {}))
         self._ctx.globals = frozen_map(self._globals)
-        # the new show's automations: as they were when it was last loaded (so what already ran this time round
-        # doesn't run again), or afresh
+        # the new show's automations start afresh, every time it loads: checked straight away, with catch-up (so a
+        # time range that's under way runs: automations override the freeze)
         paused, since = self._global_runner.paused, self._global_runner.paused_since
-        self._runner = self._runner_for(show.folder)
+        self._runner = AutomationRunner()
         self._runner.paused, self._runner.paused_since = paused, since
         self._show_events = {"show_loads"}
         self._pending_load = None
@@ -1100,19 +1111,6 @@ class Engine:
         self._feeds_until = now + FEED_WAIT  # (its feeds are still connecting)
         log_info(f"Show “{show.name}” loaded ({show.folder}); the lights hold what they showed until one of its inputs is sent"
                  if held is not None else f"Show “{show.name}” loaded ({show.folder})")
-
-    def _runner_for(self, folder: str) -> AutomationRunner:
-        """A show's automations' runner: the one it had when it was last loaded (kept while CentraLight runs, and in
-        live.json), or a new one."""
-        key = _folder_key(folder)
-        runner = self._other_runners.pop(key, None)
-        if runner is not None:
-            return runner
-        runner = AutomationRunner()
-        saved = self._other_runner_data.pop(key, None)
-        if saved:
-            runner.restore(saved, self._wall(), saved_at=self._saved_at)
-        return runner
 
     def _refresh_identify(self) -> None:
         colours = identify_colours([fx.id for fx in self.show.colour_fixtures()], self._identify_seed)

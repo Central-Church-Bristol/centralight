@@ -24,7 +24,7 @@ from typing import Any
 
 from .automations import actions_for, conditions_for
 from .global_automations import GLOBAL_DIR, ORDER_FILE
-from .elements import media_path
+from .elements import has_device_name, media_path
 from .expressions import AUDIO_NAMES, FUNCTIONS, ExpressionError, compile_expression
 from .files import json_text, write_atomic
 from .log import log_info
@@ -735,8 +735,8 @@ def outside_media(data: Any, show: Show) -> dict[str, Path]:
             if not isinstance(element, Mapping) or element.get("kind") not in ("image", "video"):
                 continue
             file = element.get("file")
-            if not isinstance(file, str) or not file.strip() or media_path(show.folder, file) is not None:
-                continue
+            if not isinstance(file, str) or not file.strip() or has_device_name(file) or media_path(show.folder, file) is not None:
+                continue  # (a device's name, like COM3: never looked at)
             path = Path(file.strip()).expanduser()
             types = PICTURE_TYPES if element.get("kind") == "image" else VIDEO_TYPES
             if path.is_absolute() and path.suffix.lower() in types and path.is_file():

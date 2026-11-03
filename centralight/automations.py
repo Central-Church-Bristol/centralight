@@ -412,7 +412,7 @@ class Situation:
     ndi_known: bool = True  # False just after starting: a feed that isn't sending yet may still be connecting
     quit_dark_since: float | None = None  # wall time of a "Turn lights off" quit whose hold is still on, else None
     show: str = ""  # the loaded show's id (for the global automations' "This show is loaded")
-    show_names: frozenset[str] = frozenset()  # ...and what else it can be called: its folder's name, its name (any case)
+    show_names: frozenset[str] = frozenset()  # ...and what else it can be called: its folder's name and its name
 
 
 def _in_range(start: int, end: int, minutes: int) -> bool:
@@ -779,11 +779,7 @@ class AutomationRunner:
         elif kind == "audio":
             result = self._audio_true(automation, index, cond, situation)
         elif kind == "loaded_show":
-            from .model import slugify
-
-            wanted = str(cond.get("show") or "").strip()
-            names = situation.show_names | ({situation.show} if situation.show else set())
-            result = bool(wanted) and (wanted in names or wanted.casefold() in names or slugify(wanted, "show") in names)
+            result = show_matches(cond.get("show"), situation.show, situation.show_names)
         else:
             result = False
         return result != bool(cond.get("invert", False))
@@ -999,6 +995,20 @@ class AutomationRunner:
 
 
 # ---------------------------------------------------------------- doing the actions
+
+
+def show_matches(wanted: Any, show_id: str, names: Iterable[str] = ()) -> bool:
+    """Is this the loaded show, as an automation names it? An id ("sunday-morning", lower case: what the app stores)
+    is only ever its id, so it can't pick a show whose name happens to look like another show's id; anything else
+    ("Sunday Morning") is matched against its folder's name and its name, ignoring case."""
+    from .model import ID_PATTERN
+
+    text = str(wanted or "").strip()
+    if not text:
+        return False
+    if ID_PATTERN.match(text):
+        return bool(show_id) and text == show_id
+    return text.casefold() in {name.casefold() for name in names}
 
 
 def house_by_label(show: Show, label: Any) -> str | None:

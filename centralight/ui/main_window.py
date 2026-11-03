@@ -35,7 +35,9 @@ from ..commands import (
     OverlayOff,
     SendToBase,
     SendToOverlay,
+    ForgetShow,
     ShowLoadFailed,
+    ShowLoadWaiting,
     ToBlack,
     SetHouse,
     SetAutomationsPaused,
@@ -86,6 +88,7 @@ from .quit_dialog import QuitDialog
 from .settings_dialog import SettingsDialog
 from .widgets import STATE_ERROR, STATE_INFO, STATE_OK, STATE_WARN, install_wheel_guard
 
+LOAD_HOLD = 30.0  # seconds a show asked for by an automation or the Stream Deck waits for an open dialog to close
 LIVE_HEARTBEAT_MS = 60_000  # live.json is saved at least this often, so a restart knows when CentraLight last ran
 
 
@@ -171,7 +174,9 @@ class MainWindow(QWidget):
                                          "won't run or be saved this time (the session log says why).")
         self._load_problems = [f"inputs\\{input_id}.json couldn't be read: {error}" for input_id, error in show.input_errors.items()]
         self._load_problems += list(show.warnings) + self._global_problems
-        self._waiting_loads: list[tuple[str, dict]] = []  # shows asked for while a dialog was open (loaded after it)
+        self._waiting_load: tuple[str, dict, float] | None = None  # a show asked for while a dialog was open (who, what, since)
+        self._asked_for: str | None = None  # the global automation's name for the show being loaded (see _load_requested)
+        self._native_dialogs = 0  # Windows' own dialogs open (they aren't Qt's: see _dialog_open)
 
         self.setObjectName("Root")
         self.setWindowIcon(icons.app_icon())
@@ -403,7 +408,8 @@ class MainWindow(QWidget):
             show = read_show(Path(folder))
         except (ShowError, OSError) as exc:
             log_info(f"{who or 'Load a show'}: couldn't load the show in {folder} ({exc})")
-            self.engine.submit(ShowLoadFailed())
+            if self._asked_for is not None:
+                self.engine.submit(ShowLoadFailed(self._asked_for))  # (a global automation was waiting for it)
             if not who:
                 QMessageBox.warning(self, "Load a show", f"CentraLight couldn't load the show in\n{folder}\n\n{exc}")
             return False
@@ -449,29 +455,54 @@ class MainWindow(QWidget):
             if show.folder and not show.read_only:
                 self._backup_timer.start()
 
+    def _dialog_open(self) -> bool:
+        """A dialog is waiting for an answer: a question, a name to type, a file to pick, or Windows' own (deleting a
+        show). A show loading then would change what it's about."""
+        return QApplication.activeModalWidget() is not None or self._native_dialogs > 0
+
+    def _close_dialog(self, who: str) -> None:
+        widget = QApplication.activeModalWidget()
+        if widget is None:
+            return  # (Windows' own question, deleting a show: that's waited for)
+        log_info(f"{who}: the dialog that was open (“{widget.windowTitle()}”) was closed, so the show it asked for "
+                 "could load")
+        if isinstance(widget, QDialog):
+            widget.reject()
+        else:
+            widget.close()
+
     def _load_safely(self, who: str, action: Mapping[str, Any]) -> None:
         try:
             self._load_requested(who, action)
         except Exception as exc:  # (never let one request stop the rest)
             log_exception("loading a show", exc)
-            self.engine.submit(ShowLoadFailed())
+            if action.get("_scope") == "global":
+                self.engine.submit(ShowLoadFailed(str(action.get("show", "")).strip()))
 
     def _load_requested(self, who: str, action: Mapping[str, Any]) -> None:
-        """A global automation (a show id) or the Stream Deck (a folder) asks for a show."""
+        """A global automation (a show id or name) or the Stream Deck (a folder) asks for a show."""
         wanted = str(action.get("folder") or action.get("show") or "").strip()
-        info = None
-        if action.get("folder"):
-            info = next((s for s in self.list_shows() if same_folder(s.folder, wanted)), None)
-        if info is None:
-            info = find_show(self.shows_root(), wanted)
-        if info is None:
-            log_info(f"{who}: there's no show called {wanted!r} to load")
-            self.engine.submit(ShowLoadFailed())
-            return
-        if same_folder(info.folder, self.document.show.folder):
-            self.engine.submit(ShowLoadFailed())  # (it's loaded already: the loaded show's automations carry on)
-            return
-        self.load_show(info.folder, who=who or "Automation", automation=action.get("_scope") == "global")
+        is_global = action.get("_scope") == "global"
+        # (the engine waits for a global automation's show: it's told if it can't load, by the name it asked for)
+        self._asked_for = str(action.get("show", "")).strip() if is_global else None
+        try:
+            info = None
+            if action.get("folder"):
+                info = next((s for s in self.list_shows() if same_folder(s.folder, wanted)), None)
+            if info is None:
+                info = find_show(self.shows_root(), wanted)
+            if info is None:
+                log_info(f"{who}: there's no show called {wanted!r} to load")
+                if self._asked_for is not None:
+                    self.engine.submit(ShowLoadFailed(self._asked_for))
+                return
+            if same_folder(info.folder, self.document.show.folder):
+                if self._asked_for is not None:  # (it's loaded already: the loaded show's automations carry on)
+                    self.engine.submit(ShowLoadFailed(self._asked_for))
+                return
+            self.load_show(info.folder, who=who or "Automation", automation=is_global)
+        finally:
+            self._asked_for = None
 
     def ask_new_show(self) -> None:
         if self._locked:
@@ -544,13 +575,17 @@ class MainWindow(QWidget):
             f"put it back from there.\n\n{info.folder}")
         if answer != QMessageBox.StandardButton.Yes:
             return
+        self._native_dialogs += 1  # (Windows may ask before deleting something too big for the Recycle Bin)
         try:
-            delete_show(Path(folder), self.document.show.folder)
+            delete_show(Path(folder), self.document.show.folder, owner=int(self.winId()))
         except (ShowError, OSError) as exc:
             log_exception("deleting a show", exc)
             QMessageBox.warning(self, "Delete show", f"CentraLight couldn't delete the show:\n{exc}")
             return
+        finally:
+            self._native_dialogs -= 1
         self.document.forget_show(folder)  # (its undo histories: a show made later in the same folder starts afresh)
+        self.engine.submit(ForgetShow(folder))  # (and its variables)
         if self._save_files:
             self._guide_timer.start()  # (the global automations' guide lists the shows)
 
@@ -907,12 +942,18 @@ class MainWindow(QWidget):
     def _do_engine_requests(self) -> None:
         """Things automations or the Stream Deck asked for that change the show (the window does those). A show asked
         for while a dialog is open (a question, a name to type, a file to pick) loads when it closes: what the dialog
-        was about stays in its own show."""
-        dialog_open = QApplication.activeModalWidget() is not None
-        if self._waiting_loads and not dialog_open:
-            waiting, self._waiting_loads = self._waiting_loads, []
-            for who, action in waiting:
+        was about stays in its own show. Only the newest such request counts, and if the dialog is still open after
+        LOAD_HOLD seconds, it's closed (as if Cancel was pressed): automations win."""
+        dialog_open = self._dialog_open()
+        if self._waiting_load is not None:
+            who, action, since = self._waiting_load
+            if not dialog_open:
+                self._waiting_load = None
                 self._load_safely(who, action)
+            elif time.monotonic() - since >= LOAD_HOLD:
+                # automations win: the dialog is closed (as if Cancel was pressed), and the show loads at the next
+                # frame, once nothing is left waiting for the dialog's answer
+                self._close_dialog(who)
         requests = getattr(self.engine, "gui_requests", None)
         while requests is not None:
             try:
@@ -920,9 +961,12 @@ class MainWindow(QWidget):
             except queue.Empty:
                 return
             if action.get("do") == "load_show":
+                if action.get("_scope") == "global":  # (the engine waits for this show: it's here, and may be held)
+                    self.engine.submit(ShowLoadWaiting(str(action.get("show", "")).strip(), LOAD_HOLD + 10.0))
                 if dialog_open:
                     log_info(f"{who}: the show loads when the dialog that's open is closed", key="load-waits-for-dialog")
-                    self._waiting_loads.append((who, action))
+                    since = self._waiting_load[2] if self._waiting_load is not None else time.monotonic()
+                    self._waiting_load = (who, action, since)  # (the newest request is the one that counts)
                 else:
                     self._load_safely(who, action)
                 continue

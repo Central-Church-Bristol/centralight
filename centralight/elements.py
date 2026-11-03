@@ -294,9 +294,17 @@ def shape_coverage(shape: Mapping[str, Any], ctx: RenderContext) -> tuple[np.nda
 _image_cache = _LRU(MEDIA_CACHE_SIZE)
 
 
+def has_device_name(text: str) -> bool:
+    """Does any part of this path have a name Windows keeps for a device ("media/COM3.jpg", "aux.png")? Even
+    resolving such a path opens the device (COM3 is the Eurolite's port), so it's checked before anything else."""
+    from .model import is_device_name
+
+    return any(is_device_name(part) for part in str(text).replace("\\", "/").split("/") if part.strip())
+
+
 def media_path(folder: str, file: Any) -> Path | None:
-    """A media file's full path, only if it's inside the show folder (for safety)."""
-    if not folder or not isinstance(file, str) or not file.strip():
+    """A media file's full path, only if it's inside the show folder (for safety), and never a device's name."""
+    if not folder or not isinstance(file, str) or not file.strip() or has_device_name(file):
         return None
     root = Path(folder).resolve()
     path = (root / file).resolve()

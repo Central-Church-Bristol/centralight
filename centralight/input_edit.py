@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .colours import to_hex
-from .model import END_BEHAVIOURS, TRACK_COUNT, Input, Show, element_span, slugify
+from .model import END_BEHAVIOURS, TRACK_COUNT, Input, Show, element_span, is_device_name, slugify
 from .params import (
     INTERPOLATIONS,
     KEY_TOLERANCE,
@@ -608,12 +608,19 @@ def move_shape(show: Show, input_id: str, element_id: str, shape_id: str, step: 
 # ---------------------------------------------------------------- media
 
 
+def media_stem(stem: str) -> str:
+    """The name a copied picture or video gets in the show's media folder (without its extension): plain letters,
+    digits and spaces, and never a name Windows keeps for a device ("Aux 🎄" would be "Aux": COM1 on this PC)."""
+    stem = re.sub(r"[^A-Za-z0-9 _.-]+", "", stem).strip(" .") or "media"
+    return f"{stem} media" if is_device_name(stem) else stem
+
+
 def copy_media(show_folder: str, source: Path) -> str:
     """Copy a picture or video into the show's media folder. Returns its path relative to the show."""
     source = Path(source)
     target_dir = Path(show_folder) / MEDIA_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
-    stem = re.sub(r"[^A-Za-z0-9 _.-]+", "", source.stem).strip() or "media"
+    stem = media_stem(source.stem)
     target = target_dir / f"{stem}{source.suffix.lower()}"
     n = 2
     while target.exists():

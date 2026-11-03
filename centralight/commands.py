@@ -76,7 +76,27 @@ class RequestShow:
 
 @dataclass(frozen=True)
 class ShowLoadFailed:
-    """The window couldn't load a show a global automation asked for: the loaded show's automations carry on."""
+    """The window couldn't load the show a global automation asked for (wanted: as the automation named it), or it's
+    loaded already: the loaded show's automations carry on."""
+
+    wanted: str = ""
+
+
+@dataclass(frozen=True)
+class ShowLoadWaiting:
+    """The window has a global automation's request for a show, and loads it within this many seconds (it waits for
+    a dialog that's open to close, say): the loaded show's automations wait for it that long."""
+
+    wanted: str = ""
+    seconds: float = 40.0
+
+
+@dataclass(frozen=True)
+class ForgetShow:
+    """A show was deleted: what the engine remembers about it (its variables) goes too, so a show made later in the
+    same folder starts afresh."""
+
+    folder: str = ""
 
 
 @dataclass(frozen=True)
@@ -221,6 +241,8 @@ Command = (
     | LoadShow
     | RequestShow
     | ShowLoadFailed
+    | ShowLoadWaiting
+    | ForgetShow
     | SetGlobalAutomations
     | SendToBase
     | ClearBase

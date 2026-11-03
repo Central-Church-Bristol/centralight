@@ -28,7 +28,8 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M11 Cut to black / Fade to black (your change of 3 Nov), and a look at M10 (five fixes) | **done** (3 Nov, 11:20; 587 tests pass) |
 | M12 Shows + global automations (your change of 3 Nov) | **done** (3 Nov, 12:25; 620 tests pass) |
 | A look at M12 (fourteen findings) | **done** (3 Nov, 13:25; 635 tests pass) |
-| A third 3-hour soak (after M10) | **done** (3 Nov, 13:31; flat memory, no errors; about 1 % of one core) |
+| A third 3-hour soak (after M10) | **done** (3 Nov, 13:31; flat memory, no errors) |
+| A second look at M12 (ten findings) | **done** (3 Nov, 16:40; 648 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -53,6 +54,42 @@ Run all the tests (about five minutes, including the layout check at every scali
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
 
+## A second look at M12 (3 Nov, 16:30)
+
+A second reviewer checked the fixes above and found ten more things. Each is fixed, with a test that fails without
+the fix (all 21 such checks were tried: each test noticed):
+- **A show held for a dialog** (an automation's "Load a show" while a question or Settings is open) ran out the 5 s
+  the old show's automations waited for it: they then ran in the old show, and so did the global automation's other
+  actions. A dialog left open held the switch for ever. Now the engine is told the show is coming, so everything
+  waits for it; only the newest request is kept; and after 30 s CentraLight closes the dialog itself (as if Cancel was
+  pressed) and loads the show: automations win. The engine also waits up to 20 s rather than 5 s for a show whose
+  window is busy (a slow sign-in, say).
+- **Device names in media files.** A picture or video named in a show's files ("media/COM3.jpg", "aux.png", a room
+  photo, a painted layer) made CentraLight ask Windows about that name, which opens the device: COM3 is the
+  Eurolite's port. Such names are now refused before anything looks at the disk, a copied picture called
+  "Aux.png" becomes "Aux media.png", and "COM3:" (with a colon) counts as a device name too. The tests check this with
+  plain text only: nothing reached the disk with a device's name.
+- **Going back to a show** carrying on where its automations were (from the first look) is undone, as you decided:
+  every load catches up, because automations override the freeze. That also removed a problem the reviewer found
+  with it (a waiting "after 60 s" action could run when the show was loaded again, even while paused).
+- **Notes about lights:** a new show or a copy keeps the light ids, so the same id can be "SlimPAR 101" in one show
+  and "Pulpit" in another. Loading the other show wrote one light's note under the other's name. Now the notes are
+  matched to the lights by their names each time a show loads.
+- **"Load a show" and "This show is loaded"** matched a show's name against another show's id (a show renamed
+  "Christmas 2025" and a new "Christmas"). Now a value like `christmas` (lower case, no spaces: what CentraLight
+  stores) is only ever a show's id; a name ("Christmas", "Sunday Morning") is matched against names.
+- **Saving around a load** could freeze the window for up to 10 s with a locked file, and a save that finished late
+  was blamed on the new show. Now it waits 3 s, then 1 s more at most; each save knows its show, and a late one goes
+  to the log as the old show's.
+- **Stop (Base fading to black), then a load:** the old show's input kept playing as it faded, looking for its files
+  in the new show's folder. It's held still as it fades now.
+- **A deleted show's variables** came back for a new show made in the same folder. The engine forgets them now.
+- **"Couldn't load"** from a person's or the Stream Deck's request could end a global automation's wait for another
+  show; and Pause didn't drop the actions waiting for a show to load. Each answer now names its request, and Pause
+  drops them.
+- **Windows' own question when deleting** (a folder too big for the Recycle Bin) had no owner window, and a show
+  could load while it was up. It belongs to CentraLight's window now, and loads wait for it.
+
 ## A look at M12 (3 Nov, 13:00)
 
 A reviewer checked M12 and found fourteen things. Each one that could be fixed is fixed, with a test that fails
@@ -69,19 +106,19 @@ without the fix:
   loaded, so they happen in it.
 - **A question on screen while a show loads** (Delete input?, a layout's new name, "Load the changed file?", a file
   to pick...): what you answered could land in the newly loaded show. Now a show asked for by an automation or the
-  Stream Deck while a dialog is open loads when the dialog closes, and the file pickers check the show is still the
-  same one.
+  Stream Deck while a dialog is open loads when the dialog closes (after the second look: or after 30 s, when
+  CentraLight closes it), and the file pickers check the show is still the same one.
 - **Saving around a load:** a file that couldn't be saved in the old show could be blamed on (or retried in) the
-  new one. Now everything is saved, and waited for, before the switch; anything that still couldn't be saved is
-  reported in the log as the old show's.
+  new one. Now everything is saved, and waited for (a few seconds at most), before the switch; anything that still
+  couldn't be saved is reported in the log as the old show's.
 - **A deleted show's undo history** came back if a new show was made in the same folder. It goes with the show now.
 - **Starting within 10 minutes of the PC starting** after a crash counted as the PC starting (everything black). Now
   it's only a PC start if CentraLight hasn't run since the PC started; a crash and reopen carries on as it was.
 - **Duplicate** opened the copy straight away, so its automations ran (a time range under way, "When this show
   loads") and could change the lights mid-service. Now the copy doesn't open by itself.
 - **Going back to a show** ran its automations' catch-up again (e.g. "Sunday 09:00–12:30" a second time over what
-  someone had chosen). Each show's automations now carry on where they were when it was last loaded (kept while
-  CentraLight runs, and in live.json).
+  someone had chosen). I made each show's automations carry on where they were; that's undone since, as you decided:
+  every load catches up, because automations override the freeze (see the second look).
 - **The global automations' save problems** weren't shown in the header. They are now, and so are problems reading
   them when CentraLight starts.
 - **A show called "_Rehearsal"** got a folder the list of shows leaves out (the global automations' folder starts
@@ -128,7 +165,8 @@ belong to the app rather than a show.
   loaded; skipped with a note in the log if it has none), and turning another global automation on or off. They
   can't touch a show's inputs, overlays, variables or layouts. The same rules as a show's automations (All / Any,
   Not, "when it stops matching", catch-up, the loop guard, Run now); each second they're checked first. When one
-  loads a show, the old show's automations wait for it (at most 5 s) and the new show's run as soon as it's loaded.
+  loads a show, the old show's automations wait for it (at most 20 s; a dialog that's open holds it up to 30 s, then
+  CentraLight closes the dialog) and the new show's run as soon as it's loaded.
 - **A show's automations** lose The PC starts, CentraLight starts and The PC wakes, and gain **When this show
   loads**: when you, the Stream Deck or a global automation load it, and when the PC starts with it, but not when
   CentraLight reopens (so a crash restart doesn't change the lights). Old automations that used the moved
@@ -870,14 +908,15 @@ Measured (Simulated output, so no lights):
 - **A third 3-hour soak** (finished 3 Nov 13:31): the app as committed after M10 followed a 960×540, 24 fps test
   feed for 180 minutes. Memory stayed flat (106 MB at the start, 110 MB at the end, peak 111 MB; the second half
   averaged 1 MB more than the first), and the session log has no errors. The CPU averaged 3.6 % of one core (worst
-  minute 5.2 %), but for most of those three hours I was running the whole test suite again and again on the same
-  PC. Measured afterwards on its own (the same feed, three 20-second windows each), the app after M10 used about
-  1.0 % of one core and the app now, after M12, about 1.1 % (0.07 % of the PC). About a quarter of that is the NDI
-  receiver shrinking each picture to 320×180.
-  - How busy the PC is changes the figure a lot: with the test suite running on the same PC, the same app read about
-    11 % of one core (0.7 % of the PC). Its own Python work looked the same both times, so it's the busy PC (how
-    Windows counts time then, and slower cores) more than extra work. On Wednesday, step 15b reads the real figure
-    with ProPresenter and Media Background Pane running.
+  minute 5.2 %), with the whole test suite running again and again on the same PC for much of the time.
+  - **CPU, version against version** (3 Nov, 14:00): each committed version from before M10 to now, run twice, each
+    time with a fresh 960×540, 24 fps test feed (three 20-second windows each). Every version read either about
+    10–12 % of one core (0.7 % of this 16-core PC) or well under 1 %, and the same version gave both: e.g. M12 read
+    12.3 % one time and 0.5 % the next. So no version stands out: M10–M12 didn't raise it. The low runs are most
+    likely ones where NDI wasn't delivering pictures at full rate. With pictures flowing, most of the time goes on
+    NDI decoding the 960×540 picture and the receiver shrinking it to 320×180 (the earlier decision keeps the full
+    NDI stream, so Media Background Pane doesn't have to make a second, smaller one). Step 15b of the Wednesday
+    checklist notes the real figure with ProPresenter and Media Background Pane running.
   - A correction: from the soak's figure I first thought M10 had tripled the CPU, and I added a faster way to
     shrink pictures for the lights (in the commit with the M12 review's fixes). It never did anything, because
     NDI and video pictures are already 320×180 by then, so it's taken out again.
@@ -941,13 +980,17 @@ Problems the tests found and that are fixed:
   - **Renaming a show** changes the name you see, not its folder: its Stream Deck id (from the folder's name) keeps
     working. New and copied shows get a folder named after them.
   - **A new show opens straight away** (it's what you'd do next, and it has no automations); **a copy doesn't**, as
-    its automations would run as it opened.
+    its automations would run as it opened (you agreed: it stays put until you load it).
   - **Loading a show's automations:** like CentraLight starting, they're checked straight away with catch-up, so at
     10:00 on a Sunday a show whose automation says "Sunday 09:00–12:30 → Warm welcome" sends Warm welcome when it
-    first loads. Loading the show itself never sends anything. Going back to a show you left carries on where its
-    automations were, so what already ran in a time range doesn't run again. For "always do this when the show
-    loads", use "When this show loads".
+    loads. Loading the show itself never sends anything. Every load catches up, going back to a show you left
+    included (your call: automations override the freeze). For "always do this when the show loads", use "When this
+    show loads".
   - **A show asked for while a dialog is open** (by an automation or the Stream Deck) loads when the dialog closes.
+    If it's still open after 30 s, CentraLight closes it (as if Cancel was pressed) and loads the show; only the
+    newest request counts.
+  - **Naming a show in an automation:** a value like `evening` (lower case, no spaces: what CentraLight stores) is
+    only ever a show's id; anything else ("Evening", "Sunday Morning") is matched against the shows' names.
   - **After a "Turn lights off" quit,** loading a show by hand takes charge (its "When this show loads" automations
     can light things); a global automation loading one does too if its own time range began after the quit
     (e.g. Sunday 08:30), and otherwise doesn't (e.g. "CentraLight starts").

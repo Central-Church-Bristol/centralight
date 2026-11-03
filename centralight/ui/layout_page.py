@@ -93,7 +93,7 @@ from ..show_edit import (
 )
 from . import theme
 from .dashboard import Swatch
-from .document import ShowDocument
+from .document import ShowDocument, folder_key
 from .light_view import rgb_colour
 from .undo_bar import UndoBar
 from .widgets import ElidedLabel, Panel, ResettableSplitter, ToggleSwitch, fader_row, discard
@@ -436,12 +436,12 @@ class LayoutPage(QWidget):
         self._shows = shows_provider or (lambda: [])
         self.snap = False
         self._notes_path = notes_path
-        by_name = load_notes(notes_path) if notes_path else load_notes()
         # by light id in memory, so a note follows its light through renames, undo and redo
-        names = {fx.name: fx.id for fx in document.show.fixtures}
-        self.notes: dict[str, str] = {names[name]: where for name, where in by_name.items() if name in names}
-        self._other_notes = {name: where for name, where in by_name.items() if name not in names}  # (kept in the file)
-        self._noted_names = {fx.id: fx.name for fx in document.show.fixtures}
+        self.notes: dict[str, str] = {}
+        self._other_notes: dict[str, str] = {}  # notes for lights this show hasn't got (kept in the file)
+        self._noted_names: dict[str, str] = {}  # what each light was called when its note was last saved
+        self._notes_folder = folder_key(document.show.folder)  # the show the notes are matched to
+        self._match_notes(load_notes(notes_path) if notes_path else load_notes(), document.show)
         self._items: dict[str, LightItem] = {}
         self._shown_key: tuple | None = None  # what set_show last showed
         self._drag_spots: dict[str, MapSpot] = {}
@@ -677,10 +677,15 @@ class LayoutPage(QWidget):
         return self.document.show
 
     def set_show(self, show: Show) -> None:
-        key = (show.fixtures, show.house, show.identify_seed, show.layouts, show.active_layout, show.read_only)
+        key = (show.folder, show.fixtures, show.house, show.identify_seed, show.layouts, show.active_layout, show.read_only)
         if key == self._shown_key:
             return  # nothing this tab shows has changed (e.g. an edit in the Editor)
         self._shown_key = key
+        if folder_key(show.folder) != self._notes_folder:
+            # another show: its lights may use the same ids for other lights (a light called "Pulpit" here may be
+            # "Stage left" there), so the notes are matched to its lights by their names again, as the file has them
+            self._notes_folder = folder_key(show.folder)
+            self._match_notes(self._notes_by_name(), show)
         for fx in show.fixtures:  # (another show's lights, loaded: their notes are in the file under their names)
             if fx.id not in self.notes and fx.name in self._other_notes:
                 self.notes[fx.id] = self._other_notes.pop(fx.name)
@@ -1097,10 +1102,25 @@ class LayoutPage(QWidget):
         elif key == "name":
             self._save_notes(new)
 
+    def _match_notes(self, by_name: dict[str, str], show: Show) -> None:
+        """Notes by light name (as the file has them) to notes by this show's light ids."""
+        names = {fx.name: fx.id for fx in show.fixtures}
+        self.notes = {names[name]: where for name, where in by_name.items() if name in names}
+        self._other_notes = {name: where for name, where in by_name.items() if name not in names}
+        self._noted_names = {fx.id: fx.name for fx in show.fixtures}
+
+    def _notes_by_name(self) -> dict[str, str]:
+        """The notes by light name, as they were last saved (the names the lights had then)."""
+        by_name = dict(self._other_notes)
+        for fixture_id, where in self.notes.items():
+            if where and fixture_id in self._noted_names:
+                by_name[self._noted_names[fixture_id]] = where
+        return by_name
+
     def _save_notes(self, show: Show) -> None:
         by_name = dict(self._other_notes)
         here = {fx.id for fx in show.fixtures}
-        for fixture_id, where in self.notes.items():  # (lights of another show: their notes stay, under their names)
+        for fixture_id, where in self.notes.items():  # (lights taken out of the show: their notes stay, by name)
             if where and fixture_id not in here and fixture_id in self._noted_names:
                 by_name.setdefault(self._noted_names[fixture_id], where)
         by_name.update({fx.name: self.notes[fx.id] for fx in show.fixtures if self.notes.get(fx.id)})

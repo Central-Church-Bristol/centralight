@@ -56,6 +56,7 @@ from ..show_io import (
 SAVE_DELAY_MS = 1500
 UNDO_LIMIT = 200
 RETRY_SAVE_MS = 5000  # a file that couldn't be saved is tried again this often
+SETTLE_WAIT = 3.0  # seconds: before another show loads, its saves are waited for this long (then once more, briefly)
 _STEP_NUMBERS = itertools.count(1)
 OWN_SAVE_MEMORY_S = 10.0  # how long CentraLight remembers the files it wrote (so they aren't taken as outside changes)
 
@@ -211,7 +212,8 @@ class Autosaver:
         self._idle = threading.Event()
         self._idle.set()
         self.errors: deque[str] = deque(maxlen=20)  # the latest few failures (the window shows them)
-        self.results: queue.SimpleQueue[tuple[str, str, str]] = queue.SimpleQueue()  # (kind, id, why); ("ok", "", "")
+        # (folder, kind, id, why), or (folder, "ok", "", "") when a save went through: the folder says whose show it was
+        self.results: queue.SimpleQueue[tuple[str, str, str, str]] = queue.SimpleQueue()
         self._logged: dict[tuple[str, str], float] = {}  # (kind, id) -> when its failure was last written to the log
         self._thread = threading.Thread(target=self._run, name="autosave", daemon=True)
         self._thread.start()
@@ -254,9 +256,9 @@ class Autosaver:
                         self._logged[(kind, str(item_id))] = now
                         log_exception(f"autosave ({kind} {item_id})", exc)
                     self.errors.append(str(exc))
-                    self.results.put((kind, str(item_id), str(exc) or type(exc).__name__))
+                    self.results.put((job.folder, kind, str(item_id), str(exc) or type(exc).__name__))
             if not failed:
-                self.results.put(("ok", "", ""))
+                self.results.put((job.folder, "ok", "", ""))
             if self._jobs.empty():
                 self._idle.set()
 
@@ -520,31 +522,41 @@ class ShowDocument(QObject):
         if self._autosaver is None:
             return
         failures, ok = [], False
+        here = folder_key(self._show.folder)
         while True:
             try:
-                kind, item_id, why = self._autosaver.results.get_nowait()
+                folder, kind, item_id, why = self._autosaver.results.get_nowait()
             except queue.Empty:
                 break
-            if kind == "ok":
+            if folder_key(folder) != here:  # (a save of the show that was loaded before: it's not this show's to retry)
+                if kind != "ok":
+                    log_info(f"Couldn't {self._verb(kind)} {self._file_name(kind, item_id)} in {folder} (another show "
+                             f"was loaded by then: the show's backups have earlier copies): {why}")
+            elif kind == "ok":
                 ok = True
             else:
                 failures.append((kind, item_id, why))
         if failures:
             self._mark_unsaved(failures)
-            names = {"show": "show.json", "input": "inputs\\{}.json", "layout": "layouts\\{}.json", "automation": "automations\\{}.json"}
-            if self.kind == KIND_GLOBAL:
-                names = {"show": f"_Global automations\\{ORDER_FILE}", "automation": "_Global automations\\{}.json"}
             kind, item_id, why = failures[0]
-            what = names.get(kind.replace("delete-", ""), "{}").format(item_id)
-            verb = "remove" if kind.startswith("delete-") else "save"
             more = f" (and {len(failures) - 1} more)" if len(failures) > 1 else ""
-            self._set_problem(f"Couldn't {verb} {what}{more}: {why}\nCentraLight tries again every {RETRY_SAVE_MS // 1000} s. "
-                              "Is the file open in another program, or the disk full?")
+            self._set_problem(f"Couldn't {self._verb(kind)} {self._file_name(kind, item_id)}{more}: {why}\nCentraLight tries "
+                              f"again every {RETRY_SAVE_MS // 1000} s. Is the file open in another program, or the disk full?")
             if not self._saving_paused:
                 self._retry_timer.start()  # (its own timer: the 1.5 s autosave keeps its pace)
         elif ok and self.problem and self._show is self._saved and not self._pending_retries():
             log_info("Saving works again")
             self._set_problem("")
+
+    def _file_name(self, kind: str, item_id: str) -> str:
+        names = {"show": "show.json", "input": "inputs\\{}.json", "layout": "layouts\\{}.json", "automation": "automations\\{}.json"}
+        if self.kind == KIND_GLOBAL:
+            names = {"show": f"_Global automations\\{ORDER_FILE}", "automation": "_Global automations\\{}.json"}
+        return names.get(kind.replace("delete-", ""), "{}").format(item_id)
+
+    @staticmethod
+    def _verb(kind: str) -> str:
+        return "remove" if kind.startswith("delete-") else "save"
 
     def _set_problem(self, text: str) -> None:
         if text != self.problem:
@@ -630,14 +642,15 @@ class ShowDocument(QObject):
         self._show = self._show.with_inputs(inputs, order)
         self._retry["input"].discard(input_id)
 
-    def _settle_saves(self, timeout: float = 5.0) -> None:
-        """Save everything that's waiting, and wait for it, before another show loads: a file that couldn't be written
-        is tried once more, then reported (it's the old show's: it mustn't be retried, or blamed, in the new one)."""
+    def _settle_saves(self, timeout: float = SETTLE_WAIT) -> None:
+        """Save everything that's waiting, and wait for it (a few seconds at most: the window can't be used meanwhile),
+        before another show loads: a file that couldn't be written is tried once more, then reported. Saves still
+        going after that finish in the background; if one fails it's logged, not retried or blamed in the new show."""
         if self._autosaver is None:
             return
-        for _attempt in range(2):
+        for wait in (timeout, 1.0):
             self.flush()
-            self._autosaver.wait(timeout)
+            self._autosaver.wait(wait)
             self._check_saves()
             if not self._pending_retries():
                 return

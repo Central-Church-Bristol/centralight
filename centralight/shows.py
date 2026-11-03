@@ -108,13 +108,19 @@ def unique_name(root: Path, name: str, ignore: str | Path = "") -> str:
     return candidate
 
 
+def folder_name(name: str) -> str:
+    """A show's folder name for its name, worked out without looking at the disk: no character Windows can't have, no
+    leading "_" (the global automations' folder starts with one, and the list of shows leaves such folders out), and
+    never a name Windows keeps for a device ("COM3.x" would be the Eurolite's port)."""
+    base = _UNSAFE.sub("", clean_name(name)).strip(" .").lstrip("_").strip(" .") or "Show"
+    return f"Show {base}" if is_device_name(base) else base
+
+
 def new_folder(root: Path, name: str) -> Path:
     """A new, unused folder for a show called name, made safe for Windows before anything on disk is looked at: no
     character Windows can't have, no leading "_" (the global automations' folder starts with one, and the list of
     shows leaves such folders out), and never a device's name ("COM3.x" would be the Eurolite's port)."""
-    base = _UNSAFE.sub("", clean_name(name)).strip(" .").lstrip("_").strip(" .") or "Show"
-    if is_device_name(base):
-        base = f"Show {base}"
+    base = folder_name(name)
     taken_ids = {s.id for s in list_shows(root)} | {slugify(GLOBAL_DIR, "show")}
     candidate, n = base, 2
     while (Path(root) / candidate).exists() or slugify(candidate, "show") in taken_ids:
@@ -171,8 +177,9 @@ def duplicate_show(source: Path, root: Path, name: str) -> Path:
 # ---------------------------------------------------------------- the Recycle Bin
 
 
-def to_recycle_bin(path: Path) -> None:
-    """Move a file or folder to the Recycle Bin (so it can be put back). Raises OSError if Windows won't."""
+def to_recycle_bin(path: Path, owner: int = 0) -> None:
+    """Move a file or folder to the Recycle Bin (so it can be put back). Raises OSError if Windows won't. owner: the
+    window any question Windows asks belongs to."""
     path = Path(path).resolve()
     if sys.platform != "win32":
         raise OSError("the Recycle Bin is only on Windows")
@@ -189,7 +196,7 @@ def to_recycle_bin(path: Path) -> None:
     # error box; but if something can't go to the Recycle Bin (too big, a network drive), Windows asks before it would
     # be deleted for good ("want nuke warning")
     flags = 0x0040 | 0x0010 | 0x0004 | 0x0400 | 0x4000
-    operation = SHFILEOPSTRUCTW(None, fo_delete, str(path) + "\0", None, flags, False, None, None)  # (ends in two nulls)
+    operation = SHFILEOPSTRUCTW(owner or None, fo_delete, str(path) + "\0", None, flags, False, None, None)  # (two nulls)
     result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(operation))
     if result != 0 or operation.fAnyOperationsAborted:
         raise OSError(f"Windows couldn't move {path.name} to the Recycle Bin (code {result})")
@@ -197,12 +204,15 @@ def to_recycle_bin(path: Path) -> None:
         raise OSError(f"{path.name} is still there (is a file in it open in another program?)")
 
 
-def delete_show(folder: Path, loaded: str | Path, trash=to_recycle_bin) -> None:
-    """Move a show's folder to the Recycle Bin (not the loaded show's)."""
+def delete_show(folder: Path, loaded: str | Path, trash=None, owner: int = 0) -> None:
+    """Move a show's folder to the Recycle Bin (not the loaded show's). owner: the window Windows' questions belong to."""
     folder = Path(folder)
     if same_folder(folder, loaded):
         raise ShowError("the loaded show can't be deleted: load another show first")
     if not (folder / SHOW_FILE).is_file():
         raise ShowError(f"{folder} isn't a show")
-    trash(folder)
+    if trash is None:
+        to_recycle_bin(folder, owner)
+    else:
+        trash(folder)  # (tests: somewhere else to put it)
     log_info(f"Show {folder.name} moved to the Recycle Bin")

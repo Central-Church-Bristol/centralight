@@ -33,6 +33,7 @@ from .model import (
     END_HOLD,
     GLOBAL_TYPES,
     ID_PATTERN,
+    is_device_name,
     is_safe_id,
     ROLE_COLOUR,
     ROLE_HOUSE,
@@ -353,8 +354,8 @@ def safe_relative_file(value: Any) -> str:
         return ""
     text = value.strip().replace("\\", "/")
     parts = text.split("/")
-    if text.startswith("/") or ":" in text or any(part in ("", ".", "..") for part in parts):
-        return ""
+    if text.startswith("/") or ":" in text or any(part in ("", ".", "..") or is_device_name(part) for part in parts):
+        return ""  # (outside the show folder, or a name Windows keeps for a device, like COM3: never used)
     return text
 
 

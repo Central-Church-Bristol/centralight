@@ -283,6 +283,9 @@ in `Documents\CentraLight Shows`. Changes save by themselves: there's no Save.
 - [ ] Switch to the first show and wait: at the time, the other show loads by itself (the lights hold for a moment),
       Warm white comes in (its "When this show loads") and the key lights go to 40 %. **History** shows both,
       the global one marked "Global:". **Coming up** lists the global one, marked too.
+- [ ] (Optional) Set the global automation's time again, and when it comes, have a dialog open (**Show ▾ →
+      Rename…**, say): the show waits for you to close it. Leave it 30 s and CentraLight closes it for you (as if
+      you'd pressed Cancel), then loads the show.
 - [ ] The **Remote** chip's page (or a phone): the list next to the show's name switches shows; the page then shows
       that show's inputs. A Stream Deck key with `http://127.0.0.1:8746/api/show/central-church` loads Central Church.
 - [ ] (Optional) **Show ▾ → Delete a show → Evening…** → Yes: its folder goes to the Recycle Bin (you can put it back
@@ -306,9 +309,9 @@ in `Documents\CentraLight Shows`. Changes save by themselves: there's no Save.
       without a black console window, with the logo on the taskbar. If you like it, right-click it → Send to →
       Desktop (create shortcut).
 - [ ] Ctrl+Shift+D (or the tray icon's menu → Diagnostics): the engine runs at about 40 ticks a second, the output
-      shows the Eurolite sending, and CentraLight's CPU is a few % of one core at most. Please note that figure with
-      ProPresenter and Media Background Pane running (on a quiet PC it's about 1 % of one core; it reads higher when
-      the PC is busy, up to about 11 % when the tests kept six cores busy). Click **Copy** and paste it
+      shows the Eurolite sending, and CentraLight's CPU: up to about 12 % of one core (under 1 % of the PC) while
+      it follows Media Background Pane. Please note the figure, with ProPresenter and Media Background Pane running.
+      Click **Copy** and paste it
       somewhere: it's all there as text.
 - [ ] Its **On time** line: the engine's ticks start about 1 ms late, and none (or almost none) over 5 ms late,
       even with the Editor playing a video. That's the lights coming first; the pictures on screen give way.

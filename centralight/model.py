@@ -89,9 +89,9 @@ DEVICE_NAMES = frozenset({"con", "prn", "aux", "nul", "conin$", "conout$", "cloc
 
 
 def is_device_name(name: str) -> bool:
-    """Would Windows take this file or folder name for a device? (Its part before the first dot, trailing spaces and
-    dots ignored, any case: "COM3", "aux.json", "Con .txt".)"""
-    return str(name).split(".")[0].rstrip(" .").casefold() in DEVICE_NAMES
+    """Would Windows take this file or folder name for a device? (Its part before the first dot or colon, trailing
+    spaces ignored, any case: "COM3", "aux.json", "Con .txt", "COM3:", "nul:x".)"""
+    return re.split(r"[.:]", str(name), maxsplit=1)[0].rstrip(" .").casefold() in DEVICE_NAMES
 
 
 def is_safe_id(value: object) -> bool:
