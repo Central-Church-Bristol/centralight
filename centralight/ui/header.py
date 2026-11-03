@@ -193,7 +193,7 @@ class Header(QFrame):
         chip_layout = QHBoxLayout(self.chip_box)
         chip_layout.setContentsMargins(0, 0, 0, 0)
         chip_layout.setSpacing(6)
-        for name in ("engine", "output", "automations", "ndi", "audio", "remote"):
+        for name in ("engine", "files", "output", "automations", "ndi", "audio", "remote"):
             chip = StatusChip(name)
             chip_layout.addWidget(chip)
             chip.setVisible(name == "output")

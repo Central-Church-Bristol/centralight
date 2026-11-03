@@ -90,7 +90,7 @@ def _filled_key_icon():
         _FILLED_KEY = icons.line_icon(lambda painter, rect, colour, _on: icons.draw_key(painter, rect, colour, True), theme.ACCENT)
     return _FILLED_KEY
 SPECIAL_NAMES = {"t", "time", "value", "pi"}
-RESERVED_HOTKEYS = {"Ctrl+Z", "Ctrl+Y", "Ctrl+Shift+Z", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+,"}
+RESERVED_HOTKEYS = {"Ctrl+Z", "Ctrl+Y", "Ctrl+Shift+Z", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+,", "Ctrl+V", "Ctrl+Shift+D"}
 SHAPE_TITLES = {"rect": "Rectangle", "ellipse": "Ellipse"}
 
 
@@ -120,6 +120,9 @@ class DetailsPanel(QScrollArea):
         self._exprs: dict[str, ExprButton] = {}
         self._keys: dict[str, QToolButton] = {}  # the ◆ next to each setting that can have keyframes
         self._tab = 0
+        self._lights_pending = False
+        self._gesture = 0  # bumped at the end of each drag or typed value: each is its own undo step
+        self._gesture_t: dict[str, float] = {}  # setting -> the element time its drag began at
         self.locals_panel: LocalsPanel | None = None
         self.globals_panel: GlobalsPanel | None = None
         self.hotkey: QKeySequenceEdit | None = None
@@ -341,7 +344,7 @@ class DetailsPanel(QScrollArea):
         mode = QCheckBox("Infinite (plays until something replaces it)")
         mode.setChecked(inp.infinite)
         mode.setToolTip("Untick for a timed sequence: a length, with elements placed in time on the timeline")
-        mode.clicked.connect(lambda checked: self.timed_requested.emit(not checked))
+        mode.clicked.connect(lambda checked: self._timed_clicked(mode, checked))
         form.addRow(mode)
         if not inp.infinite:
             length = QDoubleSpinBox()
@@ -433,7 +436,7 @@ class DetailsPanel(QScrollArea):
         for spec in specs:
             if not visible(spec, element, specs):
                 continue
-            field = self._field_for(spec, lambda value, final, path=spec.path: self._set_element(path, value))
+            field = self._field_for(spec, lambda value, final, path=spec.path: self._set_element(path, value, final))
             if spec.type == "file":
                 field.choose_requested.connect(lambda kind=kind: self._choose_file(kind))
             key = f"element:{spec.path}"
@@ -496,7 +499,7 @@ class DetailsPanel(QScrollArea):
         panel = Panel(f"{SHAPE_TITLES.get(shape.get('type', 'rect'), 'Shape')} {shape.get('id', '')}")
         form = self._form(panel)
         for spec in SHAPE:
-            field = self._field_for(spec, lambda value, final, path=spec.path: self._set_shape(path, value))
+            field = self._field_for(spec, lambda value, final, path=spec.path: self._set_shape(path, value, final))
             key = f"shape:{spec.path}"
             self._fields[key] = field
             if spec.animatable and spec.type in ("number", "colour"):
@@ -840,7 +843,7 @@ class DetailsPanel(QScrollArea):
         QGuiApplication.clipboard().setText(text)
         if button is not None:
             button.setText("Copied ✓")
-            QTimer.singleShot(2000, lambda: button.setText("Copy Stream Deck URLs") if button is not None else None)
+            QTimer.singleShot(2000, button, lambda: button.setText("Copy Stream Deck URLs"))  # (cancelled if it's gone)
         return text
 
     # ------------------------------------------------------------ edits
@@ -889,37 +892,57 @@ class DetailsPanel(QScrollArea):
         self._apply(set_house_level(self.show_data, self.input_id, fixture_id, level), text,
                     f"{self.input_id}/house/{fixture_id}" if merge else None)
 
-    def _set_element(self, path: str, value: Any) -> None:
+    def _timed_clicked(self, box: QCheckBox, checked: bool) -> None:
+        self.timed_requested.emit(not checked)
+        inp = self.current_input()
+        if inp is not None:  # (asked "which to keep" and cancelled: the box shows what the input really is)
+            QTimer.singleShot(0, box, lambda: box.setChecked(self.current_input().infinite if self.current_input() else checked))
+
+    def _gesture_time(self, key: str) -> float:
+        """The element time a drag of this setting began at (a keyframe goes there, not wherever the playing
+        playhead has got to by each step of the drag)."""
+        return self._gesture_t.setdefault(key, self.element_time())
+
+    def _gesture_done(self, key: str, final: bool) -> None:
+        if final:  # released, or Enter: the next change is a new undo step
+            self._gesture_t.pop(key, None)
+            self._gesture += 1
+
+    def _set_element(self, path: str, value: Any, final: bool = True) -> None:
         element = self.current_element()
         if element is None:
             return
         spec = next((s for s in element_specs(str(element.get("kind"))) if s.path == path), None)
         raw = get_path(element, path, None)
+        key = f"{self.input_id}/{self.element_id}/{path}"
         if is_keyframed(raw):  # a keyframed setting: the change is a key at the playhead
-            t = self.element_time()
+            t = self._gesture_time(key)
             self._apply(set_key(self.show_data, self.input_id, self.element_id, path, t, value),
                         f"{element_name(element)}: {spec.label.lower() if spec else path} keyframe at {t:.2f} s",
-                        f"{self.input_id}/{self.element_id}/{path}/key/{t:.3f}")
-            return
-        text = change_name(element_name(element), spec, get_path(element, path, spec.default), value) if spec else f"Change {element_name(element)}"
-        self._apply(set_element_value(self.show_data, self.input_id, self.element_id, path, with_base_value(raw, value)),
-                    text, f"{self.input_id}/{self.element_id}/{path}")
+                        f"{key}/key/{t:.3f}/{self._gesture}")
+        else:
+            text = change_name(element_name(element), spec, get_path(element, path, spec.default), value) if spec else f"Change {element_name(element)}"
+            self._apply(set_element_value(self.show_data, self.input_id, self.element_id, path, with_base_value(raw, value)),
+                        text, f"{key}/{self._gesture}")
+        self._gesture_done(key, final)
 
-    def _set_shape(self, path: str, value: Any) -> None:
+    def _set_shape(self, path: str, value: Any, final: bool = True) -> None:
         shape = self.current_shape()
         if shape is None:
             return
         spec = next((s for s in SHAPE if s.path == path), None)
         raw = get_path(shape, path, None)
+        key = f"{self.input_id}/{self.element_id}/{self.shape_id}/{path}"
         if is_keyframed(raw):
-            t = self.element_time()
+            t = self._gesture_time(key)
             self._apply(set_key(self.show_data, self.input_id, self.element_id, param_path(self.shape_id, path), t, value),
                         f"{shape_name(shape)}: {spec.label.lower() if spec else path} keyframe at {t:.2f} s",
-                        f"{self.input_id}/{self.element_id}/{self.shape_id}/{path}/key/{t:.3f}")
-            return
-        text = change_name(shape_name(shape), spec, get_path(shape, path, spec.default), value) if spec else f"Change {shape_name(shape)}"
-        self._apply(set_shape_value(self.show_data, self.input_id, self.element_id, self.shape_id, path, with_base_value(raw, value)),
-                    text, f"{self.input_id}/{self.element_id}/{self.shape_id}/{path}")
+                        f"{key}/key/{t:.3f}/{self._gesture}")
+        else:
+            text = change_name(shape_name(shape), spec, get_path(shape, path, spec.default), value) if spec else f"Change {shape_name(shape)}"
+            self._apply(set_shape_value(self.show_data, self.input_id, self.element_id, self.shape_id, path, with_base_value(raw, value)),
+                        text, f"{key}/{self._gesture}")
+        self._gesture_done(key, final)
 
     def _shape_clicked(self, current, _previous) -> None:
         if self._updating or current is None:
@@ -965,7 +988,19 @@ class DetailsPanel(QScrollArea):
             self.element_removed.emit()
 
     def _lights_changed(self, _item, _column) -> None:
-        if self._updating:
+        """Ticking a group changes each of its lights in a burst: they're applied together, as one undo step."""
+        if self._updating or self._lights_pending:
+            return
+        self._lights_pending = True
+        QTimer.singleShot(0, self, self._apply_lights)
+
+    def _apply_lights(self) -> None:
+        self._lights_pending = False
+        if self._updating or self.lights_tree is None:
+            return
+        try:
+            self.lights_tree.topLevelItemCount()
+        except RuntimeError:  # rebuilt meanwhile
             return
         excluded = []
         for g in range(self.lights_tree.topLevelItemCount()):

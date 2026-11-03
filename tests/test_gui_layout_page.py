@@ -352,5 +352,5 @@ class SavedLayoutAndHistoryTests(M1WindowTestCase):
         window.show_page("layout")
         self.assertEqual(page.undo_bar.undo_button.toolTip(), "Undo: Move SlimPAR 101  (Ctrl+Z)")
         window.show_page("dashboard")
-        window.undo()  # the dashboard's history (inputs added or deleted) is empty: nothing happens
+        window.undo()  # the Dashboard undoes changes to inputs and the show, not the Layout tab's moves
         self.assertAlmostEqual(window.document.show.fixture("slimpar-101").map.x, 0.4)

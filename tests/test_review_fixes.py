@@ -551,6 +551,21 @@ class WindowReviewTests2(unittest.TestCase):
     tearDown = WindowReviewTests.tearDown
     refresh = WindowReviewTests.refresh
 
+    def test_the_wheel_still_scrolls_lists_and_panels(self) -> None:
+        from PySide6.QtWidgets import QListWidget
+
+        listing = QListWidget()
+        for i in range(200):
+            listing.addItem(f"item {i}")
+        listing.resize(200, 150)
+        listing.show()
+        process(self.app)
+        before = listing.verticalScrollBar().value()
+        wheel(listing.viewport(), -3)  # (a scroll area hands the wheel on to its scroll bar, which never has focus)
+        process(self.app)
+        self.assertGreater(listing.verticalScrollBar().value(), before)
+        listing.close()
+
     def test_undo_after_visiting_the_globals_tab_works_on_the_element(self) -> None:
         from centralight.ui.document import input_scope
 
@@ -680,6 +695,335 @@ class WindowReviewTests2(unittest.TestCase):
         self.assertIsNone(self.window._pending_live)  # only the overlay's clock moved: nothing to save
         self.assertIsNotNone(first)
         self.window._save_files = False
+
+
+# ---------------------------------------------------------------- the Editor (batch D)
+
+from centralight.input_edit import find_element, set_key, set_timed, trim_element  # noqa: E402
+from centralight.params import base_value, keys_of  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
+
+from tests.test_gui_timeline import TimelineTestCase  # noqa: E402
+
+
+class EditorReviewTests(TimelineTestCase):
+    def timed_warm_white(self, window):
+        show = set_timed(window.document.show, "warm-white", True)  # (10 s, hold)
+        window.document.apply(show, "Timed")
+        return self.editor(window, "warm-white")
+
+    def test_a_palette_click_at_the_end_adds_a_whole_element(self) -> None:
+        window, _engine = self.make()
+        page = self.timed_warm_white(window)
+        inp = window.document.show.inputs["warm-white"]
+        page.seek(inp.length)  # it played to the end (the playhead stays there)
+        process(self.app)
+        element_id = page.timeline.add_to_first_empty("paint")
+        start, end = find_element(window.document.show.inputs["warm-white"], element_id)[2]["start"], \
+            find_element(window.document.show.inputs["warm-white"], element_id)[2]["end"]
+        self.assertEqual(start, 0.0)
+        self.assertGreaterEqual(end - start, 1.0)  # not a 0.1 s sliver at the end
+
+    def test_trimming_the_start_past_a_keyframe_keeps_the_look(self) -> None:
+        window, _engine = self.make()
+        self.timed_warm_white(window)
+        show = window.document.show
+        for t, value in ((0.0, 0.0), (2.0, 1.0), (4.0, 0.0)):
+            show = set_key(show, "warm-white", "E1", "opacity", t, value)
+        before = find_element(show.inputs["warm-white"], "E1")[2]
+        trimmed = trim_element(show, "warm-white", "E1", start=3.0)
+        after = find_element(trimmed.inputs["warm-white"], "E1")[2]
+        # no jump at the new start (it used to get two keys at 0: 0 % and then 100 %)...
+        self.assertAlmostEqual(base_value(after["opacity"], 0.0, 1.0), base_value(before["opacity"], 3.0, 1.0), places=3)
+        self.assertEqual(len([k for k in keys_of(after["opacity"]) if k[0] == 0.0]), 1)
+        values = [base_value(after["opacity"], t, 1.0) for t in (0.0, 0.25, 0.5, 0.75, 1.0)]
+        self.assertEqual(values, sorted(values, reverse=True))  # ...and it still fades down to the key at 4 s
+        self.assertAlmostEqual(values[-1], 0.0, places=3)
+
+    def test_dragging_a_keyframe_doesnt_run_away(self) -> None:
+        window, _engine = self.make()
+        page = self.editor(window, "warm-white")
+        canvas = page.timeline.canvas
+        pps = canvas.pps
+        canvas._drag = {"kind": "key"}  # mid-drag, the document changes (the preview of each step)...
+        page.timeline.refresh()
+        self.assertEqual(canvas.pps, pps)  # ...without re-fitting the zoom under the pointer
+        canvas._drag = None
+
+    def test_dragging_a_keyframed_setting_while_playing_is_one_key_and_one_step(self) -> None:
+        window, _engine = self.make()
+        page = self.timed_warm_white(window)
+        page.select_element("E1")
+        process(self.app)
+        page.seek(1.0)
+        page.details.toggle_key("element:opacity")
+        stack = window.document.stack(window.document.scope)
+        steps = stack.count()
+        field = page.details._fields["element:opacity"]
+        for i, at in enumerate((1.0, 1.2, 1.4, 1.6)):  # the playhead moves on as it plays...
+            page.seek(at)
+            field.edited.emit(1.0 - 0.1 * (i + 1), i == 3)  # ...while the slider is dragged (released at the end)
+        keys = keys_of(find_element(window.document.show.inputs["warm-white"], "E1")[2]["opacity"])
+        self.assertEqual([round(k[0], 3) for k in keys], [1.0])  # one key, where the drag began
+        self.assertEqual(stack.count(), steps + 1)  # one undo step
+
+    def test_two_drags_are_two_undo_steps(self) -> None:
+        window, _engine = self.make()
+        page = self.editor(window, "warm-white")
+        page.select_element("E1")
+        process(self.app)
+        stack = window.document.stack(window.document.scope)
+        steps = stack.count()
+        field = page.details._fields["element:opacity"]
+        field.edited.emit(0.9, False)
+        field.edited.emit(0.8, True)  # released
+        field.edited.emit(0.6, False)
+        field.edited.emit(0.5, True)  # a second drag
+        self.assertEqual(stack.count(), steps + 2)
+        window.document.undo()
+        self.assertAlmostEqual(base_value(find_element(window.document.show.inputs["warm-white"], "E1")[2]["opacity"], 0.0, 1.0), 0.8)
+
+    def test_unticking_a_group_of_lights_is_one_step(self) -> None:
+        window, _engine = self.make()
+        page = self.editor(window, "warm-white")
+        page.select_element("E1")
+        process(self.app)
+        stack = window.document.stack(window.document.scope)
+        steps = stack.count()
+        group = page.details.lights_tree.topLevelItem(0)
+        group.setCheckState(0, Qt.CheckState.Unchecked)  # the group: each of its lights changes
+        process(self.app)
+        self.assertEqual(stack.count(), steps + 1)
+        excluded = find_element(window.document.show.inputs["warm-white"], "E1")[2]["mask"]["exclude"]
+        self.assertEqual(len(excluded), group.childCount())
+
+    def test_the_selected_view_doesnt_show_the_last_elements_picture(self) -> None:
+        window, _engine = self.make()
+        page = self.editor(window, "follow-screen")  # an NDI element with no picture (no feed in tests)
+        page.select_element("E1")
+        page.selected_canvas.set_image(page.result_canvas._image)  # whatever was there before
+        page.render_sync()
+        self.assertIsNone(page.selected_canvas._image)
+
+    def test_a_right_click_during_a_drag_keeps_the_drag(self) -> None:
+        window, _engine = self.make()
+        page = self.editor(window, "warm-white")
+        canvas = page.timeline.canvas
+        canvas._drag = {"kind": "scrub"}
+        QTest.mouseRelease(canvas, Qt.MouseButton.RightButton)
+        self.assertIsNotNone(canvas._drag)
+        canvas._drag = None
+
+
+# ---------------------------------------------------------------- the show's files (batch E)
+
+import stat  # noqa: E402
+
+from tests.test_remote import RemoteTestCase  # noqa: E402
+
+
+class SavingReviewTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = qt_app()
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.folder = Path(self._tmp.name) / "Show"
+        self.doc = ShowDocument(create_show(self.folder), RecordingEngine(), save_delay_ms=10)
+
+    def tearDown(self) -> None:
+        for path in (self.folder / "inputs").glob("*.json"):
+            os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+        self.doc.close()
+        self._tmp.cleanup()
+
+    def test_a_save_that_fails_is_retried_and_said(self) -> None:
+        from centralight.input_edit import update_input
+
+        problems = []
+        self.doc.save_problem.connect(problems.append)
+        path = self.folder / "inputs" / "follow-screen.json"
+        os.chmod(path, stat.S_IREAD)  # (another program holding it, or read-only)
+        self.doc.apply(update_input(self.doc.show, "follow-screen", name="Renamed"), "Rename")
+        new_show = self.doc.show
+        from centralight.new_show import follow_screen_input
+        extra = follow_screen_input()
+        from dataclasses import replace
+
+        extra = replace(extra, id="extra", name="Extra")
+        self.doc.apply(new_show.with_inputs({**new_show.inputs, "extra": extra}, new_show.input_order + ("extra",)), "Add")
+        self.doc.flush()
+        self.assertTrue(self.doc.wait_saved(10))
+        self.doc._check_saves()
+        self.assertIn("follow-screen.json", self.doc.problem)  # said...
+        self.assertTrue((self.folder / "inputs" / "extra.json").exists())  # ...and the rest of the save still happened
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)  # the file is free again
+        self.doc.flush()  # (the retry, normally 5 s later)
+        self.assertTrue(self.doc.wait_saved(10))
+        self.doc._check_saves()
+        self.assertEqual(self.doc.problem, "")
+        self.assertIn("Renamed", path.read_text(encoding="utf-8"))
+        self.assertEqual(problems[-1], "")
+
+    def test_the_reload_question_pauses_saving(self) -> None:
+        from centralight.input_edit import update_input
+        from centralight.ui.document import input_scope
+
+        asked = []
+
+        def ask(name: str) -> bool:
+            asked.append(name)
+            self.assertFalse(self.doc._save_timer.isActive())  # nothing is saved over the file meanwhile...
+            watcher.check()  # ...and a check while the question is up does nothing
+            return False  # keep mine
+
+        watcher = FolderWatcher(self.doc, ask_reload=ask, editing=lambda: "follow-screen")
+        try:
+            self.doc.set_scope(input_scope("follow-screen"))
+            self.doc.apply(update_input(self.doc.show, "follow-screen", name="Mine"), "Rename")  # not saved yet
+            theirs = input_to_dict(self.doc.show.inputs["follow-screen"])
+            theirs["name"] = "Theirs"
+            path = self.folder / "inputs" / "follow-screen.json"
+            path.write_text(json.dumps(theirs), encoding="utf-8")
+            touch(path)
+            watcher.check()
+            self.assertEqual(asked, ["Mine"])
+            self.assertTrue(self.doc.wait_saved(10))
+            self.assertIn("Mine", path.read_text(encoding="utf-8"))  # keep mine: written straight away
+        finally:
+            watcher.stop()
+
+    def test_the_guide_files_leave_someone_elses_agents_md_alone(self) -> None:
+        from centralight.ai_guide import GUIDE_MARKER, write_guide_files
+
+        agents = self.folder / "AGENTS.md"
+        agents.write_text("# My own notes for Codex\n", encoding="utf-8")
+        guide = self.folder / "AI_GUIDE.md"
+        guide.write_text("# Writing CentraLight inputs (Old)\nan older CentraLight's guide\n", encoding="utf-8")
+        written = write_guide_files(self.doc.show)
+        self.assertEqual(agents.read_text(encoding="utf-8"), "# My own notes for Codex\n")
+        self.assertIn("AI_GUIDE.md", written)
+        self.assertTrue(guide.read_text(encoding="utf-8").startswith(GUIDE_MARKER))
+
+
+class FilesWindowReviewTests(unittest.TestCase):
+    setUpClass = WindowReviewTests.__dict__["setUpClass"]
+    tearDown = WindowReviewTests.tearDown
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+
+    def window_for(self, show) -> MainWindow:
+        self.engine = FakeEngine(show)
+        self.window = MainWindow(Settings(), self.engine.show, self.engine, self.engine.fake_output, save_files=False,
+                                 notes_path=Path(self._tmp.name) / "fixture_map.csv")
+        self.window.resize(1366, 768)
+        self.window.show()
+        process(self.app, 3)
+        return self.window
+
+    def test_files_that_couldnt_be_read_show_in_the_header(self) -> None:
+        from dataclasses import replace
+        from unittest import mock
+
+        from PySide6.QtWidgets import QMessageBox
+
+        show = replace(with_inputs(show_from_patch()), input_errors={"broken": "it isn't valid JSON"}, warnings=("a warning",))
+        window = self.window_for(show)
+        chip = window.header.chips["files"]
+        self.assertTrue(chip.isVisibleTo(window))
+        self.assertIn("broken.json", chip.toolTip())
+        with mock.patch.object(QMessageBox, "information") as told:
+            window._show_file_problems()
+        told.assert_called_once()
+        self.assertFalse(chip.isVisibleTo(window))  # seen: it goes
+
+    def test_ctrl_z_on_the_dashboard_undoes_the_newest_step(self) -> None:
+        from centralight.input_edit import update_input
+
+        window = self.window_for(with_inputs(show_from_patch()))
+        document = window.document
+        document.apply(document.show.with_inputs({k: v for k, v in document.show.inputs.items() if k != "off"},
+                                                 tuple(i for i in document.show.input_order if i != "off")), "Delete All off")
+        changed = update_input(document.show, "warm-white", name="Warm (from an AI)")
+        document.note_on_disk(inputs={"warm-white": changed.inputs["warm-white"]})
+        document.apply(changed, "Changed outside CentraLight: Warm (from an AI)")  # (filed in the input's history)
+        window.show_page("dashboard")
+        window.undo()
+        self.assertEqual(document.show.inputs["warm-white"].name, "Warm white")  # the AI's change went...
+        self.assertNotIn("off", document.show.inputs)  # ...not the older, unrelated step
+
+    def test_a_note_follows_its_light_through_a_rename_and_undo(self) -> None:
+        from centralight.notes import load_notes
+
+        window = self.window_for(with_inputs(show_from_patch()))
+        page = window.layout_page
+        notes_path = Path(self._tmp.name) / "fixture_map.csv"
+        page._table_edited("slimpar-101", "where", "by the organ")
+        page._table_edited("slimpar-101", "name", "Organ wash")
+        self.assertEqual(load_notes(notes_path).get("Organ wash"), "by the organ")
+        window.show_page("layout")
+        window.undo()  # the rename
+        process(self.app)
+        self.assertEqual(window.document.show.fixture("slimpar-101").name, "SlimPAR 101")
+        self.assertEqual(page.notes.get("slimpar-101"), "by the organ")  # the note stayed with the light
+        self.assertEqual(load_notes(notes_path).get("SlimPAR 101"), "by the organ")
+        page._table_edited("slimpar-101", "name", "SlimPAR 102")  # another light's name: refused
+        self.assertEqual(window.document.show.fixture("slimpar-101").name, "SlimPAR 101")
+
+
+class RemoteReviewTests(RemoteTestCase):
+    def test_the_key_in_the_help_page_cant_end_its_script(self) -> None:
+        status, page = self.request("/?key=%3C/script%3E%3Cscript%3Ealert(1)%3C/script%3E")
+        self.assertEqual(status, 200)
+        self.assertNotIn("<script>alert(1)", page)
+        status, page = self.request(f"/?key={self.key}")
+        self.assertIn(self.key, page)  # the real key is still passed on to the page's buttons
+
+    def test_odd_overlay_numbers_and_head(self) -> None:
+        status, _reply = self.request("/api/overlay/%C2%B2/off")  # "²" is a digit to Python, not a number
+        self.assertEqual(status, 404)
+        before = len(self.engine.commands)
+        status, _reply = self.request("/api/blackout/toggle", method="HEAD")
+        self.assertEqual(status, 405)
+        self.assertEqual(len(self.engine.commands), before)  # HEAD runs nothing
+
+
+# ---------------------------------------------------------------- NDI threads (smaller)
+
+class NdiReviewTests(unittest.TestCase):
+    def test_a_receiver_carries_on_after_an_unexpected_error(self) -> None:
+        from unittest import mock
+
+        from centralight import ndi_source
+        from centralight.ndi_source import CONNECTED, NdiDiscovery, NdiReceiver
+        from tests.fakes import FakeNdi, FakeSender
+
+        sender = FakeSender("DESKTOP-AR8BC8U (Media Background Pane)", colour=(0, 0, 255))
+        ndi = FakeNdi(sender)
+        real_capture = ndi.recv_capture_v2
+        calls = {"n": 0}
+
+        def capture(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 5:
+                raise ValueError("something nobody expected")  # once
+            return real_capture(*args, **kwargs)
+
+        ndi.recv_capture_v2 = capture
+        discovery = NdiDiscovery(ndi, interval=0.05)
+        discovery.start()
+        receiver = NdiReceiver("Media Background Pane", discovery, ndi, no_signal_after=0.5, reconnect_after=1.0)
+        with mock.patch.object(ndi_source, "RESTART_AFTER_ERROR", 0.05):
+            receiver.start()
+            try:
+                self.assertTrue(_wait_for(lambda: calls["n"] > 5 and receiver.status().state == CONNECTED, 5.0))
+                seq = receiver.latest().seq
+                self.assertTrue(_wait_for(lambda: receiver.latest().seq > seq, 2.0))  # pictures keep coming
+            finally:
+                receiver.stop()
+                discovery.stop()
 
 
 if __name__ == "__main__":

@@ -149,6 +149,7 @@ class ShapeEditingTests(EditorTestCase):
         tree = page.details.lights_tree
         found = tree.findItems("SlimPAR 101", Qt.MatchFlag.MatchExactly | Qt.MatchFlag.MatchRecursive)[0]
         found.setCheckState(0, Qt.CheckState.Unchecked)
+        process(self.app)  # (a burst of ticks is applied together, as one undo step)
         mask = self.element(window, "stage-shapes", "E2")["mask"]["exclude"]
         self.assertIn("slimpar-101", mask)
         QTest.mouseClick(page.selected_panel.mask, Qt.MouseButton.LeftButton)

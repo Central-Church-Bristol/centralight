@@ -110,6 +110,10 @@ class MainWindow(QWidget):
         self.last_frame: EngineFrame | None = None
         self.document = ShowDocument(show, engine, save_files=save_files)
         self.document.changed.connect(self._show_changed)
+        self.document.save_problem.connect(lambda _text: self._update_files_chip())
+        # files that couldn't be read when the show opened, and other warnings (they used to go only to the log)
+        self._load_problems = [f"inputs\\{input_id}.json couldn't be read: {error}" for input_id, error in show.input_errors.items()]
+        self._load_problems += list(show.warnings)
 
         self.setObjectName("Root")
         self.setWindowIcon(icons.app_icon())
@@ -169,6 +173,9 @@ class MainWindow(QWidget):
         self.header.master_changed.connect(lambda level: self.engine.submit(SetMaster(level)))
         self.header.blackout_clicked.connect(lambda instant: self.engine.submit(SetBlackout(on=None, instant=instant)))
         self.header.lock_toggled.connect(self.set_locked)
+        self.header.chips["files"].set_clickable(True)
+        self.header.chips["files"].clicked.connect(self._show_file_problems)
+        self._update_files_chip()
         self.header.chips["remote"].set_clickable(True)
         self.header.chips["remote"].clicked.connect(self.open_remote_page)
         self.header.chips["automations"].set_clickable(True)
@@ -302,12 +309,40 @@ class MainWindow(QWidget):
         return self._locked
 
     def undo(self) -> None:
-        if not self._locked:
+        if self._locked:
+            return
+        if self._page == "dashboard":  # no history on screen there: the newest step, whichever history it's in
+            self.document.undo_newest()
+        else:
             self.document.undo()
 
     def redo(self) -> None:
-        if not self._locked:
+        if self._locked:
+            return
+        if self._page == "dashboard":
+            self.document.redo_newest()
+        else:
             self.document.redo()
+
+    def _update_files_chip(self) -> None:
+        problem = self.document.problem
+        if problem:
+            self.header.set_chip("files", STATE_ERROR, "Not saved", problem)
+        elif self._load_problems:
+            listed = "\n".join(self._load_problems[:6]) + ("\n…" if len(self._load_problems) > 6 else "")
+            self.header.set_chip("files", STATE_WARN, "File problems", f"When the show opened:\n{listed}\n\nClick for the full list.")
+        else:
+            self.header.set_chip("files", None)
+
+    def _show_file_problems(self) -> None:
+        text = self.document.problem or ("When the show opened, CentraLight couldn't use everything in its files:\n\n"
+                                         + "\n".join(f"• {p}" for p in self._load_problems)
+                                         + "\n\nWhat it couldn't read was left out. Fix the file (or ask the AI that wrote it), "
+                                         "and CentraLight picks it up by itself.")
+        QMessageBox.information(self, "Files", text)
+        if not self.document.problem:
+            self._load_problems = []  # seen: the chip goes
+            self._update_files_chip()
 
     def _show_changed(self, show: Show) -> None:
         set_trim = getattr(self.output, "set_trim", None)

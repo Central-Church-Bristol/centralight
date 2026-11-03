@@ -12,7 +12,6 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSiz
 from PySide6.QtGui import QColor, QFontMetrics, QFontMetricsF, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
-    QAbstractSlider,
     QAbstractSpinBox,
     QComboBox,
     QFrame,
@@ -178,7 +177,9 @@ class WheelGuard(QObject):
         if event.type() == QEvent.Type.Wheel and isinstance(obj, QWidget):
             control = obj
             for _ in range(3):  # (the wheel can land on a control's inner line edit)
-                if isinstance(control, (QAbstractSlider, QAbstractSpinBox, QComboBox)):
+                # Faders, number boxes and drop-downs. Never scroll bars: a scroll area scrolls by handing the wheel
+                # to its scroll bar (which never has focus), so stopping them would stop every list scrolling.
+                if isinstance(control, (QSlider, QAbstractSpinBox, QComboBox)):
                     break
                 control = control.parentWidget()
                 if control is None:

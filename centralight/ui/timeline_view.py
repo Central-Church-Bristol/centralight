@@ -494,8 +494,10 @@ class TimelineCanvas(QWidget):
         timeline.document.preview(show)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            return  # (another button let go mid-drag: the drag carries on, and still ends as one undo step)
         drag, self._drag = self._drag, None
-        if drag is None or event.button() != Qt.MouseButton.LeftButton:
+        if drag is None:
             return
         timeline = self.timeline
         if drag["kind"] == "key":
@@ -766,7 +768,8 @@ class TimelineView(QFrame):
         if inp is not None and self.selected_id and find_element(inp, self.selected_id) is None:
             self.selected_id = ""
         self.canvas.setEnabled(inp is not None)
-        self.canvas.fit()
+        if self.canvas._drag is None:  # (re-fitting mid-drag moved the time under the pointer: it ran away)
+            self.canvas.fit()
         self._sync_header()
         self.canvas.update()
 
@@ -843,11 +846,14 @@ class TimelineView(QFrame):
         inp = self.current_input()
         if inp is None:
             return ""
+        at = self.playhead
+        if not inp.infinite and at >= inp.length - MIN_ELEMENT_LENGTH:
+            at = 0.0  # the playhead sits at the end once it has played: start there and it would be 0.1 s long
         for track in range(TRACK_COUNT):
             elements = inp.tracks[track] if track < len(inp.tracks) else ()
-            busy = bool(elements) if inp.infinite else any(element_span(e, inp)[0] <= self.playhead < element_span(e, inp)[1] for e in elements)
+            busy = bool(elements) if inp.infinite else any(element_span(e, inp)[0] <= at < element_span(e, inp)[1] for e in elements)
             if not busy:
-                return self.drop_element(track, kind, confirm=False)
+                return self.drop_element(track, kind, confirm=False, start=None if inp.infinite else at)
         QMessageBox.information(self, "All tracks are full", "All four tracks are in use here. Drag the element onto a track instead.")
         return ""
 

@@ -18,6 +18,7 @@ another input or the layout.
 
 from __future__ import annotations
 
+import itertools
 import queue
 import threading
 import time
@@ -46,6 +47,8 @@ from ..show_io import (
 
 SAVE_DELAY_MS = 1500
 UNDO_LIMIT = 200
+RETRY_SAVE_MS = 5000  # a file that couldn't be saved is tried again this often
+_STEP_NUMBERS = itertools.count(1)
 OWN_SAVE_MEMORY_S = 10.0  # how long CentraLight remembers the files it wrote (so they aren't taken as outside changes)
 
 SCOPE_SHOW = "show"  # inputs added / removed / reordered, global variables, the show's name
@@ -151,6 +154,7 @@ class ChangeCommand(QUndoCommand):
         self.change = change
         self.merge_key = merge_key
         self._skip_redo = applied  # the change is already showing (e.g. after a drag)
+        self.seq = next(_STEP_NUMBERS)  # (the Dashboard's Ctrl+Z undoes the newest step of any history)
 
     def redo(self) -> None:
         if self._skip_redo:
@@ -170,6 +174,7 @@ class ChangeCommand(QUndoCommand):
         if not self.change.merge(other.change):
             return False
         self.setText(merged_text(self.text(), other.text()))
+        self.seq = other.seq
         return True
 
 
@@ -196,6 +201,7 @@ class Autosaver:
         self._idle = threading.Event()
         self._idle.set()
         self.errors: list[str] = []
+        self.results: queue.SimpleQueue[tuple[str, str, str]] = queue.SimpleQueue()  # (kind, id, why); ("ok", "", "")
         self._thread = threading.Thread(target=self._run, name="autosave", daemon=True)
         self._thread.start()
 
@@ -216,25 +222,26 @@ class Autosaver:
             if job is None:
                 self._idle.set()
                 return
-            try:
-                folder = Path(job.folder)
-                for inp in job.inputs:
-                    save_input(folder, inp)
-                for layout in job.layouts:
-                    save_layout(folder, layout)
-                for input_id in job.deleted:
-                    delete_input_file(folder, input_id)
-                for layout_id in job.deleted_layouts:
-                    delete_layout_file(folder, layout_id)
-                for automation in job.automations:
-                    save_automation(folder, automation)
-                for automation_id in job.deleted_automations:
-                    delete_automation_file(folder, automation_id)
-                if job.show_data is not None:
-                    write_json_atomic(folder / SHOW_FILE, job.show_data)
-            except Exception as exc:  # disk full, file locked for good...
-                log_exception("autosave", exc)
-                self.errors.append(str(exc))
+            folder = Path(job.folder)
+            steps = [("input", inp.id, lambda inp=inp: save_input(folder, inp)) for inp in job.inputs]
+            steps += [("layout", lay.id, lambda lay=lay: save_layout(folder, lay)) for lay in job.layouts]
+            steps += [("delete-input", i, lambda i=i: delete_input_file(folder, i)) for i in job.deleted]
+            steps += [("delete-layout", i, lambda i=i: delete_layout_file(folder, i)) for i in job.deleted_layouts]
+            steps += [("automation", a.id, lambda a=a: save_automation(folder, a)) for a in job.automations]
+            steps += [("delete-automation", i, lambda i=i: delete_automation_file(folder, i)) for i in job.deleted_automations]
+            if job.show_data is not None:
+                steps.append(("show", SHOW_FILE, lambda data=job.show_data: write_json_atomic(folder / SHOW_FILE, data)))
+            failed = False
+            for kind, item_id, step in steps:  # each file on its own: one that can't be written doesn't stop the rest
+                try:
+                    step()
+                except Exception as exc:  # disk full, a file locked by another program, read-only...
+                    failed = True
+                    log_exception(f"autosave ({kind} {item_id})", exc)
+                    self.errors.append(str(exc))
+                    self.results.put((kind, str(item_id), str(exc) or type(exc).__name__))
+            if not failed:
+                self.results.put(("ok", "", ""))
             if self._jobs.empty():
                 self._idle.set()
 
@@ -244,6 +251,7 @@ class Autosaver:
 
 class ShowDocument(QObject):
     changed = Signal(object)  # the new Show
+    save_problem = Signal(str)  # what couldn't be saved, and why ("" = everything is saved)
 
     def __init__(self, show: Show, engine: Any, *, save_files: bool = True, save_delay_ms: int = SAVE_DELAY_MS) -> None:
         super().__init__()
@@ -260,6 +268,15 @@ class ShowDocument(QObject):
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(save_delay_ms)
         self._save_timer.timeout.connect(self.flush)
+        self._saving_paused = False
+        self._retry_show = False  # show.json couldn't be written: write it again next time
+        self._retry_deletes: dict[str, set[str]] = {"input": set(), "layout": set(), "automation": set()}
+        self.problem = ""
+        self._results = QTimer(self)
+        self._results.setInterval(1000)
+        self._results.timeout.connect(self._check_saves)
+        if self._autosaver is not None:
+            self._results.start()
         self._recent_writes: dict[tuple[str, str], deque] = {}  # (kind, id) -> (when, version written or None)
 
     @property
@@ -382,27 +399,94 @@ class ShowDocument(QObject):
         self._show = show
         self._engine.submit(SwapShow(show))
         self.changed.emit(show)
-        if self._autosaver is not None:
+        if self._autosaver is not None and not self._saving_paused:
             self._save_timer.start()
+
+    def pause_saving(self, paused: bool) -> None:
+        """While a question about a changed file is on screen, nothing is saved over it."""
+        self._saving_paused = paused
+        if paused:
+            self._save_timer.stop()
+        elif self._autosaver is not None and self._show is not self._saved:
+            self._save_timer.start()
+
+    def _pending_retries(self) -> bool:
+        return self._retry_show or any(self._retry_deletes.values())
+
+    def _check_saves(self) -> None:
+        """Every second: did the autosave thread manage? A file it couldn't write is put back as unsaved and tried
+        again in a few seconds (until then, the header says so)."""
+        if self._autosaver is None:
+            return
+        failures, ok = [], False
+        while True:
+            try:
+                kind, item_id, why = self._autosaver.results.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "ok":
+                ok = True
+            else:
+                failures.append((kind, item_id, why))
+        if failures:
+            self._mark_unsaved(failures)
+            names = {"show": "show.json", "input": "inputs\\{}.json", "layout": "layouts\\{}.json", "automation": "automations\\{}.json"}
+            kind, item_id, why = failures[0]
+            what = names.get(kind.replace("delete-", ""), "{}").format(item_id)
+            verb = "remove" if kind.startswith("delete-") else "save"
+            more = f" (and {len(failures) - 1} more)" if len(failures) > 1 else ""
+            self._set_problem(f"Couldn't {verb} {what}{more}: {why}\nCentraLight tries again every {RETRY_SAVE_MS // 1000} s. "
+                              "Is the file open in another program, or the disk full?")
+            if not self._saving_paused:
+                self._save_timer.start(RETRY_SAVE_MS)
+        elif ok and self.problem and self._show is self._saved and not self._pending_retries():
+            log_info("Saving works again")
+            self._set_problem("")
+
+    def _set_problem(self, text: str) -> None:
+        if text != self.problem:
+            self.problem = text
+            self.save_problem.emit(text)
+
+    def _mark_unsaved(self, failures: list[tuple[str, str, str]]) -> None:
+        saved = self._saved
+        inputs, automations = dict(saved.inputs), dict(saved.automations)
+        layouts = list(saved.layouts)
+        for kind, item_id, _why in failures:
+            if kind == "input":
+                inputs.pop(item_id, None)  # (so the next save writes it again)
+            elif kind == "layout":
+                layouts = [lay for lay in layouts if lay.id != item_id]
+            elif kind == "automation":
+                automations.pop(item_id, None)
+            elif kind == "show":
+                self._retry_show = True
+            elif kind.startswith("delete-"):
+                self._retry_deletes.setdefault(kind[len("delete-"):], set()).add(item_id)
+        self._saved = replace(saved, inputs=frozen_map(inputs), automations=frozen_map(automations), layouts=tuple(layouts))
 
     # ------------------------------------------------------------ saving
 
     def flush(self) -> None:
         """Save whatever changed since the last save (normally 1.5 s after the last change)."""
         self._save_timer.stop()
-        if self._autosaver is None or self._show is self._saved:
+        if self._autosaver is None or (self._show is self._saved and not self._pending_retries()):
             return
         old, new = self._saved, self._show
         show_data = show_to_dict(new)
-        changed_show = show_to_dict(old) != show_data
+        changed_show = show_to_dict(old) != show_data or self._retry_show
+        retry = {kind: set(ids) for kind, ids in self._retry_deletes.items()}
+        self._retry_show = False
+        self._retry_deletes = {"input": set(), "layout": set(), "automation": set()}
         inputs = tuple(inp for input_id, inp in new.inputs.items() if old.inputs.get(input_id) != inp)
-        deleted = tuple(i for i in old.inputs if i not in new.inputs)
+        deleted = tuple(dict.fromkeys([i for i in old.inputs if i not in new.inputs] + [i for i in retry["input"] if i not in new.inputs]))
         old_layouts = {lay.id: lay for lay in old.layouts}
         new_ids = {lay.id for lay in new.layouts}
         layouts = tuple(lay for lay in new.layouts if old_layouts.get(lay.id) != lay)
-        deleted_layouts = tuple(i for i in old_layouts if i not in new_ids)
+        deleted_layouts = tuple(dict.fromkeys([i for i in old_layouts if i not in new_ids] + [i for i in retry["layout"] if i not in new_ids]))
         automations = tuple(a for aid, a in new.automations.items() if old.automations.get(aid) != a)
-        deleted_automations = tuple(i for i in old.automations if i not in new.automations)
+        deleted_automations = tuple(dict.fromkeys([i for i in old.automations if i not in new.automations]
+                                                  + [i for i in retry["automation"] if i not in new.automations]))
         self._saved = new
         for inp in inputs:
             self._wrote("input", inp.id, inp)
@@ -423,6 +507,34 @@ class ShowDocument(QObject):
             self._autosaver.wait(timeout)
             self._autosaver.close()
             self._autosaver = None
+
+    def undo_newest(self) -> bool:
+        """The Dashboard's Ctrl+Z: the newest change to the show or to any input (an AI's change to an input goes in
+        that input's own history). Layout and automation changes are undone on their own tabs (an automation
+        switching a layout or another automation isn't something the person at the Dashboard just did)."""
+        best = None
+        for scope, stack in self._stacks.items():
+            if scope != SCOPE_SHOW and not scope.startswith(input_scope("")):
+                continue
+            if stack.canUndo():
+                command = stack.command(stack.index() - 1)
+                seq = getattr(command, "seq", 0)
+                if best is None or seq > best[0]:
+                    best = (seq, stack)
+        if best is None:
+            return False
+        self._newest_undone = best[1]
+        best[1].undo()
+        return True
+
+    def redo_newest(self) -> bool:
+        """Redo what undo_newest() last undid (or the active history's next step)."""
+        stack = getattr(self, "_newest_undone", None)
+        if stack is not None and stack.canRedo():
+            stack.redo()
+            return True
+        self.redo()
+        return False
 
     def wait_saved(self, timeout: float = 5.0) -> bool:
         return self._autosaver.wait(timeout) if self._autosaver is not None else True

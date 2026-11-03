@@ -53,6 +53,7 @@ class FolderWatcher(QObject):
         self._poll.setInterval(POLL_MS)
         self._poll.timeout.connect(self.check)
         self.folder: Path | None = None
+        self._asking = False  # "Load the changed file?" is on screen
         self.start(document.show)
 
     def start(self, show: Show) -> None:
@@ -67,6 +68,8 @@ class FolderWatcher(QObject):
             (folder / sub).mkdir(exist_ok=True)
             self._watcher.addPath(str(folder / sub))
         self._stamps = self._scan()  # what's there now is what was loaded
+        for input_id, error in show.input_errors.items():  # files that couldn't be read when the show opened
+            self.problems[input_id] = f"{input_id}.json: {error}"
         self._poll.start()
 
     def stop(self) -> None:
@@ -97,7 +100,7 @@ class FolderWatcher(QObject):
 
     def check(self) -> None:
         """Look for added, changed and deleted files, and act on them."""
-        if self.folder is None:
+        if self.folder is None or self._asking:  # (not while "Load the changed file?" is on screen)
             return
         now = self._scan()
         changed = [p for p, stamp in now.items() if self._stamps.get(p) != stamp]
@@ -159,8 +162,23 @@ class FolderWatcher(QObject):
         if inp == saved or inp == current or document.wrote_recently("input", input_id, inp):
             return  # CentraLight's own save, or nothing new
         if current is not None and current != saved and self._editing() == input_id:
-            if not self._ask_reload(current.name):
-                return  # keep mine: the next save writes it over the file
+            self._asking = True
+            document.pause_saving(True)  # nothing is saved over the file while the question is up
+            try:
+                load_theirs = self._ask_reload(current.name)
+            finally:
+                self._asking = False
+                document.pause_saving(False)
+            if not load_theirs:
+                document.flush()  # keep mine: written over the file straight away
+                return
+            raw = self._read(path)  # the file may have changed again while the question was up: use it as it is now
+            if raw is None:
+                return
+            try:
+                inp, warnings = parse_input_bytes(raw, path)
+            except InputFileError:
+                return
         show = document.show
         order = show.input_order if input_id in show.inputs else show.input_order + (input_id,)
         new_show = show.with_inputs({**show.inputs, input_id: inp}, order)

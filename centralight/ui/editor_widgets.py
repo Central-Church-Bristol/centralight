@@ -159,9 +159,13 @@ class ColourField(QWidget):
             self.text.setText(text)
 
     def _choose(self) -> None:
-        colour = QColorDialog.getColor(QColor(self._value), self, "Choose a colour")
-        if colour.isValid():
-            self._apply(colour.name().upper())
+        # The window is the dialog's parent: the details panel can rebuild (deleting this field) while it's open
+        colour = QColorDialog.getColor(QColor(self._value), self.window(), "Choose a colour")
+        try:
+            if colour.isValid():
+                self._apply(colour.name().upper())
+        except RuntimeError:  # this field was rebuilt away meanwhile
+            pass
 
     def _typed(self) -> None:
         text = self.text.text().strip()

@@ -142,7 +142,7 @@ def _automation_id(show: Show, raw: str) -> str:
 
 
 def _overlay(raw: str) -> int:
-    if raw.isdigit() and int(raw) in OVERLAYS:
+    if raw.isascii() and raw.isdigit() and int(raw) in OVERLAYS:
         return int(raw)
     raise BadRequest(404, "overlays are numbered 1 to 4")
 
@@ -356,7 +356,11 @@ class _Handler(BaseHTTPRequestHandler):
         self._handle(None)
 
     def do_HEAD(self) -> None:  # noqa: N802
-        self._handle(None)
+        # (HEAD mustn't do anything: only GET and POST run commands)
+        self.send_response(405)
+        self.send_header("Allow", "GET, POST")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_POST(self) -> None:  # noqa: N802
         try:
@@ -390,7 +394,9 @@ class _Handler(BaseHTTPRequestHandler):
                 remote.count += 1
                 self._json(200, {"ok": True})
             elif not path or path == ["index.html"]:
-                self._send(200, help_page(remote, params.get("key", "")).encode("utf-8"), "text/html; charset=utf-8")
+                key = params.get("key", "")
+                key = key if remote.key and key == remote.key else ""  # only ever echo the real key
+                self._send(200, help_page(remote, key).encode("utf-8"), "text/html; charset=utf-8")
             elif path[0] != "api":
                 raise BadRequest(404, "there's no such page: see /")
             elif path[1:] == ["state"]:
@@ -553,7 +559,7 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
         url_rows=url_rows,
         ids=ids,
         lights=lights,
-        key=json.dumps(key),
+        key=json.dumps(key).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026"),  # safe inside <script>
     )
 
 

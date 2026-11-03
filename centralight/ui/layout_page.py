@@ -423,7 +423,12 @@ class LayoutPage(QWidget):
         self.engine = engine
         self.snap = False
         self._notes_path = notes_path
-        self.notes = load_notes(notes_path) if notes_path else load_notes()
+        by_name = load_notes(notes_path) if notes_path else load_notes()
+        # by light id in memory, so a note follows its light through renames, undo and redo
+        names = {fx.name: fx.id for fx in document.show.fixtures}
+        self.notes: dict[str, str] = {names[name]: where for name, where in by_name.items() if name in names}
+        self._other_notes = {name: where for name, where in by_name.items() if name not in names}  # (kept in the file)
+        self._noted_names = {fx.id: fx.name for fx in document.show.fixtures}
         self._items: dict[str, LightItem] = {}
         self._drag_spots: dict[str, MapSpot] = {}
         self._dragging = False
@@ -688,6 +693,9 @@ class LayoutPage(QWidget):
         self._update_labels()
         if not self._dragging:  # (a 640x360 sampler per step of a drag kept the window busy: it's redrawn at the end)
             self._update_territory(show)
+        renamed = [fx.id for fx in show.fixtures if self.notes.get(fx.id) and self._noted_names.get(fx.id) not in (None, fx.name)]
+        if renamed:  # (undo / redo of a rename): the file follows, with the note under the light's name now
+            self._save_notes(show)
         self._fill_tables(show)
         self._fill_legend(show)
         self._load_backdrop(show)
@@ -703,7 +711,7 @@ class LayoutPage(QWidget):
             tips = {"address": "Overlaps " + ", ".join(conflicts[fx.id])} if fx.id in conflicts else {}
             rows.append({
                 "id": fx.id, "name": fx.name, "group": fx.group, "profile": fx.profile, "address": fx.address,
-                "channels": fx.channel_range(), "where": self.notes.get(fx.name, ""), "bad": bad, "tips": tips,
+                "channels": fx.channel_range(), "where": self.notes.get(fx.id, ""), "bad": bad, "tips": tips,
                 "editable": ("name", "group", "profile", "address", "where"),
             })
         self.table.fill(rows, show.read_only)
@@ -1006,14 +1014,17 @@ class LayoutPage(QWidget):
         if fx is None:
             return
         if key == "where":
-            self.notes[fx.name] = str(value).strip()
+            self.notes[fixture_id] = str(value).strip()
             self._save_notes(show)
             return
         if key == "name":
-            new = rename_light(show, fixture_id, str(value))
-            if fx.name in self.notes and str(value).strip():
-                self.notes[str(value).strip()] = self.notes.pop(fx.name)
-            text = f"Rename {fx.name} → {str(value).strip()}"
+            wanted = str(value).strip()
+            if any(other.id != fixture_id and other.name.casefold() == wanted.casefold() for other in show.fixtures):
+                self.notes_status.setText(f"Another light is already called {wanted}: pick another name")
+                self._fill_tables(show)  # put the cell back
+                return
+            new = rename_light(show, fixture_id, wanted)
+            text = f"Rename {fx.name} → {wanted}"
         elif key == "group":
             new = set_group(show, fixture_id, str(value))
             text = f"{fx.name}: group {fx.group or 'none'} → {str(value).strip() or 'none'}"
@@ -1032,11 +1043,14 @@ class LayoutPage(QWidget):
             self._save_notes(new)
 
     def _save_notes(self, show: Show) -> None:
+        by_name = dict(self._other_notes)
+        by_name.update({fx.name: self.notes[fx.id] for fx in show.fixtures if self.notes.get(fx.id)})
+        self._noted_names = {fx.id: fx.name for fx in show.fixtures}
         try:
             if self._notes_path:
-                save_notes(show, self.notes, self._notes_path)
+                save_notes(show, by_name, self._notes_path)
             else:
-                save_notes(show, self.notes)
+                save_notes(show, by_name)
             self.notes_status.setText("Notes saved to fixture_map.csv")
         except OSError as exc:
             log_exception("saving fixture_map.csv", exc)

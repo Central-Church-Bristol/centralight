@@ -22,7 +22,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M7 Painting and masks | **done** (3 Nov, 02:50) |
 | M8 Audio variables | **done** (3 Nov, 03:13) |
 | M9 Polish (launcher .exe, Diagnostics) | **done** (3 Nov, 03:54) |
-| A review of the whole app (five reviewers, 46 problems) | part 1 fixed (3 Nov, 05:21; 504 tests pass); the rest next |
+| A review of the whole app (five reviewers, 46 problems) | **done** (3 Nov: part 1 at 05:21, part 2 at 06:00; 522 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -52,7 +52,8 @@ Run all the tests (about five minutes, including the layout check at every scali
 Five reviewers (separate Claude agents, read-only, one per area: the lights path, automations and the remote, the
 show's files, the Editor, the main window) went through all 23,500 lines looking for things that would go wrong
 for you, and reproduced each one with a small script. They found 46 problems. Each fix has a test in
-`tests\test_review_fixes.py` that fails without it. Fixed so far:
+`tests\test_review_fixes.py` that fails without it. Everything worth fixing is fixed (part 1 was committed
+first, at 05:21; part 2 afterwards):
 
 **Things that could stop or freeze CentraLight**
 - One wrongly typed value in a show or automation file (e.g. an AI writing a list where a word should be) stopped
@@ -119,10 +120,54 @@ for you, and reproduced each one with a small script. They found 46 problems. Ea
   CentraLight read its own in-between save back as an outside change. Now its own saves are recognised by their
   exact bytes. Also, a date's day can't go past the month's end, and "no days ticked" says so.
 
-Still to do from the review: the Editor's timeline and keyframe problems, retrying a failed save (and saying so),
-the "Load the changed file?" question racing the autosave, broken files that vanish silently after a restart,
-Ctrl+Z on the Dashboard after an AI change, AGENTS.md being overwritten, notes that follow a light by its id, and
-escaping in the remote's help page.
+**The Editor** (part 2)
+- Clicking an element in the palette after a timed input had played to its end added an invisible 0.1 s element at
+  the end. Now it goes at the start.
+- Trimming an element's start past a keyframe made the look jump (two keys at the same moment). Now it keeps the
+  look there, as Split does.
+- Dragging a keyframe on the timeline ran away from the pointer (the zoom re-fitted at every step). Fixed.
+- Dragging a keyframed setting while the Editor played wrote a keyframe at every step of the drag, and shape and
+  picture drags scattered keys along the playhead's path. Now a drag puts one key at the moment it began.
+- Two separate drags of a slider (or two typed values) merged into one undo step, while unticking a group of lights
+  made one step per light. Now each drag is one step, and a group is one step.
+- The Selected view kept showing the previous element's picture when the new one had none yet. Fixed.
+- Smaller: a rebuild could delete the colour dialog under itself; "Copied ✓" could touch a deleted button; a
+  right-click during a drag lost its undo step; the Infinite box stayed ticked after Cancel.
+
+**The show's files** (part 2)
+- A save that failed (a file held by another program, read-only, or the disk full) stopped the rest of that save,
+  was never tried again, and nothing said so: after a restart the changes were gone. Now each file is saved on its
+  own, a failed one is tried again every 5 s, and a red **Not saved** chip in the header says what and why until it
+  works.
+- While "Load the changed file?" was on screen, the autosave could write over the file, leaving the app and the
+  file different. Now saving and checking wait for the answer; the file is read again afterwards, and "keep mine"
+  saves at once.
+- Files that couldn't be read when the show opened just vanished. Now an amber **File problems** chip lists them
+  (click it for the whole list).
+- Ctrl+Z on the Dashboard after an AI had changed an input undid something else (even removing an AI-made input).
+  Now Ctrl+Z on the Dashboard undoes the newest change to the inputs or the show, including one an AI made to an
+  input. (Layout and automation changes are undone on their own tabs.)
+- AGENTS.md and AI_GUIDE.md in the show folder were replaced whoever had written them. Now CentraLight only replaces
+  the ones it wrote (they start with a marker line).
+- The Layout tab's "Where" notes now follow each light by its id: a rename (and its undo) keeps the note with its
+  light, and a name another light already has is refused. fixture_map.csv itself is unchanged
+  (`usb_dmx_patch_test.py` still reads it).
+
+**The remote and NDI** (part 2)
+- The help page copied `?key=` into its script without escaping, so a link could run script on 127.0.0.1. Now only
+  the real key is passed on, escaped.
+- `/api/overlay/²/off` gave a server error, and HEAD requests ran commands. Fixed.
+- An NDI receiver or discovery thread that hit an unexpected error ended for good (Follow screen would have stopped
+  until a restart). Now it starts again after 2 s.
+- My own slip, caught before you saw it: part 1's mouse-wheel fix also stopped lists and panels scrolling (a scroll
+  area hands the wheel to its scroll bar, which never has focus). Now only faders, number boxes and drop-downs wait
+  to be clicked into, and a test checks that lists still scroll.
+
+Left as they are, on purpose or because they're too small to matter now: choosing the same big video again
+compares the two files on the window's thread (a short pause); old backups can only be restored by hand; deleting
+an input that an automation uses doesn't warn (the Automation tab shows "(not found)"); a house-light action can't
+"leave the switch as it is"; a second launch in the first 1.5 s of startup exits quietly; after waking, NDI
+reconnects by itself (nothing forces it); and other tabs' redraws make slider drags in the Editor a little heavy.
 
 ## M9 Polish — done
 
@@ -651,5 +696,5 @@ Problems the tests found and that are fixed:
 
 ## Next
 
-Everything in the plan is built. Now: the rest of the review's fixes (see "A review of the whole app"), then
-Wednesday's checklist on the real lights (`docs/WEDNESDAY_TESTS.md`).
+Everything in the plan is built, and the review's fixes are in. What's left is Wednesday's checklist on the real
+lights (`docs/WEDNESDAY_TESTS.md`).

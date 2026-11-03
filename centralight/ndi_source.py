@@ -60,6 +60,9 @@ def ensure_initialized(ndi: Any) -> bool:
         return ok
 
 
+RESTART_AFTER_ERROR = 2.0  # seconds before an NDI thread that hit an unexpected error starts again
+
+
 def matches(wanted: str, ndi_name: str) -> bool:
     return wanted.strip().lower() in ndi_name.lower()
 
@@ -140,6 +143,15 @@ class NdiDiscovery:
         return None
 
     def _run(self) -> None:
+        """Keeps going whatever happens: an unexpected error restarts it after a moment."""
+        while True:
+            self._failed = False
+            self._run_once()
+            if not (self._running and self._failed):
+                return
+            time.sleep(RESTART_AFTER_ERROR)
+
+    def _run_once(self) -> None:
         finder = None
         try:
             ndi = self._ndi or load_ndi()
@@ -156,6 +168,7 @@ class NdiDiscovery:
                         self._sources = found
                         self.changed.set()
         except Exception as exc:
+            self._failed = True
             log_exception("ndi-discovery", exc)
         finally:
             if finder is not None:
@@ -227,6 +240,16 @@ class NdiReceiver:
             self._status = SourceStatus(**values)
 
     def _run(self) -> None:
+        """Keeps going whatever happens: an unexpected error restarts the receiver after a moment (the lights hold
+        the last picture meanwhile) instead of leaving them stuck until CentraLight restarts."""
+        while True:
+            self._failed = False
+            self._run_once()
+            if not (self._running and self._failed):
+                return
+            time.sleep(RESTART_AFTER_ERROR)
+
+    def _run_once(self) -> None:
         ndi = None
         recv = None
         last_frame: float | None = None  # when the newest picture arrived
@@ -300,6 +323,7 @@ class NdiReceiver:
                     if lost or now - connected_at > self._quiet_reconnect_after:
                         recv = self._disconnect(ndi, recv)
         except Exception as exc:
+            self._failed = True
             log_exception(f"ndi receiver {self.wanted}", exc)
             self._set(state=ERROR, message=str(exc))
         finally:

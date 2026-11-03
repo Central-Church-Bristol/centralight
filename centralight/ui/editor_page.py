@@ -72,6 +72,7 @@ class EditorPage(QWidget):
         self._picture_version = -1
         self._live = False
         self._solo_live = False  # the engine is showing this input alone (from the last frame)
+        self._drag_t: float | None = None  # the element time a drag in the Selected view began at
         self._entered = False  # the Editor is the page on screen
         self._variables = None  # global variables' values, from the engine
         show = document.show
@@ -179,9 +180,9 @@ class EditorPage(QWidget):
         self.details.shape_selected.connect(self._shape_from_details)
         self.details.element_removed.connect(lambda: self.select_element(""))
         self.selected_canvas.shape_selected.connect(self._shape_from_viewport)
-        self.selected_canvas.drag_started.connect(self.document.begin_drag)
+        self.selected_canvas.drag_started.connect(self._drag_started)
         self.selected_canvas.shapes_changing.connect(self._shape_dragged)
-        self.selected_canvas.shapes_changed.connect(self.document.end_drag)
+        self.selected_canvas.shapes_changed.connect(self._drag_ended)
         self.selected_canvas.shape_drawn.connect(self._shape_drawn)
         self.selected_canvas.light_clicked.connect(self._toggle_light)
         self.selected_canvas.load_picture = self._picture_now
@@ -388,9 +389,20 @@ class EditorPage(QWidget):
 
     # ------------------------------------------------------------ shapes in the Selected view
 
+    def _drag_started(self) -> None:
+        self._drag_t = self.element_time()  # one moment for the whole drag, even while playing
+        self.document.begin_drag()
+
+    def _drag_ended(self, text: str) -> None:
+        self._drag_t = None
+        self.document.end_drag(text)
+
+    def _key_time(self) -> float:
+        return self._drag_t if self._drag_t is not None else self.element_time()
+
     def _shape_dragged(self, element_id: str, shape_id: str, values: dict) -> None:
-        if self.input_id:  # keyframed settings get a key at the playhead
-            self.document.preview(set_shape_values_at(self.show_data, self.input_id, element_id, shape_id, values, self.element_time()))
+        if self.input_id:  # keyframed settings get a key at the playhead (where it was when the drag began)
+            self.document.preview(set_shape_values_at(self.show_data, self.input_id, element_id, shape_id, values, self._key_time()))
 
     def _shape_drawn(self, shape_type: str, values: dict) -> None:
         if not self.input_id or not self.element_id:
@@ -436,7 +448,7 @@ class EditorPage(QWidget):
     def _picture_dragged(self, element_id: str, values: dict) -> None:
         """The gizmo on an Image, Video or NDI element (keyframed settings get a key at the playhead)."""
         if self.input_id:
-            self.document.preview(set_element_values_at(self.show_data, self.input_id, element_id, values, self.element_time()))
+            self.document.preview(set_element_values_at(self.show_data, self.input_id, element_id, values, self._key_time()))
 
     def _toggle_light(self, light_id: str) -> None:
         element = self._element()
@@ -485,9 +497,10 @@ class EditorPage(QWidget):
         self._picture_version = version
         self.result_canvas.set_image(rgb_image(picture.result))
         self.result_panel.strip.set_colours(picture.colours)
-        if picture.selected is not None and picture.element_id == (self.element_id or None):
+        if self.element_id and picture.element_id == self.element_id:
             tint = mask_tint(picture.keep) if (self.selected_canvas.mask_mode and picture.keep is not None) else None
-            self.selected_canvas.set_image(rgba_image(picture.selected), tint)
+            # (no picture yet, e.g. an NDI feed with no signal: show nothing, not the last element's picture)
+            self.selected_canvas.set_image(rgba_image(picture.selected) if picture.selected is not None else None, tint)
         elif not self.element_id:
             self.selected_canvas.set_image(None)
 

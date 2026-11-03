@@ -342,7 +342,9 @@ def trim_element(show: Show, input_id: str, element_id: str, start: float | None
         new_end = old_end if end is None else max(float(end), new_start + MIN_ELEMENT_LENGTH)
         element["start"], element["end"] = round(new_start, 3), round(new_end, 3)
         offset = old_start - new_start
-        if abs(offset) > 1e-9:
+        if offset < -1e-9:  # the start moved later, maybe past keys: keep the look there (as Split does)
+            element = _map_params(element, lambda param: _keep_keys(param, -offset, before=False))
+        elif offset > 1e-9:  # earlier: the keys just move with it
             element = _map_params(element, lambda param: keys_shifted(param, offset))
         return element
     return _with_element(show, input_id, element_id, change)

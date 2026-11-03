@@ -298,7 +298,7 @@ class GlobalsPanel(QWidget):
         QGuiApplication.clipboard().setText(url)
         if button is not None:
             button.setText("Copied ✓")
-            QTimer.singleShot(2000, lambda: button.setText("Copy URL"))
+            QTimer.singleShot(2000, button, lambda: button.setText("Copy URL"))  # (cancelled if it's gone)
         return url
 
 

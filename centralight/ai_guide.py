@@ -26,6 +26,7 @@ from .automations import ACTIONS, CONDITIONS
 from .elements import media_path
 from .expressions import AUDIO_NAMES, FUNCTIONS, ExpressionError, compile_expression
 from .files import json_text, write_atomic
+from .log import log_info
 from .model import PATCH_RADIUS, ROLE_COLOUR, TRACK_COUNT, TRANSITION_KINDS, Input, Show, slugify
 from .schema import (
     BLEND_MODES,
@@ -416,21 +417,36 @@ def guide_text(show: Show, full: bool = True) -> str:
     return "\n\n".join(parts) + "\n"
 
 
+GUIDE_MARKER = "<!-- Made by CentraLight: it rewrites this file when the show changes. Keep your own notes in another file. -->"
+
+
+def _ours(data: bytes) -> bool:
+    """A guide file CentraLight wrote: its marker, or the heading versions before the marker started with."""
+    text = data.decode("utf-8", errors="replace").lstrip("\ufeff")
+    return text.startswith(GUIDE_MARKER[:30]) or text.startswith("# Writing CentraLight inputs (")
+
+
 def write_guide_files(show: Show) -> list[str]:
     """Write AI_GUIDE.md, AGENTS.md and input.schema.json into the show folder if they've changed.
     Returns the files written."""
     if not show.folder or show.read_only:
         return []
     folder = Path(show.folder)
-    guide = guide_text(show)
+    guide = GUIDE_MARKER + "\n" + guide_text(show)
     contents = {GUIDE_FILE: guide, AGENTS_FILE: guide, SCHEMA_FILE: json_text(input_schema(show))}
     written = []
     for name, text in contents.items():
         path = folder / name
         data = text.encode("utf-8")
         try:
-            if path.is_file() and path.read_bytes() == data:
-                continue
+            if path.is_file():
+                old = path.read_bytes()
+                if old == data:
+                    continue
+                if name != SCHEMA_FILE and not _ours(old):  # someone's own AGENTS.md (or notes): left alone
+                    log_info(f"{name} in the show folder wasn't written by CentraLight, so it was left as it is",
+                             key=f"guide-not-ours-{name}")
+                    continue
             write_atomic(path, data)
             written.append(name)
         except OSError:
