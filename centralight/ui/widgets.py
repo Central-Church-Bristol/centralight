@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLayout,
     QLayoutItem,
+    QLineEdit,
     QPushButton,
     QSizePolicy,
     QSlider,
@@ -128,6 +129,99 @@ class ElidedLabel(QLabel):
         tip = self._own_tip or (self._full if shown != self._full else "")
         if QLabel.toolTip(self) != tip:
             QLabel.setToolTip(self, tip)
+
+
+class _NameBox(QLineEdit):
+    """The text box of a NameTitle: Esc gives up (a plain QLineEdit ignores it)."""
+
+    cancelled = Signal()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Escape:
+            self.cancelled.emit()
+            return
+        super().keyPressEvent(event)
+
+
+class NameTitle(QWidget):
+    """A title such as "Editing: Warm welcome" whose name can be changed where it is (M14): click it, type, then Enter
+    or click away to keep the new name, Esc to leave it. renamed(name) says what was typed (never empty or the same)."""
+
+    renamed = Signal(str)
+
+    def __init__(self, prefix: str, empty: str = "nothing", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._prefix = prefix
+        self._empty = empty
+        self._name: str | None = None
+        self._editable = True
+        self._editing = False
+        self.label = ElidedLabel(f"{prefix}{empty}")
+        self.label.installEventFilter(self)
+        self.edit = _NameBox()
+        self.edit.setVisible(False)
+        self.edit.editingFinished.connect(lambda: self._finish(True))
+        self.edit.cancelled.connect(lambda: self._finish(False))
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.label, 1)
+        layout.addWidget(self.edit, 1)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self._refresh()
+
+    def set_name(self, name: str | None) -> None:
+        """The name shown (None: nothing to name, so it can't be clicked)."""
+        if self._editing and name != self._name:
+            self._finish(False)  # (something else is being edited now: the half-typed name goes)
+        self._name = name
+        self._refresh()
+
+    def set_editable(self, editable: bool) -> None:
+        self._editable = editable
+        if not editable and self._editing:
+            self._finish(False)
+        self._refresh()
+
+    def full_text(self) -> str:
+        return self.label.full_text()
+
+    def is_editing(self) -> bool:
+        return self._editing
+
+    def start(self) -> bool:
+        """Turn the name into a text box (as a click does); False when there's nothing to rename."""
+        if self._editing or self._name is None or not self._editable or not self.isEnabled():
+            return False
+        self._editing = True
+        self.edit.setText(self._name)
+        self.label.setVisible(False)
+        self.edit.setVisible(True)
+        self.edit.setFocus(Qt.FocusReason.MouseFocusReason)
+        self.edit.selectAll()
+        return True
+
+    def _finish(self, keep: bool) -> None:
+        if not self._editing:
+            return  # (Enter, then the focus leaving: only once)
+        self._editing = False
+        typed = self.edit.text().strip()
+        self.edit.setVisible(False)
+        self.label.setVisible(True)
+        if keep and typed and self._name is not None and typed != self._name:
+            self.renamed.emit(typed)
+
+    def _refresh(self) -> None:
+        clickable = self._name is not None and self._editable
+        self.label.setText(f"{self._prefix}{self._name if self._name is not None else self._empty}")
+        self.label.setToolTip("Click to rename" if clickable else "")
+        self.label.setCursor(Qt.CursorShape.IBeamCursor if clickable else Qt.CursorShape.ArrowCursor)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if watched is self.label and event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            if self.start():
+                return True
+        return super().eventFilter(watched, event)
 
 
 class ToggleSwitch(QAbstractButton):

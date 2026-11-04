@@ -128,6 +128,7 @@ def stylesheet() -> str:
     text = (Path(__file__).with_name("style.qss")).read_text(encoding="utf-8")
     replacements = {f"@{name}": value for name, value in COLOURS.items()}
     replacements["@uifont"] = f'"{fonts().ui}"'
+    replacements["@ui_dir"] = Path(__file__).parent.as_posix()  # (the tick pictures beside this file)
     for token in sorted(replacements, key=len, reverse=True):  # @text_2 before @text
         text = text.replace(token, replacements[token])
     return text

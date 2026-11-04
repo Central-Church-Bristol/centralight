@@ -56,7 +56,7 @@ from ..links import original_problem
 from ..global_automations import GLOBAL_DIR, GLOBAL_NAME, global_folder
 from ..layouts import switch_layout
 from ..engine import EngineFrame
-from ..input_edit import delete_input, duplicate_input, new_input
+from ..input_edit import delete_input, duplicate_input, new_input, update_input
 from ..live_state import LiveState
 from ..log import log_exception, log_info
 from ..model import Show, clean_notes
@@ -237,6 +237,7 @@ class MainWindow(QWidget):
         self.dashboard.new_requested.connect(self.new_input)
         self.dashboard.duplicate_requested.connect(self.duplicate_input)
         self.dashboard.delete_requested.connect(self.delete_input)
+        self.dashboard.rename_requested.connect(self.ask_rename_input)
         self.dashboard.variable_changed.connect(lambda name, value: self.engine.submit(SetVariable(name, value)))
         self.dashboard.ai_requested.connect(self.open_ai_dialog)
         self.dashboard.import_requested.connect(lambda: self.import_from_show(INPUTS))
@@ -419,6 +420,23 @@ class MainWindow(QWidget):
         if inp is not None:
             show, _new_id = duplicate_input(self.document.show, input_id)
             self.document.apply(show, f"Duplicate {inp.name}")
+
+    def ask_rename_input(self, input_id: str) -> None:
+        """Rename… on a tile's menu."""
+        inp = self.document.show.inputs.get(input_id)
+        if inp is None or self._locked or self.document.read_only:
+            return
+        name, ok = QInputDialog.getText(self, "Rename input", "New name for this input:\n\n(Stream Deck keys and automations "
+                                        "keep working: they use its id, not its name.)", text=inp.name)
+        if ok:
+            self.rename_input(input_id, name)
+
+    def rename_input(self, input_id: str, name: str) -> bool:
+        """One undo step, as on the Editor's title and the Input tab. False if nothing changed."""
+        inp = self.document.show.inputs.get(input_id)
+        if inp is None or not name.strip() or name.strip() == inp.name or self.document.read_only:
+            return False
+        return bool(self.document.apply(update_input(self.document.show, input_id, name=name), f"Rename {inp.name} → {name.strip()}"))
 
     def delete_input(self, input_id: str) -> None:
         inp = self.document.show.inputs.get(input_id)

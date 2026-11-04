@@ -172,6 +172,11 @@ QLabel#EditorTitle {
     font-size: 18px;
     font-weight: 600;
 }
+QLineEdit#EditorTitleEdit {
+    font-size: 18px;
+    font-weight: 600;
+    padding: 0px 4px;
+}
 QFrame#LiveBanner {
     background: #3A1018;
     border: 1px solid @danger;
@@ -504,6 +509,36 @@ QCheckBox, QRadioButton {
 }
 QCheckBox:disabled, QRadioButton:disabled {
     color: @text_3;
+}
+/* Tick boxes keep a visible border when they're empty, on every background (M14) */
+QCheckBox::indicator, QAbstractItemView::indicator, QGroupBox::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid @text_3;
+    border-radius: 3px;
+    background: @panel;
+}
+QCheckBox::indicator:hover, QAbstractItemView::indicator:hover, QGroupBox::indicator:hover {
+    border-color: @text_2;
+}
+QCheckBox::indicator:checked, QAbstractItemView::indicator:checked, QGroupBox::indicator:checked {
+    border-color: @accent;
+    background: @accent;
+    image: url("@ui_dir/check.svg");
+}
+QCheckBox::indicator:indeterminate, QAbstractItemView::indicator:indeterminate {
+    border-color: @accent;
+    background: @accent;
+    image: url("@ui_dir/check_mixed.svg");
+}
+QCheckBox::indicator:disabled, QAbstractItemView::indicator:disabled, QGroupBox::indicator:disabled {
+    border-color: @border_strong;
+    background: @window;
+}
+QCheckBox::indicator:checked:disabled, QAbstractItemView::indicator:checked:disabled,
+QGroupBox::indicator:checked:disabled {
+    border-color: @text_3;
+    background: @text_3;
 }
 
 QGroupBox {

@@ -32,7 +32,15 @@ from ..editor_render import EditorRenderer
 from ..engine import EngineFrame
 from ..assets import MASKS_DIR, PAINT_DIR, load_mask, load_strokes, save_asset
 from ..elements import media_path
-from ..input_edit import add_shape, find_element, set_element_value, set_element_values_at, set_excluded, set_shape_values_at
+from ..input_edit import (
+    add_shape,
+    find_element,
+    set_element_value,
+    set_element_values_at,
+    set_excluded,
+    set_shape_values_at,
+    update_input,
+)
 from ..log import log_exception
 from ..model import END_LOOP, Input, Show, element_span
 from ..settings import Settings
@@ -44,7 +52,7 @@ from .element_palette import ElementPalette
 from .timeline_view import TimelineView
 from .undo_bar import UndoBar
 from .viewports import ResultPanel, SelectedPanel, SelectedViewport, ViewportCanvas, mask_tint, rgb_image, rgba_image
-from .widgets import ElidedLabel, ResettableSplitter
+from .widgets import NameTitle, ResettableSplitter
 
 POLL_MS = 66  # pick up new pictures from the editor renderer ~15 times a second
 
@@ -65,7 +73,7 @@ class EditorPage(QWidget):
         self.element_id = ""
         self.shape_id = ""
         self.playhead = 0.0  # the input's time shown in the viewports (seconds)
-        self.playing = True
+        self.playing = False  # (an input opens paused, M14: press play to see it move)
         self._play_origin = time.monotonic()  # when time 0 would have been, while playing
         self._renderer = EditorRenderer(sources, late=getattr(engine, "is_late", None))  # (fewer pictures while the engine runs late)
         self._renderer_running = False
@@ -78,8 +86,10 @@ class EditorPage(QWidget):
         show = document.show
 
         # --- the strip along the top
-        self.editing = ElidedLabel("Editing: nothing")
-        self.editing.setObjectName("EditorTitle")
+        self.editing = NameTitle("Editing: ")  # (click the name to rename the input there)
+        self.editing.label.setObjectName("EditorTitle")
+        self.editing.edit.setObjectName("EditorTitleEdit")
+        self.editing.renamed.connect(self._rename_input)
         self.ai_button = QPushButton("Edit with AI")
         self.ai_button.setToolTip("Describe a change, and let any AI chat write it (copy, paste)")
         self.ai_button.clicked.connect(lambda: self.input_id and self.ai_requested.emit(self.input_id))
@@ -180,6 +190,7 @@ class EditorPage(QWidget):
         self.details.shape_selected.connect(self._shape_from_details)
         self.details.element_removed.connect(lambda: self.select_element(""))
         self.selected_canvas.shape_selected.connect(self._shape_from_viewport)
+        self.selected_canvas.shape_remove_requested.connect(self._remove_shape_by_key)
         self.selected_canvas.drag_started.connect(self._drag_started)
         self.selected_canvas.shapes_changing.connect(self._shape_dragged)
         self.selected_canvas.shapes_changed.connect(self._drag_ended)
@@ -247,7 +258,7 @@ class EditorPage(QWidget):
         self.input_id = input_id
         self.element_id = ""
         self.shape_id = ""
-        self.playhead, self.playing, self._play_origin = 0.0, True, time.monotonic()
+        self.playhead, self.playing, self._play_origin = 0.0, False, time.monotonic()  # (opens paused at the start)
         if self._entered:
             self.document.set_scope(self.undo_scope())
         self.timeline.set_input(input_id)
@@ -277,6 +288,14 @@ class EditorPage(QWidget):
         self.details.select_shape(self.shape_id or None)
         self._sync_selected_view()
 
+    def _remove_shape_by_key(self, shape_id: str) -> None:
+        """Delete or Backspace in the Selected view (M14): the selected shape goes, as with Remove on the details panel
+        ("Remove Rectangle 2", one undo step). Never the element itself: that's the timeline's Delete."""
+        if not shape_id or shape_id != self.shape_id or self.show_data.read_only:
+            return
+        self.details.select_shape(shape_id)  # (the details panel removes the shape it shows)
+        self.details.remove_selected_shape()
+
     def _element(self):
         inp = self.current_input()
         if inp is None or not self.element_id:
@@ -294,9 +313,16 @@ class EditorPage(QWidget):
     def _sync_buttons(self) -> None:
         inp = self.current_input()
         self.stack.setCurrentIndex(1 if inp is not None else 0)
-        self.editing.setText(f"Editing: {inp.name}" if inp is not None else "Editing: nothing")
+        self.editing.set_name(inp.name if inp is not None else None)
+        self.editing.set_editable(not self.show_data.read_only)
         for button in (self.solo_button, self.send_button, self.ai_button):
             button.setEnabled(inp is not None)
+
+    def _rename_input(self, name: str) -> None:
+        """The title's name was changed where it is (one undo step, as on the Input tab)."""
+        inp = self.current_input()
+        if inp is not None and name.strip() and name.strip() != inp.name and not self.show_data.read_only:
+            self.document.apply(update_input(self.show_data, self.input_id, name=name), f"Rename {inp.name} → {name.strip()}")
 
     # ------------------------------------------------------------ the playhead
 

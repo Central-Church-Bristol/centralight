@@ -1000,9 +1000,13 @@ class DetailsPanel(QScrollArea):
             self.document.apply(move_shape(self.show_data, self.input_id, self.element_id, self.shape_id, step),
                                 f"Move {shape_name(shape)} {'up' if step > 0 else 'down'}")
 
+    def remove_selected_shape(self) -> None:
+        """Remove (the button), or Delete in the Selected view: the shape shown here goes, one undo step."""
+        self._remove_shape()
+
     def _remove_shape(self) -> None:
         shape = self.current_shape()
-        if shape is not None:
+        if shape is not None and not self.show_data.read_only:
             shape_id, self.shape_id = self.shape_id, None
             self.document.apply(remove_shape(self.show_data, self.input_id, self.element_id, shape_id), f"Remove {shape_name(shape)}")
             self.shape_selected.emit("")

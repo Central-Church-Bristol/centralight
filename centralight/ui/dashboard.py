@@ -214,6 +214,7 @@ class DashboardPage(QWidget):
     new_requested = Signal()
     duplicate_requested = Signal(str)
     delete_requested = Signal(str)
+    rename_requested = Signal(str)  # input id (Rename… on the tile's menu)
     variable_changed = Signal(str, object)  # global variable name, value
     ai_requested = Signal(str)  # input id to edit with AI ("" = make a new one)
     import_requested = Signal()  # Import from another show…
@@ -396,11 +397,18 @@ class DashboardPage(QWidget):
             self.output_rows[fx.id] = row
 
     def _tile_menu(self, input_id: str, where: QPoint) -> None:
+        menu = self.tile_menu(input_id)
+        if menu is not None:
+            menu.exec(where)
+            menu.deleteLater()  # (each right-click used to leave its menus behind)
+
+    def tile_menu(self, input_id: str) -> QMenu | None:
+        """A tile's right-click menu, ready to show (None when locked, or the input has gone)."""
         if self._locked:
-            return
+            return None
         inp = self.show_data.inputs.get(input_id)
         if inp is None:
-            return
+            return None
         menu = QMenu(self)
         menu.addAction("Send to Base", lambda: self.send_requested.emit(input_id, False))
         menu.addAction("Cut to Base", lambda: self.send_requested.emit(input_id, True))
@@ -410,13 +418,13 @@ class DashboardPage(QWidget):
         menu.addSeparator()
         menu.addAction("Edit", lambda: self.edit_requested.emit(input_id))
         menu.addAction("Edit with AI…", lambda: self.ai_requested.emit(input_id))
+        menu.addAction("Rename…", lambda: self.rename_requested.emit(input_id))
         menu.addAction("Duplicate", lambda: self.duplicate_requested.emit(input_id))
         menu.addAction("Delete…", lambda: self.delete_requested.emit(input_id))
         if input_id == self._base_id:
             menu.addSeparator()
             menu.addAction("Stop (fade Base to black)", lambda: self.clear_base_requested.emit(False))
-        menu.exec(where)
-        menu.deleteLater()  # (each right-click used to leave its menus behind)
+        return menu
 
     def set_frame(self, frame: EngineFrame) -> None:
         self.variables.set_values(frame.variables)

@@ -234,9 +234,11 @@ class SelectedViewport(ViewportCanvas):
     painted = Signal(str, object, str)  # "strokes" or "mask", the painting.Canvas, what was done (for undo)
     colour_picked = Signal(object)  # (r, g, b) from the eyedropper
     transform_changing = Signal(str, dict)  # element id, {"transform.x": ...} (live while dragging the gizmo)
+    shape_remove_requested = Signal(str)  # shape id: Delete or Backspace with a shape selected here (M14)
 
     def __init__(self, show: Show, parent: QWidget | None = None) -> None:
         super().__init__(show, checkerboard=True, parent=parent)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)  # (clicked: it takes the keys, so Delete reaches it)
         self.mask_mode = False
         self.tool = "select"
         self.element: Mapping | None = None
@@ -267,6 +269,16 @@ class SelectedViewport(ViewportCanvas):
         mask = element.get("mask") if element is not None else None
         self.excluded = set(mask.get("exclude", ()) or ()) if hasattr(mask, "get") else set()
         self.update()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        """Delete or Backspace removes the selected shape (never the element: that's the timeline's Delete)."""
+        if (event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.selected_shape and not self.mask_mode
+                and self._drag is None and self._draw is None
+                and any(str(shape.get("id")) == self.selected_shape for shape in self.shapes())):
+            self.shape_remove_requested.emit(self.selected_shape)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _is_paint(self) -> bool:
         return self.element is not None and self.element.get("kind") == "paint"

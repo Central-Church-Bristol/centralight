@@ -34,6 +34,8 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M13 Show extras (your six extras of 3 Nov, evening) | **done** (4 Nov, 00:20; reviewed by three, about 45 findings fixed; 805 tests pass; all 38 deliberate breakages caught) |
 | A 10-hour soak (after M12, loading a show every 2 minutes) | **done** (4 Nov, 03:10; 300 loads, no errors; memory up about 0.8 MB an hour, from NDI itself) |
 | A 3-hour soak of M13 (show loads, a linked video replaced while it plays, countdowns) | **done** (4 Nov, 04:16; 90 loads, no errors; it found a video cache with no limit: fixed, 806 tests pass twice) |
+| M14, your nine changes after the rig test (4 Nov), in a separate copy of the code: | |
+| — 3 tick boxes, 1 rename, 2 Editor opens paused, 7 Delete removes a shape | **done** (4 Nov, 22:15) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -57,6 +59,27 @@ Run all the tests (about five minutes, including the layout check at every scali
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## M14: your nine changes after the rig test (4 Nov, night)
+
+Built in a separate copy of the code (`.claude\worktrees\m14`, the same branch), so the main folder keeps the version
+that ran tonight's prayer meeting. Everything was tried with Simulated output and temporary settings only.
+
+The small ones first (3, 1, 2, 7):
+- **3. Tick boxes are always visible.** An empty tick box has a grey border on every background (and a lighter one
+  under the mouse); a ticked one is filled pale blue with a dark tick, and a part-ticked group (Lights on the
+  Selected tab) shows a dash. Lists and trees with ticks look the same. The tick pictures are two tiny files beside
+  the style sheet (`centralight\ui\check.svg`, `check_mixed.svg`).
+- **1. Rename an input more easily.** A tile's right-click menu has **Rename…**, and the name at the top of the
+  Editor ("Editing: Warm white") can be clicked and typed over: Enter or clicking away keeps it, Esc leaves it.
+  Both are one undo step, like the Input tab. Stream Deck keys and automations keep working, as they use the
+  input's id, not its name.
+- **2. The Editor opens paused.** Opening an input (infinite or timed) leaves the playhead at the start; press play
+  to see it move. Opening another input pauses again.
+- **7. Delete removes the selected shape.** In the Selected view, Delete or Backspace removes the selected shape,
+  as Remove on the details panel does (one undo step, "Remove Rectangle S1"). With no shape selected it does
+  nothing, it never removes the element (only the timeline's Delete does that), and typing in a box isn't
+  affected. Clicking the Selected view gives it the keys.
 
 ## The overnight soaks (4 Nov, early morning)
 
@@ -1311,8 +1334,8 @@ Problems the tests found and that are fixed:
   can change over time with expressions; keyframes for those can come later if you want them.
 - **Stop** at the end of a timed input is a cut (Base goes black, or the overlay shows what's under it). For a
   fade, give the last element an out transition.
-- **The Editor's playhead plays** when you open an input, so expressions and videos move as before; pause it to
-  put keyframes at a moment.
+- **The Editor's playhead waits at the start** when you open an input (your change of 4 Nov; it used to play
+  straight away). Press play to see expressions and videos move.
 - **Painting undo** keeps whole pictures (each stroke a new file named after its contents) rather than the plan's
   32×32 tiles: it's exact by design, fits the undo history every other edit uses, and a 640×360 picture is small.
 
