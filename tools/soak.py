@@ -6,9 +6,10 @@ r"""Run the whole CentraLight app for a while and watch its CPU and memory.
 
 The app runs with no visible window (Qt's offscreen platform), Simulated output and its
 own temporary settings and show, so the lights and your real files are never touched.
-A test NDI source ("CentraLight Soak Source") plays a slowly moving rainbow for it to
-follow. Every --every seconds it records the app's CPU use and memory, and at the end
-prints a summary (memory should level off, not keep climbing).
+A test NDI source ("CentraLight Soak 1234 Source", with the soak's process number) plays a
+slowly moving rainbow for it to follow, so two soaks at once never follow each other's (they
+get their own remote ports too). Every --every seconds it records the app's CPU use and
+memory, and at the end prints a summary (memory should level off, not keep climbing).
 
 --switch-shows N: there are two shows, and every N seconds the other one is loaded (through
 the remote, as a Stream Deck key would) and its "Follow screen" sent, so memory can be
@@ -44,7 +45,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = "CentraLight Soak Source"
+SOURCE = f"CentraLight Soak {os.getpid()} Source"  # (the app follows any source whose name contains its one)
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 psapi = ctypes.WinDLL("psapi", use_last_error=True)
@@ -216,6 +217,16 @@ def make_second_show(shows: Path) -> None:
     duplicate_show(shows / "Central Church", shows, "Evening")
 
 
+def free_port() -> int:
+    """A port nothing is using: Windows hands out a different one each time, so soaks started together never share
+    one (and it's never the real remote's)."""
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
 def remote_get(port: int, path: str) -> bool:
     """Ask the app's remote for something (as a Stream Deck key does). True if it said ok."""
     import urllib.request
@@ -246,7 +257,7 @@ def main() -> int:
     make_show(home / "shows")
     if args.countdown > 0:
         add_countdown_automation(home / "shows" / "Central Church")  # (before the second show is copied from it)
-    port = 18000 + os.getpid() % 1000  # (its own remote port, never the real one's)
+    port = free_port()  # (its own remote port)
     (home / "appdata").mkdir(parents=True, exist_ok=True)
     (home / "appdata" / "settings.json").write_text(json.dumps({"output": "simulated", "remote_port": port}), encoding="utf-8")
     if args.switch_shows > 0:

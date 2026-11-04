@@ -36,6 +36,7 @@ from .params import evaluate, is_dynamic
 
 DEFAULT_NDI_SOURCE = "Media Background Pane"
 MEDIA_CACHE_SIZE = 32
+VIDEOS_KEPT = 6  # videos whose newest picture a drawing keeps (each new version of a linked video is a new file)
 _MAP_TYPES = (dict, MappingProxyType)
 _NUMBER_TYPES = (int, float)
 
@@ -383,6 +384,10 @@ def render_video(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray |
     key = ("video", str(path), fit, ctx.width, ctx.height)
     cached = ctx.cache.get(key)
     if cached is None or cached[0] is not frame:
+        if cached is None:  # (a video this drawing hasn't had yet: the oldest others go, so they can't pile up)
+            older = [k for k in ctx.cache if isinstance(k, tuple) and k[:1] == ("video",)]
+            for old in older[:max(0, len(older) - VIDEOS_KEPT + 1)]:
+                del ctx.cache[old]
         cached = (frame, media_layer(frame, ctx, fit))  # holding the picture keeps it from being mistaken for another
         ctx.cache[key] = cached
     return cached[1]

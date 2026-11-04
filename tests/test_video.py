@@ -141,6 +141,37 @@ class VideoElementTests(unittest.TestCase):
         self.assertEqual(self.colour_at(faster, 0.75), "green")  # 1.5 s into the clip
         self.assertEqual(self.colour_at(dict(element, file="media/nowhere.avi"), 1.0), "dark")  # missing: nothing
 
+    def test_a_picture_keeps_only_the_newest_videos(self) -> None:
+        """Each new version of a linked video is a new file: a drawing (the Dashboard's live picture, the Editor's) keeps
+        the newest picture of only the last few videos it drew, so a week of updates can't pile them up (the 4 Nov
+        soak found 0.4 MB kept for every video ever shown)."""
+        import shutil
+
+        from centralight.elements import VIDEOS_KEPT, render_video
+
+        media = Path(self.show.folder) / "media"
+        ctx = RenderContext(16, 9, video_threaded=False)
+        ctx.folder = self.show.folder
+        ctx.time = 0.5
+
+        def draw(name: str) -> str:
+            layer = render_video({"id": "E1", "kind": "video", "file": name}, ctx)
+            self.assertIsNotNone(layer, name)
+            r, g, b = (float(layer[i].mean()) for i in range(3))
+            return max((("red", r), ("green", g), ("blue", b)), key=lambda item: item[1])[0]
+
+        def kept() -> list[str]:
+            return [Path(key[1]).name for key in ctx.cache if isinstance(key, tuple) and key[:1] == ("video",)]
+
+        names = [f"rgb {i}.avi" for i in range(VIDEOS_KEPT + 3)]
+        for name in names:
+            shutil.copyfile(media / "rgb.avi", media / name)
+            self.assertEqual(draw(f"media/{name}"), "red")
+            self.assertEqual(draw(f"media/{name}"), "red")  # (the same picture again: still one each)
+        self.assertEqual(kept(), names[-VIDEOS_KEPT:])
+        self.assertEqual(draw(f"media/{names[0]}"), "red")  # (an older one comes back when it's drawn again)
+        self.assertEqual(kept(), names[-VIDEOS_KEPT + 1:] + names[:1])
+
 
 if __name__ == "__main__":
     unittest.main()
