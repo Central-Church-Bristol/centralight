@@ -31,7 +31,9 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | A third 3-hour soak (after M10) | **done** (3 Nov, 13:31; flat memory, no errors) |
 | A second look at M12 (ten findings) | **done** (3 Nov, 16:40; 648 tests pass) |
 | A fourth 3-hour soak (after M12, loading a show every 2 minutes) | **done** (3 Nov, 17:08; 90 loads, no errors; memory up 3 MB) |
-| M13 Show extras (your six extras of 3 Nov, evening) | **done** (4 Nov, 00:20; reviewed by three, about 45 findings fixed; 805 tests pass; all 38 deliberate breakages caught); a soak to come |
+| M13 Show extras (your six extras of 3 Nov, evening) | **done** (4 Nov, 00:20; reviewed by three, about 45 findings fixed; 805 tests pass; all 38 deliberate breakages caught) |
+| A 10-hour soak (after M12, loading a show every 2 minutes) | **done** (4 Nov, 03:10; 300 loads, no errors; memory up about 0.8 MB an hour, from NDI itself) |
+| A 3-hour soak of M13 (show loads, a linked video replaced while it plays, countdowns) | **done** (4 Nov, 04:16; 90 loads, no errors; it found a video cache with no limit: fixed, 806 tests pass twice) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -55,6 +57,50 @@ Run all the tests (about five minutes, including the layout check at every scali
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## The overnight soaks (4 Nov, early morning)
+
+Two long soaks ran overnight, each with the whole app (Simulated output, its own temporary settings and shows, and
+a 960×540, 24 fps test NDI feed):
+- **10 hours of the version before M13** (51bc909, finished 03:10): a show load every 2 minutes (300, every one
+  answered), no errors in the session log, CPU 10.6 % of one core. Memory rose about 0.8 MB an hour and didn't level
+  off. That's NDI's own: a small script that only receives the same feed rose at the same rate with no CentraLight
+  running (details under M1's measurements), and starting a fresh NDI receiver every 10 minutes didn't give any
+  back. A week of it is about 130 MB, which this PC can spare.
+- **3 hours of M13** (a6171e1, finished 04:16): a show load every 2 minutes; the first show put "Linked video" on
+  Base each time it loaded, and every 30 minutes the video's original was replaced by a different video while it
+  played; every 10 minutes a show variable set off an automation whose Fade to black waited for its 15-second
+  countdown. All 90 show loads were answered, 32 runs waited for their countdown, the original was replaced 5 times
+  while the video played (12 copies made, 12 swapped in), and the session log has no errors. Memory rose from
+  156 MB to 191 MB (peak 201 MB), about 11 MB an hour, which led to the fix below.
+- **What made M13's memory rise:** each new version of a linked video becomes a new file in the show ("Linked clip
+  2.mp4", "Linked clip 3.mp4", …), and the newest picture of every video file was kept in two places:
+  - for the lights, in a cache that stops at 48 MB (by design; measured: it filled up at 68 files and stayed there);
+  - for the Dashboard's live picture and the Editor's, with no limit: about 0.4 MB for every video file ever shown.
+
+  **Fixed** (06b593d): a drawing now keeps the newest picture of only the last 6 videos it drew (a new test checks
+  it, and fails without the fix). With the fix, a script drawing 100 different video files one after another with
+  CentraLight's own drawing code stopped growing once the lights' cache was full, at the 70th (without it, it was
+  still growing at 150). And an hour's soak of the fixed app with a new version of the video every minute (57 in
+  all, 180 show loads, 96 countdowns, no errors): memory rose while the caches filled, for about 25 minutes, then
+  only 4 MB in the last half hour, 30 versions later. How it was found: 30-minute soaks with one extra each (show
+  loads alone and countdowns alone stayed flat; linked-video updates alone rose at each update), then Python's
+  memory tracer during a fast soak (all the growth was in these two caches), then a count of the caches with 150
+  files.
+- **The soak's own variable kept fading the lights:** the soak set its "mood" variable high in one show, and low
+  again in whichever show was loaded 40 s later, so the first show's stayed high, and each time that show loaded,
+  its automation counted down and faded to black again (47 such runs in one fast soak). That's as designed (a
+  show's variables come back as they were when it was last loaded), but it means the lights were black for much of
+  that soak.
+- **CPU depends on how NDI hands the pictures over** on this PC: the same app read 10–13 % of one core in some soaks
+  and under 1 % in others, and a bare NDI receiver anything from 10 % to 0.1 %, with 24 pictures a second arriving
+  either way. So the soaks' CPU figures say more about NDI than about CentraLight (step 15b of the checklist notes the
+  real figure).
+- **The soak tool** can run several soaks at once now: each one's test feed has its own name ("CentraLight Soak 1234
+  Source") and Windows picks each one a free remote port. (Two soaks started in the same second once shared a port,
+  so one of the 30-minute soaks above never switched shows: its linked-video updates alone made its memory rise.)
+- **Old copies of a linked video stay** while the undo history could bring them back, so almost none were tidied
+  during the soaks; they go at the first show load after CentraLight starts again.
 
 ## A look at M13 (3 Nov, 23:00)
 
@@ -1045,10 +1091,23 @@ Measured (Simulated output, so no lights):
   The CPU averaged 11.4 % of one core (0.71 % of the PC; worst minute 12.3 %), steady throughout: the "pictures
   flowing" figure from the version comparison. Memory rose from 108 MB to 111 MB (peak 113 MB; the second half
   averaged 1.1 MB more than the first), about 1 MB an hour, as in the third soak, which loaded no shows: loading
-  shows doesn't add to it. CentraLight is meant to run all week, so a 10-hour soak of the final code is running
-  overnight to see whether that levels off.
+  shows doesn't add to it. CentraLight is meant to run all week, so a 10-hour soak followed (next).
   - The soak tool printed its per-minute memory in a slightly different MB from its summary (decimal against
     Task Manager's); both use Task Manager's MB now, which is what the soaks above report.
+- **A 10-hour soak** (finished 4 Nov, 03:10): the app as committed after the second look at M12 (51bc909) followed
+  a 960×540, 24 fps test feed for 600 minutes and loaded the other show every 2 minutes through the remote (300
+  loads, every one answered). The session log has no errors. The CPU averaged 10.6 % of one core (0.67 % of the PC;
+  worst minute 12.4 %). Memory rose from 109 MB to 117 MB (peak 118 MB), steadily, about 0.7 MB an hour in each
+  third of the run: it doesn't level off within 10 hours. That rise isn't CentraLight's own code:
+  - Python's memory tracer (which counts every Python allocation, the pictures included) found nothing growing in
+    35 minutes of following a feed.
+  - A small script that does nothing but receive the same feed through NDI, as CentraLight does, rose at the same
+    rate (0.87 MB an hour over 1.8 hours) with no CentraLight running.
+  - The first soak (after M4) rose at about the same rate.
+
+  At 0.8 MB an hour a week of running adds about 130 MB, which this PC can spare.
+- **A 3-hour soak of M13** (finished 4 Nov, 04:16), and the video cache it found: see "The overnight soaks" near
+  the top.
 
 ### Media Background Pane is only sending one picture per connection
 
