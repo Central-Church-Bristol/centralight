@@ -108,6 +108,7 @@ def save_layout_as(show: Show, name: str) -> tuple[Show, str]:
         positions=frozen_map(current_positions(show)),
         backdrop=active.backdrop if active else "",
         backdrop_opacity=active.backdrop_opacity if active else DEFAULT_BACKDROP_OPACITY,
+        backdrop_original=active.backdrop_original if active else "",
     )
     return replace(show, layouts=show.layouts + (layout,), active_layout=layout.id), layout.id
 
@@ -131,12 +132,16 @@ def delete_layout(show: Show, layout_id: str) -> Show:
     return replace(show, layouts=tuple(lay for lay in show.layouts if lay.id != layout_id))
 
 
-def set_backdrop(show: Show, file: str) -> Show:
-    """The room photo behind the map for the active layout ("" = none)."""
+def set_backdrop(show: Show, file: str, original: str | None = None) -> Show:
+    """The room photo behind the map for the active layout ("" = none). original: the photo it was copied from (None:
+    as it was; "" = not linked)."""
     active = show.layout()
-    if active is None or active.backdrop == file:
+    original = active.backdrop_original if active is not None and original is None else (original or "")
+    if file == "":
+        original = ""
+    if active is None or (active.backdrop, active.backdrop_original) == (file, original):
         return show
-    return _replace_layout(show, active.id, backdrop=file)
+    return _replace_layout(show, active.id, backdrop=file, backdrop_original=original)
 
 
 def set_backdrop_opacity(show: Show, opacity: float) -> Show:
@@ -197,7 +202,8 @@ def import_layout(show: Show, other: Show, layout_id: str, backdrop: str | None 
     fixtures = tuple(replace(fx, map=source.positions.get(fx.id, fx.map)) if fx.role == ROLE_COLOUR else fx
                      for fx in other.fixtures)
     name = unique_name(show, f"{source.name} (from {other.name})")
-    imported = Layout(id=_unique_id(show, name), name=name, positions=frozen_map({}),
-                      backdrop=source.backdrop if backdrop is None else backdrop, backdrop_opacity=source.backdrop_opacity)
+    photo = source.backdrop if backdrop is None else backdrop
+    imported = Layout(id=_unique_id(show, name), name=name, positions=frozen_map({}), backdrop=photo,
+                      backdrop_opacity=source.backdrop_opacity, backdrop_original=source.backdrop_original if photo else "")
     show = replace(show, fixtures=fixtures, house=other.house, layouts=show.layouts + (imported,), active_layout=imported.id)
     return sync_active_layout(show)

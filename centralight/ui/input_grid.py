@@ -274,6 +274,7 @@ class NewInputTile(QFrame):
 
     new_requested = Signal()
     ai_requested = Signal()
+    import_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -286,12 +287,16 @@ class NewInputTile(QFrame):
         self.ai_button.setIcon(icons.line_icon(icons.draw_sparkle, theme.TEXT_2))
         self.ai_button.setToolTip("Describe a look and let any AI chat write it (copy, paste)")
         self.ai_button.clicked.connect(self.ai_requested.emit)
+        self.import_button = QPushButton("From another show…")
+        self.import_button.setToolTip("Import inputs from another show (with their pictures and videos)")
+        self.import_button.clicked.connect(self.import_requested.emit)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
         layout.addStretch(1)
         layout.addWidget(self.button, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.ai_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self.import_button, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addStretch(1)
         policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         policy.setHeightForWidth(True)
@@ -399,6 +404,7 @@ class InputGrid(QWidget):
     edit_requested = Signal(str)
     new_requested = Signal()
     ai_requested = Signal(str)  # input id ("" = a new one)
+    import_requested = Signal()  # Import from another show…
 
     def __init__(self, show: Show, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -414,6 +420,7 @@ class InputGrid(QWidget):
         self.new_tile = NewInputTile(self)
         self.new_tile.new_requested.connect(self._new)
         self.new_tile.ai_requested.connect(lambda: self._locked or self.ai_requested.emit(""))
+        self.new_tile.import_requested.connect(lambda: self._locked or self.import_requested.emit())
         self.set_show(show)
         policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         policy.setHeightForWidth(True)

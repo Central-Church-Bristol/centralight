@@ -65,7 +65,7 @@ SCOPE_LAYOUT = "layout"  # lights, house lights, identify colours, saved layouts
 SCOPE_AUTOMATIONS = "automations"  # the Automation tab
 LAYOUT_FIELDS = ("fixtures", "house", "identify_seed", "layouts", "active_layout")
 AUTOMATION_FIELDS = ("automations", "automation_order")
-SHOW_FIELDS = ("name", "globals", "input_order")
+SHOW_FIELDS = ("name", "globals", "input_order", "notes")
 
 
 def input_scope(input_id: str) -> str:
@@ -157,13 +157,16 @@ def merged_text(first: str, second: str) -> str:
 class ChangeCommand(QUndoCommand):
     """One undo step."""
 
-    def __init__(self, document: ShowDocument, change: Change, text: str, merge_key: str | None, applied: bool) -> None:
+    def __init__(self, document: ShowDocument, change: Change, text: str, merge_key: str | None, applied: bool,
+                 automatic: bool = False) -> None:
         super().__init__(text)
         self.document = document
         self.change = change
         self.merge_key = merge_key
         self._skip_redo = applied  # the change is already showing (e.g. after a drag)
-        self.seq = next(_STEP_NUMBERS)  # (the Dashboard's Ctrl+Z undoes the newest step of any history)
+        # (the Dashboard's Ctrl+Z undoes the newest step of any history: one CentraLight made by itself, such as a
+        # linked video's update, never counts as the newest)
+        self.seq = 0 if automatic else next(_STEP_NUMBERS)
 
     def redo(self) -> None:
         if self._skip_redo:
@@ -407,7 +410,8 @@ class ShowDocument(QObject):
     def redo(self) -> None:
         self.undo_stack.redo()
 
-    def _push(self, before: Show, after: Show, text: str, merge_key: str | None, applied: bool) -> None:
+    def _push(self, before: Show, after: Show, text: str, merge_key: str | None, applied: bool,
+              automatic: bool = False) -> None:
         scopes = changed_scopes(before, after)
         if not scopes:
             return
@@ -419,7 +423,7 @@ class ShowDocument(QObject):
             old = self._stacks.get(input_scope(input_id))
             if old is not None:
                 old.clear()
-        self.stack(scope).push(ChangeCommand(self, change, text, merge_key, applied))
+        self.stack(scope).push(ChangeCommand(self, change, text, merge_key, applied, automatic))
 
     # ------------------------------------------------------------ changes
 
@@ -431,15 +435,38 @@ class ShowDocument(QObject):
         log_info(f"“{text}” wasn't made: it was for the show in {show.folder or '(none)'}, and another show is loaded now")
         return True
 
-    def apply(self, show: Show, text: str, merge_key: str | None = None) -> bool:
-        """Make a change (one undo step). Returns False if nothing changed or it's read-only."""
+    def apply(self, show: Show, text: str, merge_key: str | None = None, automatic: bool = False) -> bool:
+        """Make a change (one undo step). Returns False if nothing changed or it's read-only. automatic: CentraLight made
+        it by itself (a linked file's update): the Dashboard's Ctrl+Z skips it."""
         if self.read_only or show == self._show or self._other_show(show, text):
             return False
-        self._push(self._show, show, text, merge_key, applied=False)
+        self._push(self._show, show, text, merge_key, applied=False, automatic=automatic)
         return True
 
     def begin_drag(self) -> None:
         self._drag_start = self._show
+
+    @property
+    def dragging(self) -> bool:
+        """A drag (or a slider) is changing the show right now, with its undo step still to come."""
+        return self._drag_start is not None
+
+    def files_in_history(self) -> set[str]:
+        """The picture and video files the loaded show's undo histories can bring back (tidying leaves these)."""
+        found: set[str] = set()
+        for stack in self._stacks.values():
+            for index in range(stack.count()):
+                change = getattr(stack.command(index), "change", None)
+                if not isinstance(change, Change):
+                    continue
+                inputs = [*change.added.values(), *change.removed.values()]
+                inputs += [inp for pair in change.edited.values() for inp in pair]
+                for inp in inputs:
+                    found.update(element["file"] for track in inp.tracks for element in track
+                                 if isinstance(element.get("file"), str) and element.get("file"))
+                for side in change.layout or ():
+                    found.update(layout.backdrop for layout in side.get("layouts", ()) if layout.backdrop)
+        return found
 
     def preview(self, show: Show) -> None:
         """Show a change live (while dragging) without an undo step yet."""

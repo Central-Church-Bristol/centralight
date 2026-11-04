@@ -303,11 +303,18 @@ def has_device_name(text: str) -> bool:
 
 
 def media_path(folder: str, file: Any) -> Path | None:
-    """A media file's full path, only if it's inside the show folder (for safety), and never a device's name."""
+    """A media file's full path, only if it's inside the show folder (for safety), and never a device's name. The name
+    is checked as text first: a full path or a network path (\\\\server\\...) is never looked at here, as even asking
+    Windows about one can open a device or connect to that server."""
+    from .show_io import safe_relative_file
+
     if not folder or not isinstance(file, str) or not file.strip() or has_device_name(file):
         return None
+    relative = safe_relative_file(file)
+    if not relative:
+        return None
     root = Path(folder).resolve()
-    path = (root / file).resolve()
+    path = (root / relative).resolve()
     try:
         path.relative_to(root)
     except ValueError:

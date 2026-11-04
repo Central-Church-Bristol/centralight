@@ -2,6 +2,7 @@
 
 Only one copy runs at a time: a second one asks the running copy to show its window, then exits.
 --minimized starts in the tray (that's how Windows starts it at sign-in).
+A .clshow file (double-clicked) is offered for import, by the running copy if there is one.
 """
 
 import ctypes
@@ -24,10 +25,11 @@ if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
     try:
         from PySide6.QtCore import QCoreApplication
 
-        from centralight.ui.instance import ask_running_copy_to_show
+        from centralight.ui.instance import ask_running_copy_to_show, package_argument
 
         _app = QCoreApplication(sys.argv)
-        ask_running_copy_to_show()
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)  # (so the running copy may come to the front: ASFW_ANY)
+        ask_running_copy_to_show(open_file=package_argument(sys.argv))
     except Exception:
         pass
     sys.exit(0)

@@ -24,6 +24,8 @@ in a browser for a page listing every URL, with big buttons (it doubles as a pho
     /api/layout/<id>                       switch to a saved layout
     /api/show/<id or name>                 load another show (the lights hold what they show until
                                            one of its inputs is sent)
+    /api/countdown/now, /wait, /skip       the countdown before an automatic show load or Cut / Fade
+                                           to black: do it now, 10 minutes later, or not this time
     /api/shows                             the shows there are, as JSON
     /api/state                             what's happening now, as JSON
     POST /api/command {"op": "input", "id": "warm-white"}   the same things as JSON
@@ -54,6 +56,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .commands import (
     BLACK_FADE,
+    CountdownAction,
     OverlayOff,
     RequestShow,
     RunAutomation,
@@ -253,6 +256,14 @@ def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any
         if rest[0] == "cut":
             return ToBlack(0.0, everything)
         return ToBlack(_number(params, "seconds", 0.0, 60.0, default=black_fade), everything)
+    elif head == "countdown" and len(rest) == 1:
+        if rest[0] not in ("now", "wait", "skip"):
+            raise BadRequest(404, "use /api/countdown/now, /api/countdown/wait or /api/countdown/skip")
+        countdown = getattr(frame, "countdown", None) if frame is not None else None
+        wanted = params.get("id", "").strip()  # (the phone page names the one it showed: a second tap can't hit another)
+        if countdown is None and not wanted:
+            raise BadRequest(409, "there's no countdown now")
+        return CountdownAction(rest[0], wanted or countdown.id)
     elif head == "identify" and len(rest) == 1:
         on = _on_off(rest[0])
         if on is None:
@@ -310,6 +321,11 @@ def command_from_json(payload: Any, show: Show, frame: Any = None, black_fade: f
         params.pop("state", None)
     elif op == "show":
         parts = ["show", str(payload.get("id") or payload.get("name") or "")]
+    elif op == "countdown":  # {"op": "countdown", "state": "now" | "wait" | "skip", "id": optional}
+        parts = ["countdown", str(payload.get("state", ""))]
+        params.pop("state", None)
+        if payload.get("id"):
+            params["id"] = str(payload["id"])
     else:
         raise BadRequest(400, f"unknown op {op!r}")
     return command_for(parts, params, show, frame, black_fade, shows, global_automations)
@@ -317,7 +333,19 @@ def command_from_json(payload: Any, show: Show, frame: Any = None, black_fade: f
 
 def shows_of(shows: list[ShowInfo], loaded: str) -> list[dict[str, Any]]:
     """/api/shows (and /api/state's "shows"): each show's id and name, and which is loaded."""
-    return [{"id": s.id, "name": s.name, "loaded": same_folder(s.folder, loaded)} for s in shows]
+    return [{"id": s.id, "name": s.name, "loaded": same_folder(s.folder, loaded), "notes": s.notes} for s in shows]
+
+
+def _countdown_state(countdown: Any, shows: list[ShowInfo]) -> dict[str, Any] | None:
+    """The countdown banner's text for the phone page: "Loading Evening in 0:15"."""
+    if countdown is None:
+        return None
+    text = countdown.text
+    if countdown.show:
+        info = find_show(Path("."), countdown.show, shows)
+        text = f"Loading {info.name if info is not None else countdown.show}"
+    return {"id": countdown.id, "text": text, "seconds": round(countdown.seconds, 1), "clock": countdown.clock,
+            "automation": countdown.automation, "load": bool(countdown.show), "more": countdown.more}
 
 
 def state_of(engine: Any, shows: list[ShowInfo] | None = None) -> dict[str, Any]:
@@ -327,6 +355,7 @@ def state_of(engine: Any, shows: list[ShowInfo] | None = None) -> dict[str, Any]
     data: dict[str, Any] = {
         "show": show.name,
         "show_id": show_id(show.folder) if show.folder else "",
+        "notes": show.notes,
         "shows": shows_of(shows or [], show.folder),
         "inputs": [{"id": inp.id, "name": inp.name} for inp in show.ordered_inputs()],
         "globals": [{"name": g.name, "type": g.type, "min": g.min, "max": g.max, "dashboard": g.dashboard} for g in show.globals],
@@ -343,6 +372,7 @@ def state_of(engine: Any, shows: list[ShowInfo] | None = None) -> dict[str, Any]
             "variables": {name: describe_value(v) if type(v) is tuple else v for name, v in frame.variables.items()},
             "identify": frame.identify,
             "output": frame.output.label if frame.output is not None else "",
+            "countdown": _countdown_state(frame.countdown, shows or []),
         })
     return data
 
@@ -642,6 +672,7 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
         ("Pause all automations", "/api/automations/pause  (or /resume, /toggle)"),
         ("Switch layout", "/api/layout/<id>"),
         ("Load a show", "/api/show/<id or name>"),
+        ("The countdown before an automatic change", "/api/countdown/now  (or /wait: 10 minutes later, /skip)"),
         ("The shows", "/api/shows"),
         ("What's happening now", "/api/state"),
     ]
@@ -659,6 +690,7 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
 
     return PAGE.format(
         show=esc(show.name),
+        notes=esc(show.notes),
         show_options=show_options,
         tiles="".join(rows) or "<p>No inputs yet: make one in CentraLight's Editor.</p>",
         variables="".join(variables) or "<p>No show variables yet (Editor → Show variables tab).</p>",
@@ -709,13 +741,25 @@ table {{ margin: 0 16px 24px; border-collapse: collapse; font-size: 13px; }}
 td {{ padding: 4px 10px 4px 0; vertical-align: top; }}
 code {{ color: var(--accent); word-break: break-all; }}
 p {{ margin: 8px 16px; color: var(--dim); }}
+.notes {{ margin: 12px 16px 0; padding: 10px 12px; background: var(--card); border-radius: 10px; color: var(--dim);
+  white-space: pre-wrap; font-size: 14px; }}
+.notes:empty {{ display: none; }}
+.countdown {{ flex-basis: 100%; padding: 10px 12px; background: #3A2A10; border: 1px solid #FFB547; border-radius: 10px;
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
+.countdown[hidden] {{ display: none; }}
+#countdown-text {{ flex: 1; font-weight: 600; color: #FFB547; }}
 </style></head>
 <body>
 <header><h1>{show}</h1>
 <select id="shows" title="Load another show (the lights hold what they show until one of its inputs is sent)">{show_options}</select>
 <span id="status">Connecting…</span>
 <button class="black" data-black="/api/black/cut" title="Tap: the colour lights. Hold: everything, Festoon and Key lights too">Cut to black</button>
-<button class="black" data-black="/api/black/fade" title="Tap: the colour lights. Hold: everything, Festoon and Key lights too">Fade to black</button></header>
+<button class="black" data-black="/api/black/fade" title="Tap: the colour lights. Hold: everything, Festoon and Key lights too">Fade to black</button>
+<div id="countdown" class="countdown" hidden><span id="countdown-text"></span>
+<button class="small" data-countdown="now" id="countdown-now">Do it now</button>
+<button class="small" data-countdown="wait">Wait 10 min</button>
+<button class="small" data-countdown="skip">Skip</button></div></header>
+<div id="notes" class="notes">{notes}</div>
 <h2>Inputs: tap to send to Base</h2>
 <div class="grid">{tiles}</div>
 <h2>Variables</h2><div class="vars">{variables}</div>
@@ -741,6 +785,14 @@ async function call(path) {{
   }} catch (e) {{ document.getElementById("status").textContent = "Can't reach CentraLight"; }}
 }}
 document.querySelectorAll("button[data-path]").forEach(b => b.addEventListener("click", () => call(b.dataset.path)));
+// the countdown's buttons name the countdown they showed, and the banner goes at once (a second tap can't hit another)
+let countdownId = "";
+document.querySelectorAll("button[data-countdown]").forEach(b => b.addEventListener("click", () => {{
+  if (!countdownId) return;
+  call("/api/countdown/" + b.dataset.countdown + "?id=" + encodeURIComponent(countdownId));
+  countdownId = "";
+  document.getElementById("countdown").hidden = true;
+}}));
 // Cut / Fade to black: a tap is the colour lights; holding it (0.6 s) is everything, the Festoon and Key lights too
 document.querySelectorAll("button[data-black]").forEach(b => {{
   const label = b.textContent;
@@ -772,6 +824,16 @@ async function refresh() {{
     const state = await (await fetch(withKey("/api/state"))).json();
     if (!state.ok) {{ document.getElementById("status").textContent = state.error; return; }}
     if (state.show_id !== pageShow) {{ location.reload(); return; }}  // another show is loaded: its inputs and variables
+    const banner = document.getElementById("countdown");  // the countdown before an automatic change
+    banner.hidden = !state.countdown;
+    countdownId = state.countdown ? state.countdown.id : "";
+    if (state.countdown) {{
+      const more = state.countdown.more ? " (and " + state.countdown.more + " more)" : "";
+      document.getElementById("countdown-text").textContent = state.countdown.text + " in " + state.countdown.clock + more;
+      document.getElementById("countdown-now").textContent = state.countdown.load ? "Load now" : "Do it now";
+    }}
+    const notes = document.getElementById("notes");
+    if (notes.textContent !== (state.notes || "")) notes.textContent = state.notes || "";  // (changed in CentraLight)
     document.getElementById("status").textContent = "Base: " + state.base.name;
     document.querySelectorAll(".tile").forEach(t => t.classList.toggle("base", t.dataset.id === state.base.id));
     document.querySelectorAll(".tile").forEach(t => t.querySelectorAll(".row button[data-path*='/overlay/']").forEach(b => {{
@@ -781,7 +843,7 @@ async function refresh() {{
     }}));
   }} catch (e) {{ document.getElementById("status").textContent = "Can't reach CentraLight"; }}
 }}
-refresh(); setInterval(refresh, 1500);
+refresh(); setInterval(refresh, 1000);
 </script>
 </body></html>
 """

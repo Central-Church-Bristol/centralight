@@ -24,6 +24,7 @@ from typing import Any
 import numpy as np
 
 from .log import log_exception, log_info
+from .model import safe_text
 from .slot import LatestSlot
 
 MAX_W = 320
@@ -351,7 +352,7 @@ class NdiReceiver:
         self.connects += 1
         if self.connects == 1 or self._status.found_name != name:
             log_info(f"NDI: connecting to {name}")
-        self._set(found_name=name)
+        self._set(found_name=safe_text(name))  # (a name from the network: shown, never read as HTML)
         return recv
 
     def _disconnect(self, ndi: Any, recv: Any) -> None:

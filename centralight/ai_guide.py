@@ -24,10 +24,11 @@ from typing import Any
 
 from .automations import actions_for, conditions_for
 from .global_automations import GLOBAL_DIR, ORDER_FILE
-from .elements import has_device_name, media_path
+from .elements import media_path
 from .expressions import AUDIO_NAMES, FUNCTIONS, ExpressionError, compile_expression
 from .files import json_text, write_atomic
 from .log import log_info
+from .links import original_problem
 from .model import ROLE_COLOUR, TRACK_COUNT, TRANSITION_KINDS, Input, Show, is_device_name, slugify
 from .schema import (
     BLEND_MODES,
@@ -39,15 +40,21 @@ from .schema import (
     Spec,
     element_specs,
 )
-from .show_io import FORMAT_INPUT, INPUT_VERSION, MAX_INPUT_BYTES, InputFileError, input_from_dict, input_to_dict
+from .show_io import (
+    FORMAT_INPUT,
+    INPUT_VERSION,
+    MAX_INPUT_BYTES,
+    InputFileError,
+    input_from_dict,
+    input_to_dict,
+    safe_relative_file,
+)
 
 GUIDE_FILE = "AI_GUIDE.md"
 AGENTS_FILE = "AGENTS.md"
 SCHEMA_FILE = "input.schema.json"
 SKILL_NAME = "centralight-inputs"
 SPECIAL_NAMES = {"t", "time", "value", "pi"}
-PICTURE_TYPES = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"}
-VIDEO_TYPES = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".wmv"}
 _PICTURE_SETTINGS = ("area", "boost", "smooth.up", "smooth.down", "smooth.snap", "transform.fit")  # (as each kind has them)
 
 
@@ -174,6 +181,12 @@ def input_schema(show: Show) -> dict[str, Any]:
             "out": {"$ref": "#/$defs/element_transition", "description": "Timed inputs: how it goes"},
             **_nested(element_specs(kind)),
         }
+        if kind in ("image", "video"):
+            properties["original"] = {
+                "type": "string", "maxLength": 1000,
+                "description": "The file this one was copied from, anywhere on this PC (a full path, e.g. "
+                               "G:\\My Drive\\Worship\\candles.mp4). CentraLight plays its own copy (\"file\") and copies "
+                               "changes in from here, once someone at the PC has allowed it."}
         if kind == "paint":
             properties["shapes"] = {"type": "array", "items": {"type": "object", "required": ["id", "type"],
                                                                "properties": {"id": {"type": "string"}, **_nested(SHAPE)}}}
@@ -286,6 +299,8 @@ def guide_text(show: Show, full: bool = True) -> str:
         "CentraLight drives a church's coloured lights. **The main idea:** an input paints a 16:9 picture (like a "
         "screen), and each coloured light shows the colour of the picture under its dot on a map of the room. "
         "So to light the left of the room red, paint the left of the picture red.",
+        *([f"## About this show\n\nThe show's own notes (what it's for):\n\n" + "\n".join(f"> {line}" for line in show.notes.splitlines())]
+          if show.notes else []),
         "## Files",
         "- Each input is one JSON file: `inputs/<id>.json` in the show folder. The file name must match its `id`.\n"
         "- `id`: lower case letters, digits and hyphens (e.g. `pillars-purple`). It never changes, even if the name does.\n"
@@ -335,11 +350,15 @@ def guide_text(show: Show, full: bool = True) -> str:
         "screen feed (what's on the projector).",
         _table(_spec_rows(tuple(s for s in element_specs("ndi") if s.path in _PICTURE_SETTINGS + ("source",)))),
         "### Image (`\"kind\": \"image\"`)",
-        "`file`: a picture inside the show folder, e.g. `media/sunrise.jpg`.",
+        "`file`: a picture inside the show folder, e.g. `media/sunrise.jpg`. `original` (optional): the picture it was "
+        "copied from, anywhere on this PC (a full path like `G:\\\\My Drive\\\\Worship\\\\sunrise.jpg`). CentraLight always "
+        "plays its own copy (`file`), and copies changes in from the original once someone at the PC has allowed the link "
+        "(a link you write shows \"Not checked yet\" until then). To use a picture from elsewhere, give its full path as "
+        "`original` and leave `file` out: the person adds it with \"Copy into the show\".",
         _table(_spec_rows(tuple(s for s in element_specs("image") if s.path in _PICTURE_SETTINGS + ("file",)))),
         "### Video (`\"kind\": \"video\"`)",
-        "`file`: a video inside the show folder, e.g. `media/candles.mp4`. It loops for as long as the element lasts; "
-        "`speed` plays it faster or slower.",
+        "`file`: a video inside the show folder, e.g. `media/candles.mp4`, and `original` (optional) the video it was "
+        "copied from, as for Image. It loops for as long as the element lasts; `speed` plays it faster or slower.",
         _table(_spec_rows(tuple(s for s in element_specs("video") if s.path in _PICTURE_SETTINGS + ("file", "speed")))),
         "How lights read a picture (NDI, Image and Video): each light shows the average of a square patch of this "
         "element's picture around its dot, as big as `area` (0 = just the colour under the dot, 0.25 = a small patch, "
@@ -488,7 +507,9 @@ def global_guide_text(shows: list[tuple[str, str]], house_labels: list[str]) -> 
         'Load a show: `{"do": "load_show", "show": "<show id>"}` (the lights hold what they show until one of its inputs is '
         "sent; its own automations are checked straight away, `show_loads` among them). The Festoon and Key lights are "
         'named, not numbered: `{"do": "house", "label": "Key lights", "level": 0.7, "fade": 2}` sets the loaded show\'s '
-        "light of that name (skipped, with a note in the log, if it has none).",
+        "light of that name (skipped, with a note in the log, if it has none). Before a Load a show, and before any "
+        "automation's Cut or Fade to black, CentraLight shows a countdown (15 s unless Settings say otherwise) with Load "
+        "now, Wait 10 min and Skip; one that comes from the clock starts early, so the change still happens on time.",
         "```json\n" + json_text(example) + "```",
         "## The shows\n\n" + show_rows,
         "Days are `mon` ... `sun`; times `\"HH:MM\"` (overnight ranges like 22:00-02:00 are fine); dates `\"MM-DD\"` with "
@@ -695,6 +716,7 @@ def check_input_data(data: Any, show: Show, existing_id: str | None = None) -> t
         if isinstance(raw, Mapping) and isinstance(raw.get("expr"), str):
             problems += _expression_problems(raw["expr"], f'house light "{setting}"', names)
     kinds = {k for k, _ in ELEMENT_KINDS}
+    outside = outside_media(data, show)
     for track_number, track in enumerate(inp.tracks, start=1):
         if inp.infinite and len(track) > 1:
             problems.append(f"Track {track_number} has {len(track)} elements; an infinite input has at most one per track.")
@@ -711,11 +733,16 @@ def check_input_data(data: Any, show: Show, existing_id: str | None = None) -> t
                 problems += _expression_problems(text, f"{label}, {where}", names)
             if element.get("kind") in ("image", "video"):
                 file = element.get("file")
+                original = element.get("original")
                 path = media_path(show.folder, file) if show.folder else None
-                if not file:
+                if isinstance(file, str) and file in outside:
+                    problems.append(f'{label}: "{file}" is outside the show folder. "Copy into the show" copies it in '
+                                    "(and links it, so changes to it are copied in too).")
+                elif isinstance(original, str) and original in outside:
+                    problems.append(f'{label}: it links to "{original}", which isn\'t copied into the show yet. '
+                                    '"Copy into the show" copies it in.')
+                elif not file:
                     problems.append(f"{label}: it needs a \"file\" (a picture in the show's media folder).")
-                elif file in outside_media(data, show):
-                    problems.append(f'{label}: "{file}" is outside the show folder. "Copy into the show" copies it in.')
                 elif path is None or not path.is_file():
                     problems.append(f'{label}: the file "{file}" isn\'t in the show folder. Put it in the media folder first, '
                                     f"or leave this element out.")
@@ -724,38 +751,56 @@ def check_input_data(data: Any, show: Show, existing_id: str | None = None) -> t
     return (replace(inp, ai=True) if not problems else None), problems, notes
 
 
-def outside_media(data: Any, show: Show) -> dict[str, Path]:
-    """Pictures and videos an input points to outside the show folder that exist on this PC ({the "file" as
-    written: its path}). Inputs only use files inside the show folder, so these can be copied in (with your OK)."""
-    found: dict[str, Path] = {}
+def outside_media(data: Any, show: Show) -> dict[str, str]:
+    """Pictures and videos an input wants from elsewhere on this PC ({the text as written: the original's path}): a
+    "file" that's a full path, or an "original" (a link) with no copy in the show yet. They're copied in, and linked,
+    only with an OK at this PC ("Copy into the show"). Nothing here looks at them on the disk: a network path would
+    make Windows connect to that server, and a device's name (like COM3) would open the device."""
+    found: dict[str, str] = {}
     if not isinstance(data, Mapping) or not show.folder or not isinstance(data.get("tracks"), list):
         return found
     for track in data["tracks"]:
         for element in track if isinstance(track, list) else ():
             if not isinstance(element, Mapping) or element.get("kind") not in ("image", "video"):
                 continue
-            file = element.get("file")
-            if not isinstance(file, str) or not file.strip() or has_device_name(file) or media_path(show.folder, file) is not None:
-                continue  # (a device's name, like COM3: never looked at)
-            path = Path(file.strip()).expanduser()
-            types = PICTURE_TYPES if element.get("kind") == "image" else VIDEO_TYPES
-            if path.is_absolute() and path.suffix.lower() in types and path.is_file():
-                found[file] = path
+            kind = element["kind"]
+            file, original = element.get("file"), element.get("original")
+            if isinstance(file, str) and file.strip() and not safe_relative_file(file):
+                if not original_problem(file.strip(), kind):
+                    found[file] = file.strip()
+            elif isinstance(original, str) and original and not original_problem(original, kind):
+                inside = media_path(show.folder, file) if isinstance(file, str) and file else None
+                if inside is None or not inside.is_file():
+                    found[original] = original
     return found
 
 
 def with_media(data: Any, copied: Mapping[str, str]) -> Any:
-    """The input with files that were copied into the show pointing at their copies ({old "file": "media/..."})."""
+    """The input with the pictures and videos copied into the show pointing at their copies, and linked to where they
+    came from ({the text as written: "media/..."})."""
     if not copied or not isinstance(data, Mapping) or not isinstance(data.get("tracks"), list):
         return data
     tracks = []
     for track in data["tracks"]:
         if isinstance(track, list):
-            track = [{**element, "file": copied[element["file"]]}
-                     if isinstance(element, Mapping) and isinstance(element.get("file"), str) and element["file"] in copied
-                     else element for element in track]
+            moved = []
+            for element in track:
+                if isinstance(element, Mapping):
+                    file, original = element.get("file"), element.get("original")
+                    if isinstance(file, str) and file in copied:
+                        element = {**element, "file": copied[file], "original": file.strip()}
+                    elif isinstance(original, str) and original in copied:
+                        element = {**element, "file": copied[original]}
+                moved.append(element)
+            track = moved
         tracks.append(track)
     return {**data, "tracks": tracks}
+
+
+def links_of(inp: Input) -> list[str]:
+    """The originals an input's pictures and videos are linked to."""
+    return [element["original"] for track in inp.tracks for element in track
+            if element.get("kind") in ("image", "video") and isinstance(element.get("original"), str) and element["original"]]
 
 
 def _expression_problems(text: str, where: str, names: set[str]) -> list[str]:

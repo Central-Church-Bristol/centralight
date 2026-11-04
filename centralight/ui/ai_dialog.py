@@ -61,12 +61,17 @@ def _hint(text: str) -> QLabel:
 
 class AIDialog(QDialog):
     def __init__(self, document: ShowDocument, engine: Any, input_id: str = "", reply: str = "",
-                 variables: Any = None, sources: Any = None, parent: QWidget | None = None) -> None:
+                 variables: Any = None, sources: Any = None, parent: QWidget | None = None, linked: Any = None) -> None:
         """input_id "" = make a new input; otherwise edit that one. reply: a reply to check straight away
-        (e.g. pasted on the Dashboard with Ctrl+V)."""
+        (e.g. pasted on the Dashboard with Ctrl+V). linked: LinkedMedia, which copies pictures in (and links them) on its
+        own thread."""
         super().__init__(parent)
         self.document = document
         self.engine = engine
+        self.linked = linked
+        self._copying: set[str] = set()  # originals being copied in for this reply
+        if linked is not None:
+            linked.changed.connect(self._copies_changed)
         self.input_id = input_id if input_id in document.show.inputs else ""
         self.candidate: Input | None = None
         self.problems: list[str] = []
@@ -74,7 +79,7 @@ class AIDialog(QDialog):
         self._previewer = Previewer(sources)
         self._started = time.monotonic()
         self._soloing = False
-        self._outside: dict = {}  # pictures the reply uses from outside the show folder
+        self._outside: dict[str, str] = {}  # pictures the reply uses from elsewhere on this PC (as written: the path)
         self._copied: dict[str, str] = {}  # ... and where they were copied to ("media/...")
         editing = self.current()
         self.setWindowTitle(f"Edit “{editing.name}” with AI" if editing else "Create an input with AI")
@@ -266,11 +271,22 @@ class AIDialog(QDialog):
             self.solo_button.setChecked(False)
         self.problems_label.setVisible(bool(self.problems))
         self.fix_button.setVisible(bool(self.problems))
-        files = "\n".join(str(path) for path in self._outside.values())
-        self.media_label.setText(f"It uses {'a file' if len(self._outside) == 1 else 'files'} from elsewhere on this PC:\n{files}"
-                                 if self._outside else "")
+        from ..links import is_network_path
+
+        files = "\n".join(f"{path}{'  (on another computer)' if is_network_path(path) else ''}" for path in self._outside.values())
+        copying = bool(self._copying)
+        problems = [self.linked.copy_problems[k] for k in self._outside if self.linked is not None and k in self.linked.copy_problems]
+        text = (f"It uses {'a file' if len(self._outside) == 1 else 'files'} from elsewhere on this PC:\n{files}\n"
+                "Copy into the show copies them in and links them, so later changes to them are copied in too."
+                if self._outside else "")
+        if copying:
+            text += "\nCopying…"
+        if problems:
+            text += "\n" + "\n".join(problems)
+        self.media_label.setText(text)
         self.media_label.setVisible(bool(self._outside))
         self.media_button.setVisible(bool(self._outside))
+        self.media_button.setEnabled(not copying)
         self.notes_label.setVisible(bool(self.notes_label.text()))
         self.light_view.setVisible(ok)
         if ok:
@@ -294,12 +310,19 @@ class AIDialog(QDialog):
             self._soloing = False
 
     def copy_media_in(self) -> list[str]:
-        """Copy the pictures the reply uses from elsewhere into the show's media folder (clicking the button is
-        the OK), then check it again with their new places."""
+        """Copy the pictures the reply uses from elsewhere into the show's media folder, linked to where they are
+        (clicking the button is the OK), then check it again with their new places. With LinkedMedia (the window) the
+        copies are made on its thread and this returns at once (the reply is checked again when they're ready);
+        without it they're copied here and listed."""
+        if self.linked is not None:
+            self._copying = set(self._outside)
+            self.linked.copy_in(dict(self._outside))
+            self._copies_changed()
+            return []
         copied = []
         for file, path in self._outside.items():
             try:
-                self._copied[file] = copy_media(self.document.show.folder, path)
+                self._copied[file] = copy_media(self.document.show.folder, Path(path))
             except OSError as exc:
                 log_exception(f"copying {path} into the show", exc)
                 continue
@@ -307,13 +330,30 @@ class AIDialog(QDialog):
         self.check()
         return copied
 
+    def _copies_changed(self) -> None:
+        """Pictures being copied in for this reply are ready (or couldn't be copied): check it again."""
+        if not self._copying or self.linked is None:
+            return
+        for key in list(self._copying):
+            if self.linked.copies.get(key):
+                self._copied[key] = self.linked.copies.pop(key)
+                self._copying.discard(key)
+            elif key not in self.linked.copies:  # (it couldn't be copied: copy_problems says why)
+                self._copying.discard(key)
+        if not self._copying:
+            self.check()
+        else:
+            self._sync()
+
     # ------------------------------------------------------------ using it
 
     def use(self) -> bool:
-        """Add (or replace) the input: one undo step."""
+        """Add (or replace) the input: one undo step. Its links to original pictures and videos were in the preview,
+        so adding it is the OK to follow them."""
         inp = self.candidate
         if inp is None:
             return False
+        # (links it listed were allowed by Copy into the show; any other stays "Not checked yet" in the Editor)
         show = self.document.show
         if self.input_id:
             done = self.document.apply(show.with_inputs({**show.inputs, inp.id: inp}), f"{inp.name}: changed with AI")

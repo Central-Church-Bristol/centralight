@@ -312,10 +312,14 @@ class ShowFolderTests(AIWindowTestCase):
         self.assertIn("outside the show folder", dialog.problems_label.text())
         self.assertTrue(dialog.media_button.isVisibleTo(dialog))
         self.assertIn(str(picture), dialog.media_label.text())
-        self.assertEqual(dialog.copy_media_in(), ["media/Sunrise.png"])  # clicking the button is the OK
+        dialog.copy_media_in()  # clicking the button is the OK: copied (and linked) on the links thread
+        self.assertTrue(window.linked_media.worker.wait_idle())
+        window.linked_media.poll()
+        process(self.app)
         self.assertTrue((self.show_folder() / "media" / "Sunrise.png").is_file())
         self.assertIsNotNone(dialog.candidate)
         self.assertEqual(dialog.candidate.tracks[0][0]["file"], "media/Sunrise.png")
+        self.assertEqual(dialog.candidate.tracks[0][0]["original"], str(picture))
         self.assertFalse(dialog.media_button.isVisibleTo(dialog))
         self.assertTrue(dialog.use())
         self.assertEqual(window.document.show.inputs["sunrise"].tracks[0][0]["file"], "media/Sunrise.png")

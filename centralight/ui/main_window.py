@@ -11,6 +11,7 @@ from __future__ import annotations
 import queue
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from PySide6.QtGui import QDesktopServices, QGuiApplication, QKeySequence, QShor
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QInputDialog,
@@ -32,7 +34,9 @@ from PySide6.QtWidgets import (
 
 from ..commands import (
     ClearBase,
+    CountdownAction,
     OverlayOff,
+    QuietAutomations,
     SendToBase,
     SendToOverlay,
     ForgetShow,
@@ -42,22 +46,40 @@ from ..commands import (
     SetHouse,
     SetAutomationsPaused,
     SetMaster,
+    SetCountdownLength,
     SetOverlayOpacity,
     SetVariable,
 )
 from .. import startup
 from ..automations import update_automation, upcoming
-from ..global_automations import GLOBAL_DIR, GLOBAL_NAME
+from ..links import original_problem
+from ..global_automations import GLOBAL_DIR, GLOBAL_NAME, global_folder
 from ..layouts import switch_layout
 from ..engine import EngineFrame
 from ..input_edit import delete_input, duplicate_input, new_input
 from ..live_state import LiveState
 from ..log import log_exception, log_info
-from ..model import Show
+from ..model import Show, clean_notes
 from ..ndi_source import CONNECTED, NO_SIGNAL, SEARCHING
 from ..output import device_spec, universe_size
+from ..paths import documents_dir, settings_path
 from ..paths import shows_root as default_shows_root
 from ..settings import QUIT_ASK, QUIT_OFF, Settings
+from ..clshow import (
+    PackageError,
+    clean_leftover_imports,
+    export_everything,
+    export_file_name,
+    export_show,
+    import_globals,
+    import_settings,
+    import_show,
+    keep_both_name,
+    name_taken,
+    read_package,
+    size_text,
+)
+from ..show_import import apply_import, copy_files, imported_automation_ids
 from ..show_io import ShowError, backup_show
 from ..show_io import load_show as read_show
 from ..shows import (
@@ -69,6 +91,8 @@ from ..shows import (
     new_show,
     read_show_name,
     same_folder,
+    show_id,
+    to_recycle_bin,
     unique_name,
 )
 from . import icons
@@ -83,6 +107,10 @@ from .document import KIND_GLOBAL, SCOPE_AUTOMATIONS, SCOPE_LAYOUT, SCOPE_SHOW, 
 from .editor_page import EditorPage
 from .header import PAGES, Header
 from .layout_page import LayoutPage
+from .countdown_banner import CountdownBanner
+from .package_dialogs import GLOBALS_ROW, SETTINGS_ROW, ExportDialog, ImportPackageDialog, Stopped, run_with_progress
+from .import_dialog import AUTOMATIONS, INPUTS, ImportItemsDialog, NotesDialog
+from .linked_media import LinkedMedia
 from .preview_page import LookPreview
 from .quit_dialog import QuitDialog
 from .settings_dialog import SettingsDialog
@@ -177,6 +205,8 @@ class MainWindow(QWidget):
         self._waiting_load: tuple[str, dict, float] | None = None  # a show asked for while a dialog was open (who, what, since)
         self._asked_for: str | None = None  # the global automation's name for the show being loaded (see _load_requested)
         self._native_dialogs = 0  # Windows' own dialogs open (they aren't Qt's: see _dialog_open)
+        self._package_job: dict | None = None  # a .clshow import or export under way (show loads wait for it)
+        self._importing = False
 
         self.setObjectName("Root")
         self.setWindowIcon(icons.app_icon())
@@ -191,6 +221,10 @@ class MainWindow(QWidget):
         banner_layout.setContentsMargins(14, 4, 14, 4)
         banner_layout.addWidget(banner_text)
         self.lock_banner.setVisible(False)
+        # the countdown before an automatic show load or Cut / Fade to black (M13): Load now, Wait 10 min, Skip
+        self.countdown_banner = CountdownBanner()
+        self.countdown_banner.pressed.connect(lambda what, cid: self.engine.submit(CountdownAction(what, cid)))
+        self.engine.submit(SetCountdownLength(settings.countdown))
 
         sources = getattr(engine, "sources", None)
         self.dashboard = DashboardPage(show, sources=sources)
@@ -205,6 +239,9 @@ class MainWindow(QWidget):
         self.dashboard.delete_requested.connect(self.delete_input)
         self.dashboard.variable_changed.connect(lambda name, value: self.engine.submit(SetVariable(name, value)))
         self.dashboard.ai_requested.connect(self.open_ai_dialog)
+        self.dashboard.import_requested.connect(lambda: self.import_from_show(INPUTS))
+        self.dashboard.notes_panel.set_folded(bool(settings.ui.get("notes_folded", False)))  # (as it was left)
+        self.dashboard.notes_panel.folded.connect(lambda folded: self.settings.ui.__setitem__("notes_folded", folded))
         self.layout_page = LayoutPage(self.document, engine, notes_path=notes_path, shows_provider=self.list_shows)
         self.editor_page = EditorPage(self.document, engine, settings, sources=sources)
         self.editor_page.done.connect(lambda: self.show_page("dashboard"))
@@ -214,6 +251,13 @@ class MainWindow(QWidget):
             (lambda: sources.available()) if sources is not None and hasattr(sources, "available") else None),
             global_document=self.global_document, shows_provider=self.list_shows)
         self.automation_page.scope_changed.connect(self._update_undo_scope)
+        self.automation_page.import_requested.connect(lambda: self.import_from_show(AUTOMATIONS))
+        # linked pictures and videos (M13): their originals are checked and copied on their own thread
+        self.linked_media = LinkedMedia(self.document, engine, parent=self)
+        self.editor_page.details.set_linked(self.linked_media)
+        self.layout_page.set_linked(self.linked_media)
+        if save_files:
+            clean_leftover_imports(self.shows_root())  # (what an import cut short by a crash left behind)
         self.pages: dict[str, QWidget] = {
             "dashboard": self.dashboard,
             "editor": self.editor_page,
@@ -230,6 +274,7 @@ class MainWindow(QWidget):
         layout.setSpacing(0)
         layout.addWidget(self.header)
         layout.addWidget(self.lock_banner)
+        layout.addWidget(self.countdown_banner)
         layout.addWidget(self.stack, 1)
 
         self.header.page_requested.connect(self.show_page)
@@ -241,6 +286,10 @@ class MainWindow(QWidget):
         picker.duplicate_requested.connect(self.ask_duplicate_show)
         picker.rename_requested.connect(self.ask_rename_show)
         picker.delete_requested.connect(self.ask_delete_show)
+        picker.notes_requested.connect(self.edit_notes)
+        picker.export_requested.connect(lambda everything: self.export_package(everything))
+        picker.import_requested.connect(lambda: self.ask_import_package(""))
+        picker.notes = show.notes
         self.header.settings_requested.connect(self.open_settings)
         self.header.house_changed.connect(self._house_changed)
         self.header.master_changed.connect(lambda level: self.engine.submit(SetMaster(level)))
@@ -458,9 +507,14 @@ class MainWindow(QWidget):
     def _dialog_open(self) -> bool:
         """A dialog is waiting for an answer: a question, a name to type, a file to pick, or Windows' own (deleting a
         show). A show loading then would change what it's about."""
-        return QApplication.activeModalWidget() is not None or self._native_dialogs > 0
+        return QApplication.activeModalWidget() is not None or self._native_dialogs > 0 or self._package_job is not None
 
     def _close_dialog(self, who: str) -> None:
+        if self._package_job is not None:  # (a .clshow import or export: it's stopped, leaving nothing half done)
+            if not self._package_job.get("stop"):
+                self._package_job["stop"] = True
+                log_info(f"{who}: the import or export under way was stopped, so the show it asked for could load")
+            return
         widget = QApplication.activeModalWidget()
         if widget is None:
             return  # (Windows' own question, deleting a show: that's waited for)
@@ -557,8 +611,6 @@ class MainWindow(QWidget):
             "keep working.)", text=show.name)
         if not ok or not name.strip() or not same_folder(self.document.show.folder, show.folder):
             return
-        from dataclasses import replace
-
         show = self.document.show
         new_name = unique_name(self.shows_root(), name, ignore=show.folder)
         if new_name != show.name:
@@ -612,6 +664,12 @@ class MainWindow(QWidget):
         self.automation_page.setEnabled(not locked)
         self.header.show_picker.setEnabled(not locked)
         self.lock_banner.setVisible(locked)
+        self.countdown_banner.set_locked(locked)
+
+    def _show_name_for(self, wanted: str) -> str:
+        """A show's name ("Evening") from what a "Load a show" action says (its id or name), for the countdown banner."""
+        info = find_show(self.shows_root(), wanted, self.list_shows()) if wanted else None
+        return info.name if info is not None else wanted
 
     @property
     def locked(self) -> bool:
@@ -668,6 +726,7 @@ class MainWindow(QWidget):
         self.dashboard.set_show(show)
         self.header.set_house([(h.fixture, h.label) for h in show.house])
         self.header.set_show_name(show.name, show.folder)
+        self.header.show_picker.notes = show.notes
         self._update_title(show)
 
     def _update_title(self, show: Show) -> None:
@@ -689,6 +748,7 @@ class MainWindow(QWidget):
         self.last_frame = frame
         self._do_engine_requests()
         self._save_live_soon(frame)
+        self.countdown_banner.set_view(frame.countdown, self._show_name_for)
         if self.tray is not None:
             self.tray.set_paused(frame.automations.paused)
             self.tray.set_status(f"Base: {frame.base}" + (" · automations paused" if frame.automations.paused else ""))
@@ -799,8 +859,10 @@ class MainWindow(QWidget):
         before = self._output_key()
         remote_before = self._remote_key()
         startup_before = self.settings.start_with_windows
+        clshow_before = self.settings.clshow_files
         audio_before = (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release)
         dialog.apply_to(self.settings)
+        self.engine.submit(SetCountdownLength(self.settings.countdown))
         if (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release) != audio_before:
             log_info(f"Audio source: {self.settings.audio_source or 'off'}")
             self.restart_audio()
@@ -812,6 +874,12 @@ class MainWindow(QWidget):
             trouble = startup.sync(self.settings.start_with_windows)
             if trouble:
                 QMessageBox.warning(self, "Start with Windows", trouble)
+        if self.settings.clshow_files != clshow_before and startup.managed():
+            from .. import filetype
+
+            trouble = filetype.sync(self.settings.clshow_files)
+            if trouble:
+                QMessageBox.warning(self, "Open .clshow files", trouble)
         if self._remote_key() != remote_before and self.remote is not None:
             self.remote.port, self.remote.lan, self.remote.key = self._remote_key()
             self.remote.start()
@@ -865,7 +933,7 @@ class MainWindow(QWidget):
 
     @staticmethod
     def _guide_inputs(show: Show) -> tuple:
-        return (show.name, show.fixtures, show.house, show.globals, show.folder)
+        return (show.name, show.fixtures, show.house, show.globals, show.folder, show.notes)
 
     def _write_guide(self) -> None:
         show = self.show_data
@@ -882,13 +950,291 @@ class MainWindow(QWidget):
         if written:
             log_info(f"AI guide updated: {', '.join(written)}")
 
+    # ------------------------------------------------------------ .clshow files (M13)
+
+    def export_package(self, everything: bool = False, target: str | None = None, media: bool | None = None):
+        """Show ▾ → Export… (one show) or Export everything… (every show, the global automations and the settings).
+        target / media: given by tests (no questions); otherwise asked. Returns the ExportReport, or None."""
+        if self._locked or self._package_job is not None:
+            return None
+        show = self.document.show
+        if not everything and not show.folder:
+            self._message("Export", "This show isn't saved in a folder, so it can't be exported.", warn=True)
+            return None
+        if target is None:
+            dialog = ExportDialog(self, show.name, everything)
+            try:
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return None
+                media = not dialog.leave_out.isChecked()
+            finally:
+                dialog.deleteLater()
+            suggested = documents_dir() / export_file_name("CentraLight everything" if everything else show.name)
+            chosen, _ = QFileDialog.getSaveFileName(self, "Export everything" if everything else f"Export “{show.name}”",
+                                                    str(suggested), "CentraLight show (*.clshow)")
+            if not chosen:
+                return None
+            target = chosen if chosen.lower().endswith(".clshow") else chosen + ".clshow"
+        if original_problem(str(target)):  # (checked as text first: a name like COM3 is never opened)
+            self._message("Export", f"{Path(str(target)).name} can't be saved there: {original_problem(str(target))}.", warn=True)
+            return None
+        media = True if media is None else media
+        for document in (self.document, self.global_document):  # (the files as they are now, everything saved)
+            document.flush()
+            document.wait_saved(3.0)
+        if self._save_files:
+            self._save_settings()
+        root = self.shows_root()
+        try:
+            if everything:
+                report = self._run_job("Exporting everything…", lambda progress: export_everything(
+                    root, target, media=media, settings_file=settings_path() if self._save_files else None, progress=progress))
+            else:
+                report = self._run_job(f"Exporting “{show.name}”…", lambda progress: export_show(
+                    show.folder, target, media=media, progress=progress))
+        except Stopped:
+            log_info("Export stopped")
+            return None
+        except (PackageError, OSError) as exc:
+            log_exception("exporting a .clshow file", exc)
+            self._message("Export", f"It couldn't be exported: {exc}", warn=True)
+            return None
+        notes = "\n".join(f"• {line}" for line in report.skipped[:8])
+        self._message("Export", f"Saved {Path(report.target).name} ({size_text(report.size)}) in {Path(report.target).parent}."
+                      + (f"\n\nLeft out:\n{notes}" if notes else ""))
+        return report
+
+    def _run_job(self, title: str, work, can_cancel: bool = True):
+        """Slow work for a .clshow file, on a thread of its own with a progress window. Show loads wait for it (as for an
+        open dialog); one that's waited 30 s stops it (the work leaves nothing half done), and then loads."""
+        state: dict = {}
+        self._package_job = state
+        try:
+            return run_with_progress(self, title, work, can_cancel, state=state)
+        finally:
+            self._package_job = None
+
+    def ask_import_package(self, path: str = "") -> bool:
+        """Show ▾ → Import…, or a .clshow file double-clicked (passed on by the second-launch ping): what's in it first,
+        then Import (a new show, not loaded; Replace or Keep both when the name is taken). True if anything came in."""
+        self.bring_to_front()
+        if self._locked:
+            self._message("Import", "CentraLight is locked: click the padlock to unlock it, then import the file.", warn=True)
+            return False
+        if self._package_job is not None or self._importing:
+            self._message("Import", "An import or export is under way: try again when it's done.", warn=True)
+            return False
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "Import a show file", str(documents_dir()), "CentraLight show (*.clshow)")
+            if not path:
+                return False
+        path = str(path)
+        problem = original_problem(path) or ("" if path.lower().endswith(".clshow") else "it isn't a .clshow file")
+        if problem:  # (checked as text first: a name like COM3, or \\.\..., is never opened)
+            self._message("Import", f"{Path(path).name or path} can't be imported: {problem}.", warn=True)
+            return False
+        self._importing = True
+        try:
+            try:
+                package = self._run_job(f"Checking {Path(path).name}…", lambda _progress: read_package(path), can_cancel=False)
+            except (PackageError, OSError, Stopped) as exc:
+                log_exception(f"reading {path}", exc)
+                self._message("Import", f"{Path(path).name} can't be imported: {exc}", warn=True)
+                return False
+            for line in package.all_problems():
+                log_info(f"Import {Path(path).name}: {line}")
+            dialog = ImportPackageDialog(self, package, self.shows_root(), self.document.show.folder)
+            try:
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return False
+                ticked, replacing = dialog.ticked(), dialog.replacing
+            finally:
+                dialog.deleteLater()
+            return self._import_ticked(package, ticked, replacing)
+        finally:
+            self._importing = False
+
+    def _import_ticked(self, package, ticked: list, replacing: bool) -> bool:
+        """Import what was ticked, one at a time: one that fails is reported, and the rest still come in."""
+        root = self.shows_root()
+        done: list[str] = []
+        failed: list[str] = []
+        notes: list[str] = []
+        for number, (kind, index) in enumerate(ticked):
+            what = (f"the show “{package.shows[index].name}”" if kind == "show" else
+                    "the global automations" if kind == GLOBALS_ROW else "the settings")
+            try:
+                if kind == "show":
+                    done.append(self._import_one_show(package, index, root, replacing, notes))
+                elif kind == GLOBALS_ROW:
+                    result = import_globals(package, global_folder(root))
+                    done.append(f"{len(result.added)} global automation{'s' if len(result.added) != 1 else ''}"
+                                + (f" ({len(result.kept)} already here kept as they were)" if result.kept else ""))
+                    if self.global_watcher is not None:
+                        self.global_watcher.check()
+                elif kind == SETTINGS_ROW:
+                    self._take_settings(import_settings(package, settings_path()) if self._save_files
+                                        else package.settings.settings)
+                    done.append("the settings")
+            except Stopped:
+                left = [t for t in ticked[number:]]
+                failed.append(f"{what} and anything after it ({len(left)} in all): the import was stopped")
+                break
+            except (PackageError, OSError) as exc:
+                log_exception(f"importing {what} from {package.path}", exc)
+                failed.append(f"{what}: {exc}")
+        if done:
+            log_info(f"Imported from {package.path.name}: {', '.join(done)}")
+        text = ("Imported " + ", ".join(done) + ". An imported show isn't loaded: Show ▾ loads it.") if done else "Nothing was imported."
+        if failed:
+            text += "\n\nNot imported:\n" + "\n".join(f"• {line}" for line in failed)
+        if notes:
+            text += "\n\n" + "\n".join(f"• {line}" for line in notes)
+        self._message("Import", text, warn=bool(failed))
+        return bool(done)
+
+    def _import_one_show(self, package, index: int, root: Path, replacing: bool, notes: list[str]) -> str:
+        item = package.shows[index]
+        loaded = self.document.show.folder  # (read here: show loads wait while this runs)
+        name, replace_folder = item.name, None
+        taken = name_taken(root, item.name)
+        if taken is not None:
+            if replacing and not same_folder(taken.folder, loaded):
+                replace_folder = taken.folder
+            else:
+                name = keep_both_name(root, item.name)
+        parked: list[Path] = []
+        made = self._run_job(f"Importing “{name}”…", lambda progress: import_show(
+            package, index, root, name=name, replace_folder=replace_folder, loaded=loaded, trash=parked.append,
+            progress=progress, notes=notes))
+        for old in parked:  # (the replaced show: to the Recycle Bin from here, so Windows' questions belong to this window)
+            self._native_dialogs += 1
+            try:
+                to_recycle_bin(old, owner=int(self.winId()))
+            except OSError as exc:
+                log_exception(f"moving {old} to the Recycle Bin", exc)
+                notes.append(f"The old show is still there as “{Path(old).name}” (it couldn't go to the Recycle Bin: {exc}).")
+            finally:
+                self._native_dialogs -= 1
+        new_id = show_id(made) if made else ""
+        if item.id and new_id and new_id != item.id:
+            notes.append(f"“{name}” has the id {new_id} here ({item.id} on the PC it came from): Stream Deck keys and global "
+                         "automations that load it by its old id need changing.")
+        return f"the show “{name}”" + (" (replacing the old one)" if replace_folder else "")
+
+    def _take_settings(self, imported: Settings) -> None:
+        """Settings from an Export everything file, for the running CentraLight too (this PC keeps its own output, port,
+        start with Windows, phone page, audio source, folders and window: see clshow.KEEP_ON_THIS_PC)."""
+        from dataclasses import fields
+
+        from ..clshow import KEEP_ON_THIS_PC
+
+        audio_before = (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release)
+        for item in fields(Settings):
+            if item.name not in KEEP_ON_THIS_PC:
+                setattr(self.settings, item.name, getattr(imported, item.name))
+        self.engine.submit(SetCountdownLength(self.settings.countdown))
+        self.editor_page.timeline.ndi_default = self.settings.ndi_default
+        if (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release) != audio_before:
+            self.restart_audio()
+        if self._save_files:
+            self._save_settings()
+
+    def _message(self, title: str, text: str, warn: bool = False) -> None:
+        """A message that holds nothing up (not even a show an automation loads): not modal, and plain text (names in it
+        come from files: never read as HTML)."""
+        box = QMessageBox(QMessageBox.Icon.Warning if warn else QMessageBox.Icon.Information, title, text,
+                          QMessageBox.StandardButton.Ok, self)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setWindowModality(Qt.WindowModality.NonModal)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.last_message = box
+        box.show()
+
+    def edit_notes(self) -> NotesDialog | None:
+        """Notes… : a few lines about the loaded show (what it's for). One undo step."""
+        if self._locked:
+            return None
+        if self.document.read_only:
+            self._message("Notes", "This show is read-only (it was saved by a newer CentraLight), so its notes can't be "
+                          "changed.", warn=True)
+            return None
+        dialog = NotesDialog(self, self.document.show.name, self.document.show.notes)
+        self.notes_dialog = dialog
+
+        def finished(result: int, folder: str = self.document.show.folder) -> None:
+            dialog.deleteLater()
+            if result != QDialog.DialogCode.Accepted or not same_folder(folder, self.document.show.folder):
+                return
+            show = self.document.show
+            notes = clean_notes(dialog.text())
+            if notes != show.notes:
+                self.document.apply(replace(show, notes=notes), "Show notes" if notes else "Clear the show notes")
+
+        dialog.finished.connect(finished)
+        dialog.open()
+        return dialog
+
+    def import_from_show(self, kind: str = INPUTS) -> ImportItemsDialog | None:
+        """Import from another show… (inputs, or show automations): pick, read the summary, Import. One undo step;
+        the other show isn't loaded and nothing is sent to the lights."""
+        if self._locked:
+            return None
+        if self.document.read_only:
+            self._message("Import from another show", "This show is read-only (it was saved by a newer CentraLight), so "
+                          "nothing can be imported into it.", warn=True)
+            return None
+        shows = [info for info in self.list_shows() if not same_folder(info.folder, self.document.show.folder)]
+        if not shows:
+            QMessageBox.information(self, "Import from another show", "There are no other shows to import from yet.")
+            return None
+        live = self.last_frame.in_use if self.last_frame is not None else frozenset()
+        dialog = ImportItemsDialog(self, shows, self.document.show, kind, live, self.linked_media.allowed)
+        self.import_dialog = dialog
+        dialog.finished.connect(lambda result, d=dialog, f=self.document.show.folder: self._import_finished(d, result, f))
+        dialog.open()
+        return dialog
+
+    def _import_finished(self, dialog: ImportItemsDialog, result: int, folder: str) -> bool:
+        """Import pressed: copy the files the inputs use, then make the change (one undo step)."""
+        plan, other = dialog.plan, dialog.other
+        keep_both, kind, links = dialog.keeping_both, dialog.kind, dialog.links()  # (read now: the dialog goes)
+        dialog.deleteLater()
+        if result != QDialog.DialogCode.Accepted or plan is None or other is None or not (plan.inputs or plan.automations):
+            return False
+        if not same_folder(folder, self.document.show.folder):
+            log_info("Import from another show: another show was loaded meanwhile, so nothing was imported")
+            return False
+        show = self.document.show
+        try:  # (on a thread of its own, with a progress window: big videos take a while, and the window keeps answering)
+            renamed = self._run_job("Copying pictures and videos…", lambda _progress: copy_files(plan, show, other),
+                                    can_cancel=False)
+        except (OSError, Stopped) as exc:
+            log_exception("copying files for an import", exc)
+            self._message("Import from another show", f"The pictures and videos couldn't be copied: {exc}", warn=True)
+            return False
+        if not same_folder(folder, self.document.show.folder):
+            return False
+        show = self.document.show
+        self.linked_media.allowed.allow(links)  # (the summary listed them: importing is the OK)
+        count = len(plan.inputs) if kind == INPUTS else len(plan.automations)
+        what = ("input" if kind == INPUTS else "automation") + ("s" if count != 1 else "")
+        after = apply_import(show, other, plan, keep_both, renamed)
+        quiet = imported_automation_ids(show, after)
+        if quiet:  # (told first, so the engine never checks them before it knows: nothing runs just because it was imported)
+            self.engine.submit(QuietAutomations(quiet))
+        done = self.document.apply(after, f"Import {count} {what} from {other.name}")
+        if done:
+            log_info(f"Imported {count} {what} from {other.name}: {', '.join(plan.inputs + plan.automations)}")
+        return done
+
     def open_ai_dialog(self, input_id: str = "", reply: str = "") -> AIDialog | None:
         """Create (input_id "") or edit an input with any AI chat."""
         if self._locked or self.document.read_only:
             return None
         variables = self.last_frame.variables if self.last_frame is not None else {}
         self.ai_dialog = AIDialog(self.document, self.engine, input_id, reply, variables,
-                                  getattr(self.engine, "sources", None), self)
+                                  getattr(self.engine, "sources", None), self, linked=self.linked_media)
         self.ai_dialog.open()
         return self.ai_dialog
 
@@ -1218,6 +1564,7 @@ class MainWindow(QWidget):
         audio = getattr(self.engine, "audio", None)
         if audio is not None:
             audio.stop()
+        self.linked_media.close()
         self.document.close()
         self.global_document.close()
         log_info(f"CentraLight closed ({'lights off' if lights_off else 'lights left as they were'})")

@@ -235,8 +235,12 @@ class LayoutPageTests(M1WindowTestCase):
         image.fill(QColor("#336699"))
         image.save(str(photo))
         self.assertTrue(page.set_room_photo(photo))
+        self.assertTrue(window.linked_media.worker.wait_idle())  # (M13: copied on the links thread, and linked)
+        window.linked_media.poll()
+        process(self.app)
         backdrop = window.document.show.layout().backdrop
-        self.assertRegex(backdrop, r"^media/room-[0-9a-f]{12}\.jpg$")  # its own file, named from its contents
+        self.assertEqual(backdrop, "media/room.png")
+        self.assertEqual(window.document.show.layout().backdrop_original, str(photo))
         self.assertTrue((folder / backdrop).is_file())
         self.assertFalse(page.backdrop.pixmap().isNull())
         page._clear_photo()

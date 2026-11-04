@@ -192,14 +192,46 @@ class CheckTests(unittest.TestCase):
                 [{"id": "E2", "kind": "image", "file": sneaky}],
                 [{"id": "E3", "kind": "video", "file": str(picture)}],  # a picture isn't a video
                 []]}
-            self.assertEqual(outside_media(data, show), {str(picture): picture})
+            self.assertEqual(outside_media(data, show), {str(picture): str(picture)})
             problems = check_input_data(data, show)[1]
             self.assertTrue(any("Copy into the show" in p for p in problems))
             moved = with_media(data, {str(picture): "media/sunrise.png"})
             self.assertEqual(moved["tracks"][0][0]["file"], "media/sunrise.png")
+            self.assertEqual(moved["tracks"][0][0]["original"], str(picture))  # (M13: linked to where it came from)
             self.assertEqual(moved["tracks"][1][0]["file"], sneaky)
             self.assertEqual(data["tracks"][0][0]["file"], str(picture))  # the original isn't changed
             self.assertEqual(outside_media(data, replace(show, folder="")), {})  # no show folder: nowhere to copy to
+
+    def test_links_are_offered_without_touching_the_disk(self) -> None:
+        """M13: a link an AI wrote (a network path, say) is only text until someone here says yes; a device's name is
+        never offered at all."""
+        import os
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as folder:
+            show = create_show(Path(folder) / "Show")
+            network = r"\\server\share\Sunrise.png"
+            data = {"id": "photo", "name": "Photo", "tracks": [
+                [{"id": "E1", "kind": "image", "file": network}],
+                [{"id": "E2", "kind": "image", "original": r"G:\Drive\Candles.png"}],
+                [{"id": "E3", "kind": "image", "file": r"C:\Pictures\COM3.png"}],
+                [{"id": "E4", "kind": "video", "file": "", "original": r"C:\Videos\aux.mp4"}]]}
+            real_stat = os.stat
+
+            def stat(path, *args, **kwargs):
+                text = str(path)
+                if "server" in text or "Drive" in text or "COM3" in text or "aux" in text:
+                    raise AssertionError(f"looked at {text}")
+                return real_stat(path, *args, **kwargs)
+
+            with mock.patch("os.stat", stat):
+                found = outside_media(data, show)
+                problems = check_input_data(data, show)[1]
+            self.assertEqual(found, {network: network, r"G:\Drive\Candles.png": r"G:\Drive\Candles.png"})
+            self.assertTrue(any("links to" in p for p in problems))
+            moved = with_media(data, {network: "media/Sunrise.png", r"G:\Drive\Candles.png": "media/Candles.png"})
+            self.assertEqual(moved["tracks"][1][0], {"id": "E2", "kind": "image", "original": r"G:\Drive\Candles.png",
+                                                     "file": "media/Candles.png"})
 
     def test_size_and_shape(self) -> None:
         huge = self.paint()

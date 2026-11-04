@@ -94,6 +94,38 @@ def is_device_name(name: str) -> bool:
     return re.split(r"[.:]", str(name), maxsplit=1)[0].rstrip(" .").casefold() in DEVICE_NAMES
 
 
+def safe_text(text: str) -> str:
+    """Text from a file, made safe to show: "<" and ">" become "‹" and "›". Qt shows text that looks like HTML as HTML,
+    and reads any picture an HTML tag names from the disk: a name like <img src="//./COM3"> would open the Eurolite's
+    port just by being shown."""
+    return text.replace("<", "‹").replace(">", "›")
+
+
+def no_markup(value: Any, keep: tuple[str, ...] = ("expr",)) -> Any:
+    """safe_text for every string in a file's data (dicts and lists all the way down), except the values of `keep`
+    keys: formulas ("a < b") are never shown as HTML, so they keep theirs."""
+    if isinstance(value, str):
+        return safe_text(value)
+    if isinstance(value, Mapping):
+        return {k: (v if k in keep else no_markup(v, keep)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [no_markup(v, keep) for v in value]
+    return value
+
+
+NOTES_LIMIT = 2000  # characters in a show's notes
+
+
+def clean_notes(value: object) -> str:
+    """A show's notes as saved: plain text (tabs and line breaks kept, other control characters dropped), at most
+    NOTES_LIMIT characters, no blank lines at the ends."""
+    if not isinstance(value, str):
+        return ""
+    text = value.replace("\r\n", "\n").replace("\r", "\n")
+    text = "".join(ch for ch in text if ch in "\n\t" or (ord(ch) >= 32 and ord(ch) != 127))
+    return text.strip("\n ")[:NOTES_LIMIT].rstrip()
+
+
 def is_safe_id(value: object) -> bool:
     """An id that can be a file name: lower-case letters, digits and hyphens, and not a device name."""
     return isinstance(value, str) and bool(ID_PATTERN.match(value)) and not is_device_name(value)
@@ -196,8 +228,9 @@ class Layout:
     id: str
     name: str
     positions: Mapping[str, MapSpot] = EMPTY  # fixture id -> spot
-    backdrop: str = ""  # the room photo, relative to the show folder ("" = none)
+    backdrop: str = ""  # the room photo, relative to the show folder ("" = none): CentraLight's own copy
     backdrop_opacity: float = 0.55
+    backdrop_original: str = ""  # the photo it was copied from, anywhere on this PC ("" = not linked; see links.py)
 
 
 @dataclass(frozen=True)
@@ -227,6 +260,7 @@ class Show:
     active_layout: str = ""
     automations: Mapping[str, Automation] = EMPTY
     automation_order: tuple[str, ...] = ()  # the order they're listed and run in
+    notes: str = ""  # a few lines about the show (what it's for), shown in the show menu, the Dashboard and the phone page
     # Not saved: where the show was loaded from and what was wrong with it
     folder: str = ""
     read_only: bool = False

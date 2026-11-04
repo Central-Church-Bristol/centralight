@@ -295,8 +295,11 @@ class EditorControlsTests(EditorTestCase):
         image = QImage(320, 180, QImage.Format.Format_RGB32)
         image.fill(QColor("#FF8800"))
         image.save(str(picture))
-        window.editor_page.details.use_file(picture)
+        window.editor_page.details.use_file(picture)  # (M13: linked to it, and copied in on the links thread)
+        self.assertTrue(window.linked_media.worker.wait_idle())
+        window.linked_media.poll()
         self.assertEqual(self.element(window, "warm-white", element_id)["file"], "media/Sunrise photo.png")
+        self.assertEqual(self.element(window, "warm-white", element_id)["original"], str(picture))
         self.assertTrue((folder / "media" / "Sunrise photo.png").is_file())
 
     def test_viewports_draw(self) -> None:

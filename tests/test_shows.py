@@ -713,8 +713,8 @@ class ShowRouteTests(FilesCase):
 
         status, reply = get("/api/shows")
         self.assertEqual(status, 200)
-        self.assertEqual(reply["shows"], [{"id": "evening", "name": "Evening", "loaded": False},
-                                          {"id": "morning", "name": "Morning", "loaded": True}])
+        self.assertEqual(reply["shows"], [{"id": "evening", "name": "Evening", "loaded": False, "notes": ""},
+                                          {"id": "morning", "name": "Morning", "loaded": True, "notes": ""}])
         status, state = get("/api/state")
         self.assertEqual((state["show"], state["show_id"]), ("Morning", "morning"))
         status, page = get("/")

@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QTabWidget,
     QTimeEdit,
     QToolButton,
     QVBoxLayout,
@@ -72,6 +73,7 @@ from ..engine import AutomationsView, EngineFrame
 from ..model import TRANSITION_KINDS, Automation, Show
 from ..sun import sun_times
 from .document import ShowDocument
+from .schedule_view import ScheduleView
 from .undo_bar import UndoBar
 from .widgets import ElidedLabel, FlowLayout, Panel, ResettableSplitter, ToggleSwitch, discard
 
@@ -489,6 +491,7 @@ def _number_or_text(text: str) -> Any:
 
 class AutomationPage(QWidget):
     scope_changed = Signal()  # the selection moved between the global automations and the show's (undo follows it)
+    import_requested = Signal()  # Import from another show… (show automations)
 
     def __init__(self, document: ShowDocument, engine: Any, sources_provider: Callable[[], list[str]] | None = None,
                  parent: QWidget | None = None, *, global_document: ShowDocument | None = None,
@@ -558,7 +561,10 @@ class AutomationPage(QWidget):
         self.up_button.clicked.connect(lambda: self.move(-1, SHOW))
         self.down_button = QPushButton("Down")
         self.down_button.clicked.connect(lambda: self.move(1, SHOW))
-        self.show_panel.body.addWidget(self._button_row(self.new_button, self.up_button, self.down_button))
+        self.import_button = QPushButton("From another show…")
+        self.import_button.setToolTip("Import automations from another show (and the inputs they send)")
+        self.import_button.clicked.connect(self.import_requested.emit)
+        self.show_panel.body.addWidget(self._button_row(self.new_button, self.up_button, self.down_button, self.import_button))
 
         upcoming_panel = Panel("Coming up (next 7 days)")
         self.upcoming = QListWidget()
@@ -591,8 +597,22 @@ class AutomationPage(QWidget):
         self.history.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.history.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         history_panel.body.addWidget(self.history, 1)
+        # the week schedule of shows (M13): read-only, worked out from the global automations' "Load a show"; clicking a
+        # block opens the automation behind it
+        self.schedule = ScheduleView()
+        self.schedule.setToolTip("When each show is loaded, from the global automations' “Load a show” (read-only). "
+                                 "Click a block to open the automation behind it.")
+        self.schedule.automation_clicked.connect(self._schedule_clicked)
+        self.right_tabs = QTabWidget()
+        self.right_tabs.setObjectName("AutomationTabs")
+        self.right_tabs.addTab(self.editor_scroll, "Automation")
+        self.right_tabs.addTab(self.schedule, "Week schedule")
+        self.right_tabs.setTabToolTip(1, "Which show is loaded when, this week and the weeks ahead (from the global "
+                                         "automations)")
+        self.right_tabs.setTabVisible(1, global_document is not None)
+        self.right_tabs.currentChanged.connect(lambda _index: self._fill_schedule())
         self.right = ResettableSplitter(Qt.Orientation.Vertical, self._default_right_split)
-        self.right.addWidget(self.editor_scroll)
+        self.right.addWidget(self.right_tabs)
         self.right.addWidget(history_panel)
         self.right.setStretchFactor(0, 3)  # the editor gets most of the height
         self.right.setStretchFactor(1, 1)
@@ -746,7 +766,8 @@ class AutomationPage(QWidget):
         self._fill_lists()
         self._build_editor()
         self._fill_upcoming(force=True)
-        for widget in (self.new_button, self.up_button, self.down_button):
+        self._fill_schedule()
+        for widget in (self.new_button, self.up_button, self.down_button, self.import_button):
             widget.setEnabled(not show.read_only)
         globals_read_only = globals_ is None or globals_.read_only
         for widget in (self.new_global_button, self.global_up, self.global_down):
@@ -1023,6 +1044,22 @@ class AutomationPage(QWidget):
             self._build_editor()
             self._list_keys = {SHOW: (), GLOBAL: ()}
             self._fill_lists()
+            self.right_tabs.setCurrentIndex(0)
+
+    def _schedule_clicked(self, automation_id: str) -> None:
+        """A block on the week schedule: open the global automation behind it."""
+        if self.global_document is None or automation_id not in self.global_document.show.automations:
+            return
+        self._select(GLOBAL, automation_id)
+        self._build_editor()
+        self._list_keys = {SHOW: (), GLOBAL: ()}
+        self._fill_lists()
+        self.right_tabs.setCurrentIndex(0)
+
+    def _fill_schedule(self) -> None:
+        """The week schedule follows the global automations (only worked out while it's on screen)."""
+        if self.global_document is not None and self.right_tabs.currentWidget() is self.schedule:
+            self.schedule.set_data(self.global_document.show, self._show_names())
 
     def _ticked(self, item, scope: str) -> None:
         automation_id = item.data(Qt.ItemDataRole.UserRole)

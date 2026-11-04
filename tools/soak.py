@@ -13,6 +13,16 @@ prints a summary (memory should level off, not keep climbing).
 --switch-shows N: there are two shows, and every N seconds the other one is loaded (through
 the remote, as a Stream Deck key would) and its "Follow screen" sent, so memory can be
 watched across many show loads.
+
+--linked-video N (M13): each show also has "Linked video", a Video element linked to an original
+file outside the shows (allowed, as if someone at the PC had chosen it). The first show sends it
+to Base each time it's loaded, so it plays on the lights; every N minutes the original is
+replaced by a different video, so CentraLight copies it in and swaps it in when it isn't on the
+lights. The summary counts the copies and swaps in the session log.
+
+--countdown N (M13): each show has a show variable "mood" and an automation "mood above 0.5 → Fade to
+black; when it stops → Follow screen". Every N minutes the soak sets mood to 0.9 (the automation's run
+waits for its 15 s countdown, then fades), and 40 s later back to 0.1 (Follow screen comes back).
 """
 
 from __future__ import annotations
@@ -154,6 +164,51 @@ def make_show(shows: Path) -> None:
     load_show(folder)
 
 
+def make_clip(path: Path, hue: float) -> None:
+    """A 4-second test video (320x180, 10 fps) in one colour, slowly brightening."""
+    import cv2
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f".{path.stem}.part.mp4")
+    writer = cv2.VideoWriter(str(temp), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (320, 180))
+    for frame in range(40):
+        r, g, b = colorsys.hsv_to_rgb(hue % 1.0, 1.0, 0.4 + 0.6 * frame / 39)
+        image = np.zeros((180, 320, 3), dtype=np.uint8)
+        image[:] = (int(b * 255), int(g * 255), int(r * 255))
+        writer.write(image)
+    writer.release()
+    os.replace(temp, path)  # (in one go, as a sync tool would put a new version)
+
+
+def add_countdown_automation(show_folder: Path) -> None:
+    """"mood" (a show variable) and "Mood fade" (mood above 0.5 → Fade to black; when it stops → Follow screen)."""
+    path = show_folder / "show.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["globals"] = [g for g in data.get("globals", []) if g.get("name") != "mood"] + [
+        {"name": "mood", "type": "number", "default": 0.0, "min": 0.0, "max": 1.0}]
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    automation = {"format": "centralight-automation", "version": 1, "id": "mood-fade", "name": "Mood fade", "logic": "all",
+                  "conditions": [{"type": "variable", "name": "mood", "compare": ">", "value": 0.5}],
+                  "actions": [{"do": "fade_black", "fade": 1.0}],
+                  "on_end": [{"do": "base", "input": "follow-screen", "transition": "cut"}]}
+    (show_folder / "automations").mkdir(exist_ok=True)
+    (show_folder / "automations" / "mood-fade.json").write_text(json.dumps(automation, indent=2), encoding="utf-8")
+
+
+def add_linked_video(shows: Path, original: Path, appdata: Path) -> None:
+    """Each show gets "Linked video" (a Video element linked to the original); the original is allowed, as if someone
+    at the PC had chosen it."""
+    from centralight.links import AllowedLinks
+
+    for folder in shows.iterdir():
+        if not (folder / "show.json").is_file():
+            continue
+        data = {"format": "centralight-input", "version": 1, "id": "linked-video", "name": "Linked video",
+                "tracks": [[{"id": "E1", "kind": "video", "file": "", "original": str(original)}], [], [], []]}
+        (folder / "inputs" / "linked-video.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
+    AllowedLinks(appdata / "allowed_links.json").allow([str(original)])
+
+
 def make_second_show(shows: Path) -> None:
     """"Evening": a copy of the soak's show, to switch to and fro."""
     from centralight.shows import duplicate_show
@@ -179,17 +234,28 @@ def main() -> int:
     p.add_argument("--size", default="960x540")
     p.add_argument("--csv", type=Path, help="also write the samples here")
     p.add_argument("--switch-shows", type=float, default=0.0, help="load the other show every this many seconds (0: never)")
+    p.add_argument("--linked-video", type=float, default=0.0,
+                   help="a video linked to an original, replaced every this many minutes (0: none)")
+    p.add_argument("--countdown", type=float, default=0.0,
+                   help="an automation counts down and fades every this many minutes (0: never)")
     args = p.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     width, height = (int(v) for v in args.size.split("x"))
     home = Path(tempfile.mkdtemp(prefix="centralight-soak-"))
     make_show(home / "shows")
+    if args.countdown > 0:
+        add_countdown_automation(home / "shows" / "Central Church")  # (before the second show is copied from it)
     port = 18000 + os.getpid() % 1000  # (its own remote port, never the real one's)
     (home / "appdata").mkdir(parents=True, exist_ok=True)
     (home / "appdata" / "settings.json").write_text(json.dumps({"output": "simulated", "remote_port": port}), encoding="utf-8")
     if args.switch_shows > 0:
         make_second_show(home / "shows")
+    original = home / "originals" / "Linked clip.mp4"
+    hue, replaced = 0.0, 0
+    if args.linked_video > 0:
+        make_clip(original, hue)
+        add_linked_video(home / "shows", original, home / "appdata")
     switches, failed, next_show = 0, 0, "evening"
     env = dict(
         os.environ,
@@ -212,6 +278,11 @@ def main() -> int:
         print(f"Watching CentraLight (pid {pid}) for {args.minutes:g} min; source {width}x{height} at 24 fps; {cores} cores"
               + (f"; switching shows every {args.switch_shows:g} s" if args.switch_shows > 0 else ""))
         last_switch = started
+        last_replace = started
+        last_mood, mood_high, cycles = started, False, 0
+        if args.linked_video > 0:
+            time.sleep(3.0)
+            remote_get(port, "/api/input/linked-video")  # (on the lights: its updates wait until it isn't)
         while time.monotonic() - started < args.minutes * 60:
             time.sleep(args.every)
             if app.poll() is not None:
@@ -221,11 +292,24 @@ def main() -> int:
                 last_switch += args.switch_shows
                 if remote_get(port, f"/api/show/{next_show}"):
                     time.sleep(1.0)  # (the window loads it)
-                    remote_get(port, "/api/input/follow-screen")  # its Follow screen, from the held look
+                    linked = args.linked_video > 0 and next_show == "central-church"
+                    remote_get(port, "/api/input/linked-video" if linked else "/api/input/follow-screen")
                     switches += 1
                     next_show = "central-church" if next_show == "evening" else "evening"
                 else:
                     failed += 1
+            if args.countdown > 0:
+                if not mood_high and time.monotonic() - last_mood >= args.countdown * 60:
+                    mood_high, last_mood = remote_get(port, "/api/var/mood?value=0.9"), time.monotonic()
+                    cycles += 1
+                elif mood_high and time.monotonic() - last_mood >= 40.0:
+                    remote_get(port, "/api/var/mood?value=0.1")
+                    mood_high, last_mood = False, time.monotonic()
+            if args.linked_video > 0 and time.monotonic() - last_replace >= args.linked_video * 60:
+                last_replace = time.monotonic()
+                hue += 0.37
+                make_clip(original, hue)  # a new version of the original, while CentraLight may be playing its copy
+                replaced += 1
             cpu, private, working = sample(pid)
             now = time.monotonic()
             share = (cpu - last_cpu) / (now - last_t) * 100
@@ -250,6 +334,14 @@ def main() -> int:
                   f"peak {max(private) / 1024:.1f} MB; second half averages {(second - first) / 1024:+.1f} MB vs the first")
         if args.switch_shows > 0:
             print(f"Shows loaded: {switches} times ({failed} asks the remote didn't answer)")
+        if log.exists() and args.countdown > 0:
+            text = log.read_text(encoding="utf-8")
+            print(f"Countdown: mood set high {cycles} times; {text.count('for its countdown')} runs waited for their "
+                  f"countdown, {text.count('Countdowns dropped')} drops")
+        if log.exists() and args.linked_video > 0:
+            text = log.read_text(encoding="utf-8")
+            print(f"Linked video: the original was replaced {replaced} times; {text.count('copied in as')} copies made, "
+                  f"{text.count('the new version is used now')} swapped in, {text.count('Tidied')} tidies")
         if log.exists():
             text = log.read_text(encoding="utf-8")
             problems = [line for line in text.splitlines() if "Traceback" in line or "Error" in line]

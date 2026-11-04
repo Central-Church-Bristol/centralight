@@ -21,7 +21,7 @@ from .elements import media_path
 from .files import read_json, write_json_atomic
 from .global_automations import GLOBAL_DIR
 from .log import log_info
-from .model import Show, is_device_name, slugify
+from .model import Show, clean_notes, is_device_name, safe_text, slugify
 from .show_io import BACKUPS_DIR, SHOW_FILE, ShowError, save_whole_show
 
 NAME_LIMIT = 60  # characters in a show's name (and its folder's)
@@ -30,11 +30,12 @@ _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')  # characters a Windows folder na
 
 @dataclass(frozen=True)
 class ShowInfo:
-    """One show in the list: its id (from the folder), its name (from show.json) and its folder."""
+    """One show in the list: its id (from the folder), its name (from show.json) and its folder (and its notes)."""
 
     id: str
     name: str
     folder: str
+    notes: str = ""
 
 
 def show_id(folder: str | Path) -> str:
@@ -43,18 +44,24 @@ def show_id(folder: str | Path) -> str:
 
 
 def clean_name(name: str) -> str:
-    """A show's name: one line, single spaces, not too long."""
-    return " ".join(str(name).split())[:NAME_LIMIT].strip()
+    """A show's name: one line, single spaces, not too long, never read as HTML on screen."""
+    return safe_text(" ".join(str(name).split())[:NAME_LIMIT].strip())
 
 
 def read_show_name(folder: Path) -> str:
     """The name in a show's show.json (its folder's name if it can't be read)."""
+    return read_show_name_and_notes(folder)[0]
+
+
+def read_show_name_and_notes(folder: Path) -> tuple[str, str]:
+    """The name and notes in a show's show.json (its folder's name, and no notes, if it can't be read)."""
     try:
         data = read_json(Path(folder) / SHOW_FILE)
     except Exception:
         data = None
     name = data.get("name") if isinstance(data, dict) else None
-    return clean_name(name) if isinstance(name, str) and clean_name(name) else Path(folder).name
+    notes = clean_notes(data.get("notes")) if isinstance(data, dict) else ""
+    return (clean_name(name) if isinstance(name, str) and clean_name(name) else Path(folder).name), notes
 
 
 def list_shows(root: Path) -> list[ShowInfo]:
@@ -70,7 +77,8 @@ def list_shows(root: Path) -> list[ShowInfo]:
                 continue
         except OSError:
             continue
-        found.append(ShowInfo(show_id(entry), read_show_name(entry), str(entry)))
+        name, notes = read_show_name_and_notes(entry)
+        found.append(ShowInfo(show_id(entry), name, str(entry), notes))
     found.sort(key=lambda info: (info.name.casefold(), info.id))
     return found
 
@@ -155,6 +163,9 @@ def new_show(current: Show, root: Path, name: str) -> Path:
             target = folder / source.relative_to(Path(current.folder).resolve())
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+            from .links import carry_record
+
+            carry_record(current.folder, relative, folder, relative)  # (where it came from: no copying in again)
     show = Show(name=name, identify_seed=current.identify_seed, fixtures=current.fixtures, house=current.house,
                 layouts=current.layouts, active_layout=current.active_layout)
     save_whole_show(show, folder)

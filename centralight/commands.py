@@ -233,6 +233,30 @@ class SetSolo:
     input: Input | None = None
 
 
+@dataclass(frozen=True)
+class SetCountdownLength:
+    """Seconds of countdown before an automatic show load or Cut / Fade to black (Settings; 0 = none)."""
+
+    seconds: float
+
+
+@dataclass(frozen=True)
+class CountdownAction:
+    """The countdown banner's buttons (and /api/countdown/...): "now" (Load now), "wait" (Wait 10 min) or "skip".
+    countdown_id "" = the one the banner shows."""
+
+    what: str
+    countdown_id: str = ""
+
+
+@dataclass(frozen=True)
+class QuietAutomations:
+    """These show automations were just imported: at the next check, what their conditions say is taken as it is
+    (as when CentraLight starts again), so one that's true already doesn't run until it next comes true."""
+
+    automation_ids: tuple[str, ...]
+
+
 Command = (
     SetMaster
     | SetHouse
@@ -260,4 +284,7 @@ Command = (
     | SetAutomationEnabled
     | SwitchLayout
     | PowerEvent
+    | SetCountdownLength
+    | CountdownAction
+    | QuietAutomations
 )

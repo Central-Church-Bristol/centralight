@@ -232,9 +232,9 @@ Worship blue.
 - [ ] **Send to Base**: the lights play the sequence and loop it; the tile shows a progress bar; the Editor's Result
       view matches the lights. **Send to Base** again: it starts again.
 - [ ] Set **At the end: Stop** and send it: at the end it leaves Base.
-- [ ] **Video**: drag Video onto a track, **Choose…** a short video (it's copied into the show), send it to Base: the
-      lights follow the video. Try **Speed**, **Area** and **Smoothing**. While it plays, glance at Task Manager: CentraLight should
-      stay small (note the CPU %).
+- [ ] **Video**: drag Video onto a track, **Choose…** a short video (CentraLight links to it and plays its own copy),
+      send it to Base: the lights follow the video. Try **Speed**, **Area** and **Smoothing**. While it plays, glance
+      at Task Manager: CentraLight should stay small (note the CPU %).
 
 ## 14d. Painting and masks
 
@@ -280,9 +280,10 @@ in `Documents\CentraLight Shows`. Changes save by themselves: there's no Save.
       an action ▾ → Load a show** → the other show; **+ Add an action ▾ → Festoon or key lights** → Key lights 40 %.
 - [ ] In the show it will load, **+ New automation** → remove its two conditions, **+ Add a condition ▾ → When this
       show loads** → **+ Add an action ▾ → Send an input to Base** → Warm white.
-- [ ] Switch to the first show and wait: at the time, the other show loads by itself (the lights hold for a moment),
-      Warm white comes in (its "When this show loads") and the key lights go to 40 %. **History** shows both,
-      the global one marked "Global:". **Coming up** lists the global one, marked too.
+- [ ] Switch to the first show and wait: 15 seconds before the time a banner counts down (**Loading … in 0:15**,
+      see 14g); at the time, the other show loads by itself (the lights hold for a moment), Warm white comes in (its
+      "When this show loads") and the key lights go to 40 %. **History** shows both, the global one marked
+      "Global:". **Coming up** lists the global one, marked too.
 - [ ] (Optional) Set the global automation's time again, and when it comes, have a dialog open (**Show ▾ →
       Rename…**, say): the show waits for you to close it. Leave it 30 s and CentraLight closes it for you (as if
       you'd pressed Cancel), then loads the show.
@@ -290,6 +291,39 @@ in `Documents\CentraLight Shows`. Changes save by themselves: there's no Save.
       that show's inputs. A Stream Deck key with `http://127.0.0.1:8746/api/show/central-church` loads Central Church.
 - [ ] (Optional) **Show ▾ → Delete a show → Evening…** → Yes: its folder goes to the Recycle Bin (you can put it back
       from there). The loaded show can't be deleted. Delete the test automations afterwards.
+
+## 14g. Show extras (M13): the countdown, the schedule, importing, .clshow files, notes, linked videos
+
+- [ ] **The countdown** (the rig test the plan asks for): Automation tab → **+ New automation** (this show's) →
+      **Time of day**: from 2 minutes from now, for 5 minutes → **+ Add an action ▾ → Fade to black**. Send something
+      colourful to Base and wait. 15 seconds before the time a banner comes up under the header: **Fading to black in
+      0:15 · Do it now · Wait 10 min · Skip**, counting down, and the lights fade **at** the time, not 15 s later.
+      (The phone page shows the same banner.)
+- [ ] Set its time again and try the buttons when the banner shows: **Skip** (nothing happens this time; it runs
+      as normal next time), **Wait 10 min** (the banner goes, and comes back 10 minutes later), **Do it now**.
+      Settings → **Countdown first** changes the 15 s (0 = none). **Run now** never counts down. Set its time once more
+      and, while the banner counts, switch the automation off (its tick in the list): the banner goes, and nothing
+      fades. Delete it afterwards.
+- [ ] **Week schedule**: Automation tab → the **Week schedule** tab (beside **Automation**): the global automation
+      that loads a show (from 14f) is a coloured block on today. ‹ › move a week; clicking the block opens it.
+- [ ] **Import from another show**: Dashboard → the **+ New input** tile → **From another show…** → pick the other
+      show, tick an input: the summary lists what changes (lights it uses that this show lacks, show variables added,
+      Replace or Keep both if it's already here) → **Import**. Nothing is sent to the lights; Ctrl+Z undoes it. The
+      Automation tab's **From another show…** does the same for automations (and the inputs they send).
+- [ ] **Show notes**: **Show ▾ → Notes about “…”…** → type two lines → Save. They show on the Dashboard (a small
+      panel at the top right: click its title to fold it), under the show's name in the Show menu, and on the phone
+      page.
+- [ ] **.clshow files**: **Show ▾ → Export “…”…** (try ticking **Leave out pictures and videos** once) → save it on
+      the Desktop. Explorer shows it with CentraLight's document icon. Double-click it: CentraLight comes forward and
+      asks **Import “…” as a new show?** → Keep both → **Import**: a new show "… (2)" is in the Show menu, not loaded.
+      Delete it afterwards (**Show ▾ → Delete a show**).
+- [ ] **A video linked to its original** (the second rig test the plan asks for): Editor → a Video element →
+      **Choose…** a video in your Google Drive folder. The File row shows the original's path; CentraLight plays its
+      own copy. Send the input to Base. Now save a different video over the original in Google Drive (same name):
+      within 5 minutes (or click the element again) the File row says **Update ready: used when it's not playing ·
+      Update now**, and the lights carry on with the old one. Take the input off Base (or press **Update now**): the
+      new video plays from then on. Rename the original in Drive: the File row shows a warning, **Original not
+      found**, and the video still plays.
 
 ## 15. Always running: the tray, a second launch, sleep
 

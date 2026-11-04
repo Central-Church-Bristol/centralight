@@ -168,11 +168,20 @@ def main(argv: list[str] | None = None) -> int:
     if tray is not None:
         app.setQuitOnLastWindowClosed(False)  # closing the window hides it in the tray
         window.attach_tray(tray)
-    window.instance_server = InstanceServer(window.bring_to_front)
+    from PySide6.QtCore import QTimer
+
+    # (a double-clicked .clshow file: asked about once the ping itself is done)
+    window.instance_server = InstanceServer(window.bring_to_front, on_open=lambda path: QTimer.singleShot(
+        0, lambda: window.ask_import_package(path)))
     window.power_filter = PowerEventFilter(lambda kind: engine.submit(PowerEvent(kind)) if kind == "woke" else log_info("The PC is going to sleep"))
     app.installNativeEventFilter(window.power_filter)
     if startup.managed():
         trouble = startup.sync(settings.start_with_windows)
+        if trouble:
+            log_info(trouble)
+        from . import filetype
+
+        trouble = filetype.sync(settings.clshow_files)  # (only the real app: tests and the soak tool never do)
         if trouble:
             log_info(trouble)
 
@@ -185,6 +194,11 @@ def main(argv: list[str] | None = None) -> int:
         window.show()
     if problem:
         QMessageBox.warning(window, "Show problem", problem)
+    from .ui.instance import package_argument
+
+    package = package_argument(argv)
+    if package:  # (a .clshow file was double-clicked: offer to import it once the window is up)
+        QTimer.singleShot(500, lambda: window.ask_import_package(package))
     try:
         return app.exec()
     finally:

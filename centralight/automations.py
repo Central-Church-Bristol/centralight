@@ -22,6 +22,7 @@ Everything here is plain Python (no Qt); the engine runs the AutomationRunner on
 
 from __future__ import annotations
 
+import itertools
 import math
 import re
 import time
@@ -32,6 +33,8 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from .colours import is_colour_text, parse_colour
+from .countdown import GRACE as COUNTDOWN_GRACE
+from .countdown import WAIT as COUNTDOWN_WAIT
 from .commands import (
     BLACK_FADE,
     OverlayOff,
@@ -635,6 +638,25 @@ class AutomationState:
     restored: bool = False  # matched when CentraLight last stopped (checked against the clock at the first look)
 
 
+@dataclass
+class Expected:
+    """A run the clock will start soon whose countdown has started early (so it lands on time)."""
+
+    key: tuple[str, str, str]  # (automation id, "actions" / "on_end", the minute it runs)
+    id: str  # "x3": the banner's buttons name it by this
+    automation: str
+    kind: str
+    action: dict  # its counted step
+    run_due: float  # engine time the run starts
+    due: float  # engine time the counted step happens (the banner's zero)
+    seen: float  # engine time it was last promised by the clock
+
+
+def _delay(action: Mapping[str, Any]) -> float:
+    delay = action.get("delay", 0)
+    return float(delay) if isinstance(delay, (int, float)) and not isinstance(delay, bool) and delay > 0 else 0.0
+
+
 @dataclass(frozen=True)
 class HistoryEntry:
     when: float  # wall time
@@ -661,8 +683,17 @@ class AutomationRunner:
         self.paused_since: float | None = None
         self.states: dict[str, AutomationState] = {}
         self.history: deque[HistoryEntry] = deque(maxlen=HISTORY_SIZE)
-        self.pending: list[tuple[float, int, str, dict, str]] = []  # (due engine time, order, automation id, action, why)
+        # actions waiting: (due engine time, order, automation id, action, why, run); "why" is "conditions" or "by hand"
+        self.pending: list[tuple[float, int, str, dict, str, int]] = []
         self._order = 0
+        self._runs = itertools.count(1)
+        # the countdown before automatic changes (countdown.py): the engine sets these before each check
+        self.countdown = 0.0  # seconds (0 = no countdown now: it's off, CentraLight has just started, or it's paused)
+        self.counted: Callable[[Mapping[str, Any]], bool] = lambda _action: False  # which actions get one
+        self.needless: Callable[[Mapping[str, Any]], bool] = lambda _action: False  # ...but not now: it changes nothing
+        self.expected: dict[tuple[str, str, str], Expected] = {}  # runs the clock will start soon (their banner starts early)
+        self._decisions: dict[tuple[str, str, str], tuple[str, float]] = {}  # Skip / Wait / Now pressed before a run came
+        self._expected_numbers = itertools.count(1)
         self._last_check = -1e9
         self._audio_since: dict[tuple[str, int], float] = {}  # (automation, condition) -> when the sound went above
         self._audio_quiet: dict[tuple[str, int], float] = {}  # (automation, condition) -> when it went quiet
@@ -672,6 +703,7 @@ class AutomationRunner:
         self._definitions: dict[str, Automation] = {}  # each automation as last checked
         self._results: dict[str, list[bool]] = {}  # each automation's conditions at the last check
         self._held_events: dict[str, frozenset[str]] = {}  # start events kept for automations waiting for the feeds
+        self._quiet: set[str] = set()  # just imported: taken as they are at the next check, without running
         self._stopped_at: float | None = None  # when the last CentraLight saved its state (from live.json)
 
     # --- saving and restoring (live.json)
@@ -727,8 +759,14 @@ class AutomationRunner:
             self.paused = paused
             self.paused_since = now if paused else None
             if paused:
-                self.pending.clear()  # nothing waiting runs while paused
+                self.pending.clear()  # nothing waiting runs while paused (a countdown included)
+                self.expected.clear()
+                self._decisions.clear()
             log_info("Automations paused" if paused else "Automations resumed")
+
+    def quiet(self, automation_ids) -> None:
+        """These were just imported: at the next check they take how things are as their start (nothing runs)."""
+        self._quiet.update(automation_ids)
 
     def reset(self, automation_id: str) -> None:
         """Let an automation the loop guard paused run again."""
@@ -862,6 +900,7 @@ class AutomationRunner:
         for aid in [a for a in self.states if a not in known]:  # deleted: kept a while, in case Undo brings it back
             self._removed[aid] = (self.states.pop(aid), situation.now, self._definitions.pop(aid, None))
             self._drop_pending(aid, everything=True)
+            self._drop_expected(aid)
             self._forget_sound(aid)
         for aid in [a for a, entry in self._removed.items() if situation.now - entry[1] > REMEMBER_REMOVED]:
             del self._removed[aid]
@@ -873,10 +912,17 @@ class AutomationRunner:
             edited = self._definitions.get(automation.id, automation) != automation
             self._definitions[automation.id] = automation
             state = self.states.setdefault(automation.id, AutomationState())
+            if automation.id in self._quiet:  # (just imported: how things are now is where it starts from)
+                self._quiet.discard(automation.id)
+                if automation.enabled and not state.tripped:
+                    state.matched = self.matches(automation, situation)[0]
+                    state.since = situation.now
+                continue
             if not automation.enabled or state.tripped:
                 state.matched = False  # turned on again later while true = it runs then
                 state.restored = False
                 self._drop_pending(automation.id)
+                self._drop_expected(automation.id)
                 self._forget_sound(automation.id)
                 continue
             if not situation.ndi_known and any(c.get("type") == "ndi" and not _ndi_true(c.get("source"), situation.ndi)
@@ -943,18 +989,27 @@ class AutomationRunner:
                 del table[key]
 
     def _drop_pending(self, automation_id: str, everything: bool = False) -> None:
-        """Forget an automation's waiting actions (Run now's stay, unless `everything`)."""
+        """Forget an automation's waiting actions, a countdown's included (Run now's stay, unless `everything`)."""
         if any(p[2] == automation_id for p in self.pending):
             self.pending = [p for p in self.pending if p[2] != automation_id or (p[4] == "by hand" and not everything)]
 
     def run_now(self, automation: Automation, mono_now: float, wall_now: float) -> list[tuple[str, dict]]:
-        """The Run now button (and the API): its actions, whatever the conditions."""
+        """The Run now button (and the API): its actions, whatever the conditions, with no countdown. Whatever of it was
+        waiting (a countdown, an "after N s" step) is replaced by this run."""
+        self._drop_pending(automation.id)
+        self._drop_expected(automation.id)
         return self._run(automation, list(automation.actions), mono_now, wall_now, "run by hand", count=False, why="by hand")
 
     def _run(self, automation: Automation, actions: list, mono_now: float, wall_now: float, what: str,
              detail: str = "", count: bool = True, why: str = "conditions", lifts: bool = False) -> list[tuple[str, dict]]:
         """lifts: this run may light things after a "Turn lights off" quit (see began_after). It goes with each
-        action as "_lifts", the waiting ones too."""
+        action as "_lifts", the waiting ones too.
+
+        The countdown (countdown.py): the run's first change that has one (a show load, Cut / Fade to black) is its
+        counted step; it and everything in the run that comes with it or after it wait for the countdown, in the
+        runner's queue like any "after N s" step (so switching the automation off, the loop guard, pausing or the
+        automation stopping drop them as they drop those). A run the clock started, whose banner started early, doesn't
+        wait: it lands on time. Skip, Wait 10 min and Now pressed on that early banner are applied here."""
         state = self.states.setdefault(automation.id, AutomationState())
         if count:
             state.runs.append(mono_now)
@@ -963,25 +1018,49 @@ class AutomationRunner:
                 state.tripped = True
                 state.matched = False
                 self.pending = [p for p in self.pending if p[2] != automation.id]
+                self._drop_expected(automation.id)
                 self.history.append(HistoryEntry(wall_now, automation.id, automation.name, "paused by the loop guard",
                                                  f"it ran {len(recent)} times in {LOOP_WINDOW:g} s"))
                 log_info(f"Automation “{automation.name}” ran {len(recent)} times in {LOOP_WINDOW:g} s, so it's been paused (loop guard)")
                 return []
+        steps = [({**dict(action), "_lifts": lifts}, _delay(action)) for action in actions if isinstance(action, Mapping)]
+        counted_at = None
+        if self.countdown > 0.0 and why != "by hand":  # (a change due now that wouldn't change anything doesn't count)
+            counted_at = next((delay for action, delay in steps
+                               if self.counted(action) and not (delay == 0.0 and self.needless(action))), None)
+        hold, decision = 0.0, ""
+        if counted_at is not None:
+            kind = "on_end" if what == "stopped matching" else "actions"
+            early = self._take_expected(automation.id, kind, mono_now)
+            decision = early or ""
+            if early is None and counted_at < self.countdown:
+                hold = self.countdown - counted_at  # (nothing saw it coming: it waits for its countdown)
+            if decision == "wait":
+                hold += COUNTDOWN_WAIT
+        if decision == "skip":
+            what, detail = f"{what}: skipped from the countdown", ""
+        elif decision == "now":
+            what, detail = f"{what}: done already (Now on the countdown)", ""
         state.last_run = wall_now
         self.history.append(HistoryEntry(wall_now, automation.id, automation.name, what, detail))
-        log_info(f"Automation “{automation.name}” {what}" + (f" ({detail})" if detail else ""))
+        log_info(f"Automation “{automation.name}” {what}" + (f" ({detail})" if detail else "")
+                 + (f" (it waits {hold:g} s for its countdown)" if hold > 0 else ""))
+        run = next(self._runs)
         now_actions = []
-        for action in actions:
-            if not isinstance(action, Mapping):
+        marked = False
+        for action, delay in steps:
+            held = counted_at is not None and delay >= counted_at
+            if held and decision in ("skip", "now"):
                 continue
-            action = {**dict(action), "_lifts": lifts}
-            delay = action.get("delay", 0)
-            delay = float(delay) if isinstance(delay, (int, float)) and not isinstance(delay, bool) else 0.0
-            if delay > 0:
+            if held and not marked and delay == counted_at and self.counted(action) and not (delay == 0.0 and self.needless(action)):
+                action = {**action, "_countdown": True}  # (the step the banner counts down to)
+                marked = True
+            wait = delay + (hold if held else 0.0)
+            if wait > 0:
                 self._order += 1
-                self.pending.append((mono_now + delay, self._order, automation.id, dict(action), why))
+                self.pending.append((mono_now + wait, self._order, automation.id, action, why, run))
             else:
-                now_actions.append((automation.id, dict(action)))
+                now_actions.append((automation.id, {k: v for k, v in action.items() if k != "_countdown"}))
         return now_actions
 
     def due(self, mono_now: float) -> list[tuple[str, dict]]:
@@ -991,7 +1070,119 @@ class AutomationRunner:
         ready = sorted(p for p in self.pending if p[0] <= mono_now)
         if ready:
             self.pending = [p for p in self.pending if p[0] > mono_now]
-        return [(aid, action) for _due, _order, aid, action, _why in ready]
+        return [(aid, {k: v for k, v in action.items() if k != "_countdown"}) for _due, _order, aid, action, _why, _run in ready]
+
+    # --- the countdown before automatic changes (M13; countdown.py says what it is)
+
+    def expect(self, automation_id: str, kind: str, moment: datetime, run_due: float, action: Mapping[str, Any],
+               delay: float, mono_now: float) -> None:
+        """The clock will start this automation's run (kind: its "actions", or "on_end" when it stops matching) at
+        `moment` (engine time run_due): its banner starts early, so it lands on time. Called at every check while it's
+        coming (settle_expected drops one that isn't said again)."""
+        key = (automation_id, kind, moment.strftime("%Y-%m-%d %H:%M"))
+        found = self.expected.get(key)
+        if found is None:
+            found = Expected(key, f"x{next(self._expected_numbers)}", automation_id, kind, dict(action), run_due,
+                             run_due + delay, mono_now)
+            self.expected[key] = found
+            log_info(f"Automation {automation_id}: its countdown starts early (it runs at {moment:%H:%M})",
+                     key=f"countdown-early-{automation_id}-{key[2]}")
+        found.seen = mono_now
+
+    def settle_expected(self, mono_now: float) -> None:
+        """After a check's expect() calls: a run the clock no longer promises goes (it was switched off, changed, or
+        something else it needs went), and so does one whose time passed without it running."""
+        for key, found in list(self.expected.items()):
+            if (found.seen < mono_now and mono_now < found.run_due - 1.0) or mono_now > found.run_due + COUNTDOWN_GRACE:
+                del self.expected[key]
+        for key, (_what, run_due) in list(self._decisions.items()):
+            if mono_now > run_due + COUNTDOWN_GRACE:
+                del self._decisions[key]
+
+    def _take_expected(self, automation_id: str, kind: str, mono_now: float) -> str | None:
+        """This run was expected (its banner started early): "" to go ahead on time, or what was pressed on its banner
+        ("skip", "wait" or "now"). None if it wasn't expected."""
+        result = None
+        for key, found in list(self.expected.items()):
+            if found.automation == automation_id and found.kind == kind and abs(found.run_due - mono_now) <= COUNTDOWN_GRACE:
+                del self.expected[key]
+                result = ""
+        for key, (what, run_due) in list(self._decisions.items()):
+            if key[0] == automation_id and key[1] == kind and abs(run_due - mono_now) <= COUNTDOWN_GRACE:
+                del self._decisions[key]
+                result = what
+        return result
+
+    def _drop_expected(self, automation_id: str) -> None:
+        for key in [k for k in self.expected if k[0] == automation_id]:
+            del self.expected[key]
+        for key in [k for k in self._decisions if k[0] == automation_id]:
+            del self._decisions[key]
+
+    def countdown_items(self) -> list[tuple[str, str, dict, float]]:
+        """(id, automation id, the counted step, engine time it happens) for each countdown under way: runs waiting in
+        the queue, and runs the clock will start soon whose banner has started early."""
+        items = [(f"r{run}", aid, action, due) for due, _order, aid, action, why, run in self.pending
+                 if action.get("_countdown") and why != "by hand"]
+        items += [(found.id, found.automation, found.action, found.due) for found in self.expected.values()
+                  if found.key not in self._decisions]
+        return items
+
+    def countdown_pressed(self, what: str, item: str, mono_now: float, wall_now: float) -> tuple[str, str] | None:
+        """Load now ("now"), Wait 10 min ("wait") or Skip ("skip") on a countdown. A run that's waiting is moved (or
+        dropped) from its counted step on. For a run the clock hasn't started yet, the choice is kept for when it does;
+        for "now" this returns (automation id, kind) so the engine does that run at once (as Run now does)."""
+        for found in self.expected.values():
+            if found.id == item:
+                self._decisions[found.key] = (what, found.run_due)
+                log_info(f"Countdown: {what} pressed for automation {found.automation}, before it ran")
+                return (found.automation, found.kind) if what == "now" else None
+        if not item.startswith("r") or not item[1:].isdigit():
+            return None
+        run = int(item[1:])
+        counted = next((p for p in self.pending if p[5] == run and p[3].get("_countdown")), None)
+        if counted is None:
+            return None
+        start = counted[0]
+        shift = COUNTDOWN_WAIT if what == "wait" else (mono_now - start if what == "now" else 0.0)
+        kept = []
+        for entry in self.pending:
+            if entry[5] == run and entry[0] >= start:
+                if what == "skip":
+                    continue
+                entry = (entry[0] + shift, *entry[1:])
+            kept.append(entry)
+        self.pending = kept
+        name = self._definitions.get(counted[2])
+        self.history.append(HistoryEntry(wall_now, counted[2], name.name if name is not None else counted[2],
+                                         {"skip": "skipped from the countdown", "wait": "waits 10 minutes (countdown)",
+                                          "now": "done now (countdown)"}.get(what, what)))
+        log_info(f"Countdown: {what} pressed for automation {counted[2]}")
+        return None
+
+    def run_early(self, automation: Automation, kind: str, mono_now: float, wall_now: float) -> list[tuple[str, dict]]:
+        """Now, on a banner that started early: the run the clock was about to start, done now (as Run now does)."""
+        actions = list(automation.on_end if kind == "on_end" else automation.actions)
+        return self._run(automation, actions, mono_now, wall_now, "run early (Now on the countdown)", count=False,
+                         why="by hand")
+
+    def drop_countdowns(self, why: str) -> None:
+        """Runs waiting for a countdown, and early banners, go (the PC slept: what they waited for is stale)."""
+        runs = {p[5] for p in self.pending if p[3].get("_countdown") and p[4] != "by hand"}
+        starts = {p[5]: p[0] for p in self.pending if p[3].get("_countdown")}
+        before = len(self.pending)
+        self.pending = [p for p in self.pending if not (p[5] in runs and p[0] >= starts[p[5]])]
+        dropped = before - len(self.pending) + len(self.expected)
+        self.expected.clear()
+        self._decisions.clear()
+        if dropped:
+            log_info(f"Countdowns dropped ({why})")
+
+    def cap_countdowns(self, mono_now: float, seconds: float) -> None:
+        """The countdown was made shorter (Settings): runs waiting for it happen within the new length."""
+        for p in [p for p in self.pending if p[3].get("_countdown") and p[0] > mono_now + seconds]:
+            shift = p[0] - (mono_now + seconds)
+            self.pending = [(e[0] - shift, *e[1:]) if e[5] == p[5] and e[0] >= p[0] else e for e in self.pending]
 
 
 # ---------------------------------------------------------------- doing the actions

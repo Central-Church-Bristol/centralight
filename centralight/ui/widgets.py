@@ -591,6 +591,14 @@ def fader_row(caption: str, tip: str = "") -> tuple[QHBoxLayout, Fader, QLabel]:
     return row, fader, percent
 
 
+def plain_tip(text: str) -> str:
+    """A tooltip that shows its text exactly as it is. Qt shows text that looks like HTML as HTML (and reads any
+    picture a tag names from the disk), so the text is escaped and wrapped."""
+    import html
+
+    return "<p style='white-space:pre-wrap'>" + html.escape(str(text)) + "</p>"
+
+
 class Panel(QFrame):
     """A rounded card with a small upper-case title."""
 

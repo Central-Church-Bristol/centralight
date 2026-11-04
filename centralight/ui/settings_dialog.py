@@ -190,6 +190,9 @@ class SettingsDialog(QDialog):
         self.start_with_windows = QCheckBox("Start CentraLight when I sign in to Windows (in the tray, by the clock)")
         self.start_with_windows.setChecked(settings.start_with_windows)
         self.start_with_windows.setToolTip("Then the lights and automations look after themselves after a restart")
+        self.clshow_files = QCheckBox("Open .clshow files with CentraLight (double-click one to import it)")
+        self.clshow_files.setChecked(settings.clshow_files)
+        self.clshow_files.setToolTip("Show ▾ → Export… makes .clshow files. For this Windows user only (no administrator).")
 
         # --- quitting
         # --- audio: what audio.level and friends listen to
@@ -244,6 +247,16 @@ class SettingsDialog(QDialog):
         black_form.addRow(hint("The header's buttons: a click sends the colour lights to black; holding one sends "
                                "everything, the Festoon and Key lights too. The next input lights things again. "
                                "The Stream Deck's /api/black/fade takes this time too, unless its URL gives ?seconds=."))
+        self.countdown = QSpinBox()
+        self.countdown.setRange(0, 60)
+        self.countdown.setSuffix(" s")
+        self.countdown.setSpecialValueText("None")
+        self.countdown.setValue(settings.countdown)
+        black_form.addRow("Countdown first", self.countdown)
+        black_form.addRow(hint("Before an automation loads a show, or cuts or fades to black, a banner counts down (on the "
+                               "window and the phone page): Load now, Wait 10 min or Skip. A change that's on a schedule "
+                               "still lands on time: its banner starts early. Not for Run now, or just after CentraLight "
+                               "starts. 0 = no countdown."))
 
         quit_box = QGroupBox("Starting and quitting")
         self.quit_action = QComboBox()
@@ -252,6 +265,7 @@ class SettingsDialog(QDialog):
         self.quit_action.setCurrentIndex(max(0, self.quit_action.findData(settings.quit_action)))
         quit_layout = QVBoxLayout(quit_box)
         quit_layout.addWidget(self.start_with_windows)
+        quit_layout.addWidget(self.clshow_files)
         quit_layout.addWidget(hint("Closing the window keeps CentraLight running in the tray; Quit is in the tray icon's menu."))
         quit_layout.addWidget(self.quit_action)
         quit_layout.addWidget(hint("The Eurolite keeps showing the last look until something else is sent."))
@@ -388,7 +402,9 @@ class SettingsDialog(QDialog):
         settings.artnet_universe = self.artnet_universe.value()
         settings.quit_action = str(self.quit_action.currentData() or QUIT_ASK)
         settings.black_fade = round(self.black_fade.value(), 2)
+        settings.countdown = self.countdown.value()
         settings.start_with_windows = self.start_with_windows.isChecked()
+        settings.clshow_files = self.clshow_files.isChecked()
         settings.remote_port = self.remote_port.value()
         settings.remote_lan = self.remote_lan.isChecked()
         settings.remote_key = self.remote_key.text().strip() or new_key()

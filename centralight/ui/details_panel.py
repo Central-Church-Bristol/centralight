@@ -128,6 +128,7 @@ class DetailsPanel(QScrollArea):
         self.hotkey: QKeySequenceEdit | None = None
         self.hotkey_problem: QLabel | None = None
         self.dialog: ExpressionDialog | None = None
+        self.linked = None  # LinkedMedia (linked_media.py): the File row's link to its original, and Choose…
         self.input_id = ""
         self.element_id: str | None = None
         self.shape_id: str | None = None
@@ -176,6 +177,20 @@ class DetailsPanel(QScrollArea):
         self._gesture += 1
         self.input_id, self.element_id, self.shape_id = input_id, element_id, shape_id
         self.refresh(self.show_data)
+        element = self.current_element()
+        original = element.get("original") if element is not None else None
+        if self.linked is not None and isinstance(original, str) and original:
+            self.linked.check(original)  # (selecting a linked element checks its original, on the links thread)
+
+    def set_linked(self, linked) -> None:
+        """Linked pictures and videos (M13): the File row shows its link's state, and Choose… copies through it."""
+        self.linked = linked
+        linked.changed.connect(self._link_changed)
+
+    def _link_changed(self) -> None:
+        element = self.current_element()
+        if element is not None and element.get("kind") in ("image", "video") and "element:file" in self._fields:
+            self._fill_values()
 
     def _finish_typing(self) -> None:
         """If a field here has the keyboard (e.g. the NDI source box), finish its edit now, while the element it
@@ -448,6 +463,8 @@ class DetailsPanel(QScrollArea):
             field = self._field_for(spec, lambda value, final, path=spec.path: self._set_element(path, value, final))
             if spec.type == "file":
                 field.choose_requested.connect(lambda kind=kind: self._choose_file(kind))
+                field.allow_requested.connect(self._allow_link)
+                field.update_requested.connect(self._update_link)
             key = f"element:{spec.path}"
             self._fields[key] = field
             if spec.animatable and spec.type in ("number", "colour"):
@@ -608,6 +625,9 @@ class DetailsPanel(QScrollArea):
                 field = self._fields.get(key)
                 if field is not None:
                     self._show_value(field, spec, get_path(element, spec.path, spec.default), self._exprs.get(key), self._keys.get(key), t)
+            file_field = self._fields.get("element:file")
+            if isinstance(file_field, FileField):
+                self._show_link(file_field, element)
             shape = self.current_shape()
             if shape is not None:
                 for spec in SHAPE:
@@ -1036,31 +1056,146 @@ class DetailsPanel(QScrollArea):
             QMessageBox.information(self, "No show folder", "This show isn't saved in a folder, so pictures can't be added.")
             return
         pattern = "Pictures (*.jpg *.jpeg *.png *.bmp *.webp *.gif)" if kind == "image" else "Videos (*.mp4 *.mov *.m4v *.avi *.mkv *.webm *.wmv)"
-        path, _ = QFileDialog.getOpenFileName(self, "Choose a file", str(Path.home() / "Pictures"), pattern)
+        start = str(Path.home() / ("Pictures" if kind == "image" else "Videos"))
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a file", start, pattern)
         if path and self.show_data.folder == folder:  # (another show loaded meanwhile: the file was for the other one)
             self.use_file(Path(path))
 
     def use_file(self, source: Path) -> None:
-        """Copy a picture (or video) into the show's media folder and use it."""
+        """Use a picture (or video) from anywhere on this PC: the element links to it and plays CentraLight's own copy,
+        made on the links thread (the element changes when the copy is ready; one undo step). Without linked media
+        (some tests): copied here and now."""
+        element = self.current_element()
+        if element is None:
+            return
+        if self.linked is not None:
+            self.linked.choose(self.input_id, self.element_id, str(source), str(element.get("kind")))
+            return
         relative = copy_media(self.show_data.folder, source)
         self._set_element("file", relative)
 
+    def _show_link(self, field: FileField, element) -> None:
+        original = element.get("original")
+        original = original if isinstance(original, str) else ""
+        linked = self.linked
+        key = (self.input_id, self.element_id)
+        copying = linked.copying.get(key, "") if linked is not None else ""
+        problem = linked.problems.get(key, "") if linked is not None else ""
+        state = linked.state(original) if linked is not None and original else None
+        field.set_link(original, state, copying, problem)
+
+    def _allow_link(self) -> None:
+        element = self.current_element()
+        original = element.get("original") if element is not None else None
+        if self.linked is not None and isinstance(original, str) and original:
+            self.linked.allow(original)
+
+    def _update_link(self) -> None:
+        element = self.current_element()
+        original = element.get("original") if element is not None else None
+        if self.linked is not None and isinstance(original, str) and original:
+            self.linked.update_now(original)
+
 
 class FileField(QWidget):
+    """An Image or Video element's File row: the original it's linked to (or, for a picture from before links, the
+    show's own copy), a warning icon when the original can't be found, and a line about the link: "Not checked yet ·
+    Allow", "Update ready: used when it's not playing · Update now", "Copying…"."""
+
     edited = Signal(object, bool)
     choose_requested = Signal()
+    allow_requested = Signal()
+    update_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._file = ""
+        self._link: tuple = ("", None, "", "")
         self.path = ElidedLabel("(none)")
         self.path.setObjectName("RowDetail")
+        self.warning = QLabel()
+        self.warning.setPixmap(icons.line_icon(icons.draw_warning, theme.WARN).pixmap(16, 16))
+        self.warning.setToolTip("The original can't be found")
+        self.warning.hide()
         choose = QPushButton("Choose…")
+        choose.setToolTip("Link this element to a picture or video anywhere on this PC (CentraLight plays its own copy)")
         choose.clicked.connect(self.choose_requested.emit)
-        layout = QHBoxLayout(self)
+        self.status = QLabel()
+        self.status.setObjectName("RowDetail")
+        self.status.setWordWrap(True)
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.status.hide()
+        self.action = QPushButton()
+        self.action.clicked.connect(self._action_clicked)
+        self.action.hide()
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(6)
+        top.addWidget(self.warning)
+        top.addWidget(self.path, 1)
+        top.addWidget(choose)
+        below = QHBoxLayout()
+        below.setContentsMargins(0, 0, 0, 0)
+        below.setSpacing(8)
+        below.addWidget(self.status, 1)
+        below.addWidget(self.action)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.addWidget(self.path, 1)
-        layout.addWidget(choose)
+        layout.setSpacing(4)
+        layout.addLayout(top)
+        layout.addLayout(below)
 
     def set_value(self, value: Any) -> None:
-        self.path.setText(str(value) if value else "(none)")
+        self._file = str(value) if isinstance(value, str) else ""
+        self._redraw()
+
+    def set_link(self, original: str, state, copying: str = "", problem: str = "") -> None:
+        """state: the link's LinkState (linked_media.py), or None when there's no link."""
+        self._link = (original, state, copying, problem)
+        self._redraw()
+
+    def _action_clicked(self) -> None:
+        (self.allow_requested if self.action.property("does") == "allow" else self.update_requested).emit()
+
+    def _redraw(self) -> None:
+        from ..links import file_name
+
+        original, state, copying, problem = self._link
+        warn, text, action = False, "", ""
+        if copying:
+            self.path.setText(copying)
+            self.path.setToolTip(copying)
+            text = f"Copying {file_name(copying)} into the show…"
+        elif original:
+            self.path.setText(original)
+            self.path.setToolTip(f"{original}\nCentraLight plays its own copy: {self._file or '(none yet)'}")
+            status = state.status if state is not None else "ok"
+            detail = state.detail if state is not None else ""
+            if status == "unchecked":
+                text, action = "Not checked yet: CentraLight reads a linked file only once someone here allows it.", "allow"
+            elif status == "refused":
+                warn, text = True, f"This link can't be used: {detail}."
+            elif status == "checking":
+                text = "Checking the original…"
+            elif status == "update":
+                text, action = "Update ready: used when it's not playing.", "update"
+            elif status == "missing":
+                warn, text = True, f"Original not found: {original}. CentraLight is using its own copy."
+            elif status == "unreachable":
+                warn = True
+                text = f"Original can't be reached: {original}{f' ({detail})' if detail else ''}. CentraLight is using its own copy."
+            elif status == "bad":
+                warn, text = True, f"The original can't be used ({detail}). CentraLight is using its own copy."
+        else:
+            self.path.setText(self._file or "(none)")
+            self.path.setToolTip(f"The show's own copy: {self._file}" if self._file else "")
+        if problem and not copying:
+            warn, text = True, problem
+        self.warning.setVisible(warn)
+        self.status.setText(text)
+        self.status.setVisible(bool(text))
+        self.action.setProperty("does", action)
+        self.action.setText("Allow" if action == "allow" else "Update now" if action == "update" else "")
+        self.action.setToolTip("Let CentraLight read this file and copy in its changes" if action == "allow" else
+                               "Use the new version now, even if it's on the lights" if action == "update" else "")
+        self.action.setVisible(bool(action))

@@ -31,6 +31,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | A third 3-hour soak (after M10) | **done** (3 Nov, 13:31; flat memory, no errors) |
 | A second look at M12 (ten findings) | **done** (3 Nov, 16:40; 648 tests pass) |
 | A fourth 3-hour soak (after M12, loading a show every 2 minutes) | **done** (3 Nov, 17:08; 90 loads, no errors; memory up 3 MB) |
+| M13 Show extras (your six extras of 3 Nov, evening) | **done** (4 Nov, 00:20; reviewed by three, about 45 findings fixed; 805 tests pass; all 38 deliberate breakages caught); a soak to come |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -54,6 +55,123 @@ Run all the tests (about five minutes, including the layout check at every scali
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## A look at M13 (3 Nov, 23:00)
+
+Three reviewers checked M13 before the soak (the countdown and schedule; linked media, importing and notes; .clshow
+files). They found about 45 things; everything that mattered is fixed, each with a test that fails without the fix
+(all 38 such checks were tried, breaking each rule in a copy of the code: each time a test noticed):
+- **Text from files never reaches the screen as HTML.** Qt shows text that looks like HTML as HTML, and reads any
+  picture a tag names from the disk: a show, input or automation called `<img src="//./COM3">` (in an imported .clshow
+  file, or written by an AI tool) would have opened the Eurolite's port just by being shown. Now "<" and ">" in names
+  and settings read from files become "‹" and "›" (formulas and comparisons keep theirs), the import dialogs and
+  messages are plain text, and tooltips that show formulas or notes are escaped. NDI feed names from the network too.
+- **The countdown is part of the automation's run now**, waiting in the same queue as its "after N s" steps. So
+  switching the automation off, deleting it, the loop guard, pausing, Run now, or the automation stopping (when that
+  cancels what it was waiting for, as for "feed lost for 10 s") all stop its countdown too; before, a fade could still
+  happen at zero after you'd switched its automation off. Skip, Wait 10 min and Now act on the whole run from its
+  show load or fade on, its later steps included. A "when it stops matching" fade at the end of a time range starts
+  its banner early too, so it lands on time. Skip on an early banner is kept even if the banner flickers. Run now ends
+  the automation's countdown. A countdown from before the PC slept is dropped when it wakes. Making the countdown
+  shorter in Settings hurries one under way. The phone page's buttons name the countdown they showed (a second tap
+  can't skip another), and its banner is in the page's top bar. Pressing Now counts as someone taking charge after a
+  "Turn lights off" quit.
+- **Linked media:** tidying at a show load can no longer delete a copy a check had just made, or one an update was
+  about to use (and an update never points at a file that isn't there). Undoing an automatic update sticks: it's then
+  offered with Update now rather than made again, and the Dashboard's Ctrl+Z never picks CentraLight's own update
+  step. The AI paste dialog allows only the links it listed. After three stuck checks, Choose… and Copy into the show
+  say so instead of "Copying…" for ever. An original that isn't a picture or video isn't copied again until it changes.
+  A moment's lock on `media\links.json` can't wipe it. Names are compared as the engine reads them
+  ("media\a.png" is "media/a.png"). A Choose… that finishes during a drag waits for the drag's end. Room photos copied
+  to a new show or layout keep their record, and big room photos are read at the size shown.
+- **Import from another show:** imported automations start from how things are now (one whose conditions are true
+  already doesn't run until they next come true: "nothing is sent to the lights" holds). Keep both never gives an
+  import an id that another one coming has, and automations that switch a renamed automation follow it. A hotkey
+  another input here has is left off (the summary says so). Lights the imported automations use are listed. Files are
+  copied on a thread with a progress window.
+- **.clshow files:** Replace really replaces (it always kept both). Show loads wait while an import or export runs,
+  and one that's waited 30 s stops it (it leaves nothing half done) rather than loading mid-way. One failure in an
+  Export everything import no longer drops everything after it. The "Imported…" message holds nothing up. Quitting
+  during an import stops it cleanly. The replaced show goes to the Recycle Bin from the window (Windows' questions
+  belong to it). Pictures and videos must be stored as they are inside the file, and JSON is limited harder (no zip
+  bombs). Names in a file's media\links.json that Windows would read as another file's are refused. Importing settings
+  applies them to the running CentraLight properly, and never changes this PC's output, port, phone page or start with
+  Windows. A double-clicked file is checked as text first (a full path, no device names), only one import runs at a
+  time, and the running CentraLight may come to the front.
+- **Notes:** the Dashboard's panel is below Layers, scrolls when long, and remembers being folded. The Show menu shows
+  "&" in notes, and their full text in tooltips.
+- Asked of you: nothing new. The countdown also applies after the PC wakes from sleep (only start-up is exempt, as
+  the plan says).
+
+## M13 Show extras — done (3 Nov, night)
+
+Your six extras of 3 Nov (evening), in the order the plan suggested: linked pictures and videos, importing from
+another show, .clshow files, show notes, the week schedule, and the countdown. All with Simulated output.
+- **Linked pictures and videos, with CentraLight's own copy in each show.** An Image or Video element (and a
+  layout's room photo) remembers the **original** file, wherever it is (Google Drive, Pictures, Videos), and plays
+  CentraLight's own copy in the show's `media` folder, never the original, so a slow or offline Google Drive can't
+  touch playback.
+  - **Choose…** (the Editor's File row, which now shows the original's path) links the element and copies the file
+    in. The room photo's **Room photo…** does the same. Each is one undo step, made when the copy is ready.
+  - **Changes:** each original's size and modified time are checked when the show loads, when you select the
+    element in the Editor, and every 5 minutes. A changed original is copied to a temporary file, checked to open as
+    a picture or video, and kept as a new copy ("candles 2.mp4"); the copy in use is never overwritten. It's used
+    once its input isn't on the lights (not on Base, an overlay, a transition or solo); until then the File row
+    says **Update ready: used when it's not playing · Update now**. The room photo is updated at once.
+  - **An original that's gone** (or can't be reached) shows a warning by the File row: "Original not found: G:\…\
+    candles.mp4. CentraLight is using its own copy." The copy keeps playing.
+  - **Only on its own thread:** checking and copying run on a thread of their own; the engine, the lights, the
+    window and playback never touch an original. If a drive stops answering, that check is given up after 45 s and
+    the others carry on (after three stuck ones, checking stops until CentraLight restarts).
+  - **Safety:** a link is followed only once someone at this PC has chosen it (Choose…, **Allow** on the File row,
+    an import from another show, or the AI paste dialog's **Copy into the show**). Links an AI tool writes into the
+    show folder, or inside an imported .clshow file, show **Not checked yet · Allow** until then; network paths
+    (\\server\…) too. Names Windows keeps for devices (COM3 is the Eurolite) are refused as plain text before
+    anything looks at the disk. The list of allowed originals is kept in CentraLight's app data, never in a show.
+  - **Tidying:** copies CentraLight made that nothing uses any more (not the show, nor its undo history) are removed
+    when a show loads, never while you edit. Files you put in `media` yourself, and copies from before M13, are
+    never removed.
+  - Pictures from before M13 have no known original: their File row shows the show's own file, with no warning,
+    and Choose… links them.
+- **Import from another show…** for inputs (the **+ New input** tile → **From another show…**) and show automations
+  (the Automation tab → **From another show…**), like the Layout tab's. Pick a show and tick what to bring; a summary comes
+  first: ids are kept (so a Stream Deck key fires it in whichever show is loaded), and if this show already has that
+  id you choose **Replace** or **Keep both** (the import gets a new id, and automations brought with it point at it).
+  Lights the inputs use that this show hasn't got are listed ("SlimPAR 108 isn't in this show, so it's ignored
+  here"); show variables they use are added with their defaults; an automation that sends inputs this show lacks
+  brings them too (unless you untick it). Their pictures, videos and paintings are copied in, links included.
+  Nothing is loaded or sent to the lights, and one Ctrl+Z undoes it.
+- **.clshow files.** **Show ▾ → Export “…”…** makes one file (a zip inside) with the show's inputs, automations,
+  layouts, room photo, notes and its copies of pictures and videos; **Export everything…** has every show, the global
+  automations and the settings, for moving to another PC. **Leave out pictures and videos** makes a small file.
+  **Show ▾ → Import…** (or double-clicking a .clshow file: Windows shows them with a CentraLight document icon)
+  brings CentraLight forward and asks **Import “Morning” as a new show?**; if the name is taken, Replace (the old one
+  goes to the Recycle Bin; its id stays) or Keep both ("Morning (2)"). An imported show isn't loaded. Export
+  everything files list what's inside with ticks; the settings start unticked, and this PC always keeps its own
+  output (Simulated / USB), USB port, start with Windows and window. Every file in an imported .clshow is checked
+  like an AI-made input (data only, formulas checked, every name inside the show folder, device names refused,
+  sizes limited) before anything is written. Settings → **Open .clshow files with CentraLight** (on) registers the
+  file type for this Windows user only, when CentraLight itself runs (never the tests or the soak tool).
+- **Show notes:** **Show ▾ → Notes about “…”…**: a few lines of plain text per show. They show under each show's
+  name in the Show menu, in a small **Show notes** panel at the top of the Dashboard's right column (click its title
+  to fold it), on the phone page under the show switcher, and in the AI guide ("About this show"). They're in
+  show.json, so Duplicate, export and backups carry them. One undo step.
+- **Week schedule** (the Automation tab → **Week schedule**, beside **Automation**): a read-only week, Monday to
+  Sunday across and hours down, with a coloured block for each show, worked out from the global automations' **Load
+  a show** and their time, day, date and sunrise / sunset conditions (with the runner's own rules, clock changes
+  included). Two automations loading different shows at the same minute are marked in red; ‹ › go to other weeks
+  (Christmas shows in its week); a line marks now; clicking a block opens its automation. Triggers that can't go on
+  a calendar (CentraLight starts, a feed lost...) are listed underneath. No inputs in the blocks, as you asked.
+- **A countdown before automatic changes:** before a global automation loads a show, and before any automation's
+  Cut or Fade to black, a banner under the header (and on the phone page) says "Loading Evening in 0:15 · Load now ·
+  Wait 10 min · Skip" (or "Fading to black in 0:15 · Do it now · …"). If nobody touches it, it happens at zero.
+  **Skip** skips this run only; **Wait 10 min** moves it 10 minutes later, with the countdown again before it. 15 s
+  unless Settings → **Countdown first** says otherwise (0 = none). For a change that comes from the clock (a time,
+  day, date or sunrise / sunset, or an "after N s" step) the banner starts early, so it still lands on time; other
+  triggers (a feed lost, a sound level) wait for the countdown. No countdown for Run now, in the first minute after
+  CentraLight starts, or while automations are paused; the rest of that automation's run (the Key lights after a
+  load, say) waits with it, in the same queue as its "after N s" steps (see the look at M13). Stream Deck:
+  `/api/countdown/now`, `/api/countdown/wait`, `/api/countdown/skip`. Under the Lock, only Wait and Skip work.
 
 ## A second look at M12 (3 Nov, 16:30)
 
@@ -987,6 +1105,37 @@ Problems the tests found and that are fixed:
 
 ## Decisions (made without you, as agreed — easy to change)
 
+- **M13 choices** (all easy to change):
+  - **The week schedule is a tab beside the automation's editor** (Automation | Week schedule) rather than squeezed
+    in beside the Coming up list: at 1280×720 that panel is too short for a week, and the left column too narrow.
+    Clicking a block opens its automation in the Automation tab.
+  - **Each new version of an original gets its own copy** ("candles 2.mp4"): the copy in use is never overwritten
+    (Windows won't replace a file a video player has open), and undo can go back to the old one. Copies nothing uses
+    any more (in the show or its undo history) are removed when the show loads. Only copies CentraLight made are
+    ever removed (it keeps a list in `media\links.json`); files you put in `media` yourself never are.
+  - **Who said yes to a link** is kept in CentraLight's app data (`allowed_links.json`), not in the show, so a show,
+    an AI tool or an imported file can't allow its own links. Importing inputs from another show on this PC counts as
+    the OK (its summary lists the links, as the plan says); a link in a .clshow file waits for **Allow** in the
+    Editor's File row (or the Layout tab, for a room photo).
+  - **An original that stops answering** (a stuck drive) is given up after 45 s with no progress; the other checks
+    carry on. After three such, checking stops until CentraLight restarts (the copies keep playing). One that couldn't
+    be reached isn't tried again by the 5-minute check for 15 minutes (loading the show, or selecting it, still does).
+  - **The countdown:** none in the first minute after CentraLight starts (the start-up rules apply); a run waits for
+    it as a whole, from its show load or fade on, in the runner's queue (so anything that drops waiting steps drops it);
+    one that started early for a run the clock didn't start after all goes (5 s after it was due at most); **Wait 10
+    min** moves it 10 minutes after it was due; a change that wouldn't change anything gets none (the show's loaded
+    already, or the colour lights are black already); under the Lock only Wait and Skip work; Run now ends it; a
+    countdown isn't kept over a restart, and one from before the PC slept is dropped when it wakes. The button says
+    **Load now** for a show and **Do it now** for black.
+  - **Text from files:** "<" and ">" in names and settings read from show files become "‹" and "›" (so nothing a file
+    says is ever shown as HTML); formulas, comparisons and notes keep theirs.
+  - **Imported automations start from how things are now**, as after a restart: one whose conditions are true
+    already runs only when they next come true.
+  - **Importing settings** (from an Export everything file) keeps this PC's own output (Simulated / USB / Art-Net),
+    USB port, start with Windows, phone page (its key, and whether other computers may use it), audio source, shows
+    folder and window. Export never puts the phone page's key in the file.
+  - **The Dashboard's tile says "From another show…"** (beside Create with AI), a shorter label than the plan's
+    "Import from another show…", so it fits the tile at the smallest window. Its tooltip says the rest.
 - **M12 choices** (all easy to change):
   - **Renaming a show** changes the name you see, not its folder: its Stream Deck id (from the folder's name) keeps
     working. New and copied shows get a folder named after them.

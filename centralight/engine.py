@@ -52,11 +52,13 @@ from .commands import (
     QUIT_FADE,
     ClearBase,
     Command,
+    CountdownAction,
     FlashLights,
     ForgetShow,
     LoadShow,
     OverlayOff,
     PowerEvent,
+    QuietAutomations,
     RequestShow,
     ResetAutomation,
     RunAutomation,
@@ -64,6 +66,7 @@ from .commands import (
     SendToOverlay,
     SetAutomationEnabled,
     SetAutomationsPaused,
+    SetCountdownLength,
     SetGlobalAutomations,
     SetHouse,
     SetIdentify,
@@ -79,6 +82,10 @@ from .commands import (
     ToBlack,
 )
 from .compositor import to_rgb8
+from .countdown import DEFAULT_SECONDS as DEFAULT_COUNTDOWN
+from .countdown import MAX_SECONDS as MAX_COUNTDOWN
+from .countdown import STARTUP_QUIET
+from .countdown import CountdownView, counts_down, describe, next_fire, next_stop
 from .elements import RenderContext, ndi_sources_used
 from .live_state import HouseSetting, LiveState
 from .log import log_exception, log_info
@@ -93,6 +100,14 @@ from .slot import LatestSlot
 from .timing import sleep_until
 
 TICK_RATE = 40
+
+
+def _delay_of(action) -> float:
+    """An automation action's "after N s" (0 = at once)."""
+    delay = action.get("delay", 0)
+    return float(delay) if isinstance(delay, (int, float)) and not isinstance(delay, bool) else 0.0
+
+
 AUDIO_OFF = MappingProxyType({"level": 0.0, "bass": 0.0, "mid": 0.0, "treble": 0.0, "beat": 0.0, "pitch": 0.0})
 PUBLISH_INTERVAL = 0.1  # seconds between EngineFrames for the screen
 PREVIEW_INTERVAL = 0.2  # seconds between preview pictures for the screen (only while a window shows one)
@@ -240,6 +255,9 @@ class EngineFrame:
     overlays: tuple[OverlayView, ...] = ()
     solo: str = ""  # input shown alone on the lights ("" = none)
     live_inputs: frozenset[str] = frozenset()  # inputs on Base or in an overlay right now
+    # inputs whose pictures and videos are on the lights now (Base and the overlays, mid-transition too, and solo):
+    # an update to a linked file waits until its input isn't one of these
+    in_use: frozenset[str] = frozenset()
     identify: bool = False
     identify_seed: int = 7
     testing: bool = False  # test colours are on
@@ -252,6 +270,7 @@ class EngineFrame:
     global_automations: AutomationsView = AutomationsView()
     show_folder: str = ""  # the loaded show
     frozen_from: str = ""  # Base holds another show's look, frozen when this one loaded (that show's name)
+    countdown: CountdownView | None = None  # the countdown before an automatic change the banner shows (M13)
     tick_ms: float = 0.0  # average work per tick
     tick_max_ms: float = 0.0
     tick_rate: float = 0.0  # ticks in the last second
@@ -352,6 +371,9 @@ class Engine:
         self._global_runner.restore(live.global_automations, wall(), saved_at=live.saved_at)
         self._global_runner.paused, self._global_runner.paused_since = self._runner.paused, self._runner.paused_since
         self._first_check = True
+        # the countdown before an automatic show load or Cut / Fade to black (countdown.py); none just after starting
+        self.countdown_seconds = float(DEFAULT_COUNTDOWN)
+        self._quiet_until = now + STARTUP_QUIET
         self._show_events: set[str] = {"show_loads"} if self._pc_start else set()  # for the show's automations' next check
         self._pending_load: tuple[str, float] | None = None  # (show, until when) a global automation is loading
         self._woke = False
@@ -783,15 +805,26 @@ class Engine:
             self._runner.set_paused(paused, self._wall())
             self._global_runner.paused, self._global_runner.paused_since = self._runner.paused, self._runner.paused_since
             if paused:
-                self._global_runner.pending.clear()  # nothing waiting runs while paused
+                self._global_runner.pending.clear()  # nothing waiting runs while paused (a countdown included)
+                self._global_runner.expected.clear()
                 self._after_load.clear()  # (a global automation's actions waiting for a show to load too)
+        elif isinstance(command, SetCountdownLength):
+            self.countdown_seconds = min(float(MAX_COUNTDOWN), max(0.0, float(command.seconds)))
+            for runner in (self._global_runner, self._runner):  # (shorter now: what's counting down happens within it)
+                runner.cap_countdowns(now, self.countdown_seconds)
+        elif isinstance(command, CountdownAction):
+            self._countdown_pressed(command.what, command.countdown_id, now)
+        elif isinstance(command, QuietAutomations):
+            self._runner.quiet(command.automation_ids)
+            self._auto_key = None  # (checked at once)
         elif isinstance(command, RunAutomation):
             scope = "global" if command.scope == "global" else "show"
             runner, container = (self._global_runner, self.global_automations) if scope == "global" else (self._runner, self.show)
             automation = container.automations.get(command.automation_id)
             if automation is not None:
+                do = self._global_action if scope == "global" else self._do_action  # (a global run's steps after a load wait for it)
                 for who, action in runner.run_now(automation, now, self._wall()):
-                    self._do_action(who, action, now, scope)
+                    do(who, action, now)
         elif isinstance(command, ResetAutomation):
             (self._global_runner if command.scope == "global" else self._runner).reset(command.automation_id)
         elif isinstance(command, SetAutomationEnabled):
@@ -875,9 +908,11 @@ class Engine:
             self._first_check = False
             self._woke = False
             # the global automations first (one may load another show)...
+            self._set_countdown(now)
             for who, action in self._global_runner.check(self.global_automations, situation, now):
                 self._global_action(who, action, now)
                 ran = True
+            self._announce(now, situation, "global", self._global_runner, self.global_automations)
         for who, action in self._global_runner.due(now):
             self._global_action(who, action, now)
             ran = True
@@ -889,10 +924,99 @@ class Engine:
             for who, action in self._runner.check(self.show, replace(situation, events=show_events), now):
                 self._do_action(who, action, now)
                 ran = True
+            self._announce(now, situation, "show", self._runner, self.show)
         for who, action in self._runner.due(now):
             self._do_action(who, action, now)
             ran = True
         return ran
+
+    # ------------------------------------------------------------ the countdown before automatic changes (M13)
+
+    def _counting(self, now: float) -> bool:
+        """Do automatic changes get a countdown now? Not when it's off, just after starting, or while paused."""
+        return self.countdown_seconds > 0.0 and now >= self._quiet_until and not self._runner.paused
+
+    def _set_countdown(self, now: float) -> None:
+        """Before a check: tell each runner the countdown's length now (0 = none) and which actions get one."""
+        seconds = self.countdown_seconds if self._counting(now) else 0.0
+        for runner, scope in ((self._global_runner, "global"), (self._runner, "show")):
+            runner.countdown = seconds
+            runner.counted = lambda action, scope=scope: counts_down(action, scope)
+            runner.needless = lambda action: self._needless(action, now)
+
+    def _needless(self, action: Mapping[str, Any], now: float) -> bool:
+        """A change that wouldn't change anything gets no countdown: a show that's loaded already, or the colour lights
+        to black when they are (and nothing else is asked for)."""
+        if action.get("do") == "load_show":
+            wanted = str(action.get("show", "")).strip()
+            return not wanted or self._is_loaded(wanted)
+        return action.get("all") is not True and self.colour_black(now)
+
+    def _announce(self, now: float, situation: Any, scope: str, runner: AutomationRunner, container: Show) -> None:
+        """Start the countdown early for runs the clock will start (or end, for "when it stops matching") within its
+        length, so their change lands on time. Only when a whole minute is that close: the clock changes nothing
+        between them."""
+        seconds = runner.countdown
+        local = situation.local
+        to_minute = 60.0 - (local.second + local.microsecond / 1e6)
+        if seconds > 0.0 and to_minute <= seconds + 1.0:
+            for automation in container.ordered_automations():
+                state = runner.states.get(automation.id)
+                if not automation.enabled or state is None or state.tripped:
+                    continue
+                kind, steps = ("on_end", automation.on_end) if state.matched else ("actions", automation.actions)
+                step = next(((a, _delay_of(a)) for a in steps if runner.counted(a)), None)
+                if step is None or step[1] >= seconds:
+                    continue  # (none, or it's far enough into its run for its banner to start early anyway)
+                action, delay = step
+                window = seconds - delay
+                moment = next_stop(automation, situation, window) if state.matched else next_fire(automation, situation, window)
+                if moment is not None:
+                    runner.expect(automation.id, kind, moment, now + (moment - local).total_seconds(), action, delay, now)
+        runner.settle_expected(now)
+
+    def _countdown_items(self, now: float) -> list[tuple[str, str, str, dict, float]]:
+        """(id, scope, automation id, counted step, engine time it happens) for the countdowns on the banner now,
+        soonest first: within the countdown's length, and still able to change something."""
+        items = []
+        for prefix, runner in (("g", self._global_runner), ("s", self._runner)):
+            for item, who, action, due in runner.countdown_items():
+                if due - now <= self.countdown_seconds + 0.05 and not self._needless(action, now):
+                    items.append((f"{prefix}:{item}", "global" if prefix == "g" else "show", who, action, due))
+        return sorted(items, key=lambda item: item[4])
+
+    def _countdown_view(self, now: float) -> CountdownView | None:
+        items = self._countdown_items(now)
+        if not items:
+            return None
+        item, scope, who, action, due = items[0]
+        container = self.global_automations if scope == "global" else self.show
+        automation = container.automations.get(who)
+        show = str(action.get("show", "")).strip() if action.get("do") == "load_show" else ""
+        return CountdownView(item, describe(action), max(0.0, due - now), automation.name if automation is not None else who,
+                             len(items) - 1, show)
+
+    def _countdown_pressed(self, what: str, countdown_id: str, now: float) -> None:
+        """Load now / Wait 10 min / Skip, on the banner, the phone page or /api/countdown/... ("" = the banner's)."""
+        if what not in ("now", "wait", "skip"):
+            return
+        items = self._countdown_items(now)
+        chosen = next((i for i in items if i[0] == countdown_id), None) if countdown_id else (items[0] if items else None)
+        if chosen is None:
+            log_info(f"Countdown: “{what}” pressed, but that countdown has gone", key="countdown-none")
+            return
+        if what == "now":
+            self._end_quit_dark("someone pressed Now on the countdown")
+        prefix, item = chosen[0].split(":", 1)
+        scope = "global" if prefix == "g" else "show"
+        runner, container = (self._global_runner, self.global_automations) if scope == "global" else (self._runner, self.show)
+        early = runner.countdown_pressed(what, item, now, self._wall())
+        if early is not None:  # (Now on a run the clock hasn't started yet: done now, as Run now does)
+            automation = container.automations.get(early[0])
+            if automation is not None:
+                do = self._global_action if scope == "global" else self._do_action
+                for who, action in runner.run_early(automation, early[1], now, self._wall()):
+                    do(who, action, now)
 
     def _global_action(self, who: str, action: dict, now: float) -> None:
         """A global automation's action. While a show it asked for is loading, its other actions wait for it, so they
@@ -965,6 +1089,8 @@ class Engine:
         self._last_wake = wall
         self._woke = True
         log_info("The PC woke up: reconnecting, and checking the automations")
+        for runner in (self._global_runner, self._runner):  # (a countdown from before the sleep is stale)
+            runner.drop_countdowns("the PC slept")
         for owner in (self.output, self.sources):
             reconnect = getattr(owner, "reconnect", None)
             if reconnect is not None:
@@ -1243,6 +1369,12 @@ class Engine:
                 if key:
                     sending[key] = sending.get(key, False) or on
         self._ndi_sending = sending
+        in_use = self._base.inputs_in_use()
+        for slot in self._overlays:
+            if slot.on or slot.visibility(now) > 0.0:
+                in_use |= slot.inputs_in_use()
+        if self._solo is not None:
+            in_use.add(self._solo.input.id)
         held = self._base.held if current is None else None
         if current is not None:
             base_name = current.input.name
@@ -1268,6 +1400,7 @@ class Engine:
             overlays=tuple(overlays),
             solo=self._solo.input.id if self._solo is not None else "",
             live_inputs=frozenset(live_inputs),
+            in_use=frozenset(in_use),
             identify=self._identify,
             identify_seed=self._identify_seed,
             testing=self._test_colour is not None,
@@ -1280,6 +1413,7 @@ class Engine:
             global_automations=self._view_of(self._global_runner, "global"),
             show_folder=self.show.folder,
             frozen_from=held.name if held is not None else "",
+            countdown=self._countdown_view(now),
             tick_ms=1000.0 * sum(times) / len(times) if times else 0.0,
             tick_max_ms=1000.0 * max(times) if times else 0.0,
             tick_rate=float(len(self._tick_stamps)),

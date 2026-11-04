@@ -10,7 +10,17 @@ from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QPainter
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QScrollArea,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..engine import EngineFrame
 from ..model import Show
@@ -52,6 +62,59 @@ class Swatch(QWidget):
         painter.setBrush(self._colour)
         painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 3, 3)
         painter.end()
+
+
+class NotesPanel(QFrame):
+    """The loaded show's notes (M13), in a small panel that folds away (click its title; remembered). Hidden when
+    there are none. Long notes scroll inside it."""
+
+    folded = Signal(bool)  # True = folded away
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("Panel")
+        self.toggle = QToolButton()
+        self.toggle.setObjectName("PanelTitle")
+        self.toggle.setText("SHOW NOTES")
+        self.toggle.setCheckable(True)
+        self.toggle.setChecked(True)
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle.setAutoRaise(True)
+        self.toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.toggle.setToolTip("Fold the notes away (or open them). Show ▾ → Notes… changes them.")
+        self.toggle.toggled.connect(self._folded)
+        self.text = QLabel()
+        self.text.setObjectName("NotesText")
+        self.text.setWordWrap(True)
+        self.text.setTextFormat(Qt.TextFormat.PlainText)
+        self.text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setMaximumHeight(140)
+        self.scroll.setWidget(self.text)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 8, 14, 12)
+        layout.setSpacing(6)
+        layout.addWidget(self.toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self.scroll)
+        self.setVisible(False)
+
+    def set_notes(self, notes: str) -> None:
+        if self.text.text() != notes:
+            self.text.setText(notes)
+        self.setVisible(bool(notes))
+
+    def _folded(self, open_: bool) -> None:
+        self.scroll.setVisible(open_)
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow if open_ else Qt.ArrowType.RightArrow)
+        self.folded.emit(not open_)
+
+    def set_folded(self, folded: bool) -> None:
+        if self.toggle.isChecked() == folded:
+            self.toggle.setChecked(not folded)
 
 
 class OutputRow(QFrame):
@@ -153,6 +216,7 @@ class DashboardPage(QWidget):
     delete_requested = Signal(str)
     variable_changed = Signal(str, object)  # global variable name, value
     ai_requested = Signal(str)  # input id to edit with AI ("" = make a new one)
+    import_requested = Signal()  # Import from another show…
 
     def __init__(self, show: Show, sources=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -182,6 +246,7 @@ class DashboardPage(QWidget):
         self.grid.edit_requested.connect(self.edit_requested.emit)
         self.grid.new_requested.connect(self.new_requested.emit)
         self.grid.ai_requested.connect(self.ai_requested.emit)
+        self.grid.import_requested.connect(self.import_requested.emit)
         grid_scroll = QScrollArea()
         grid_scroll.setWidgetResizable(True)
         grid_scroll.setWidget(self.grid)
@@ -227,7 +292,10 @@ class DashboardPage(QWidget):
         self.variables = VariablesPanel()
         self.variables.changed.connect(self.variable_changed.emit)
         self.variables.set_globals(show.globals)
+        self.notes_panel = NotesPanel()
+        self.notes_panel.set_notes(show.notes)
         column_layout.addWidget(layers)
+        column_layout.addWidget(self.notes_panel)  # (below the layers: long notes never push Base and the overlays away)
         column_layout.addWidget(self.variables)
         column_layout.addWidget(self.output_panel)
         column_layout.addStretch(1)
@@ -277,6 +345,7 @@ class DashboardPage(QWidget):
 
     def set_show(self, show: Show) -> None:
         self.show_data = show
+        self.notes_panel.set_notes(show.notes)
         self.light_view.set_show(show)
         self.grid.set_show(show)
         self.variables.set_globals(show.globals)

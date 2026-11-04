@@ -40,6 +40,8 @@ from .model import (
     ROLES,
     TRACK_COUNT,
     TRANSITION_KINDS,
+    clean_notes,
+    no_markup,
     Fixture,
     GlobalVar,
     HouseLight,
@@ -173,6 +175,7 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
     warnings: list[str] = []
     if not isinstance(data, dict):
         raise InputFileError("an input must be a JSON object ({ ... })")
+    data = no_markup(data)  # (names, ids and settings from a file never reach the screen as HTML; formulas keep theirs)
     fmt = data.get("format", FORMAT_INPUT)
     if fmt != FORMAT_INPUT:
         raise InputFileError(f'"format" must be "{FORMAT_INPUT}", not {fmt!r}')
@@ -237,6 +240,7 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
         if any("blur" in element for element in track):  # (from before 4 Nov: each picture element's Area replaces it)
             track = [{k: v for k, v in element.items() if k != "blur"} for element in track]
             warnings.append(f'unknown field "blur" on track {index} was ignored (Area does that job now)')
+        track = [_checked_link(element, index, warnings) for element in track]
         tracks.append(freeze(track))
     while len(tracks) < TRACK_COUNT:
         tracks.append(())
@@ -264,6 +268,22 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
         tracks=tuple(tracks),
     )
     return inp, warnings
+
+
+def _checked_link(element: dict, track: int, warnings: list[str]) -> dict:
+    """An Image or Video element's "original" (its link to the file it was copied from) is kept only if it can be used
+    at all, judged from its text alone (links.py): nothing here looks at the disk."""
+    from .links import original_problem
+
+    if "original" not in element:
+        return element
+    original = element["original"]
+    kind = element.get("kind")
+    problem = original_problem(original, kind) if kind in ("image", "video") else "only pictures and videos have one"
+    if original == "" or not problem:
+        return element
+    warnings.append(f'track {track}, element {element.get("id", "?")}: its link to an original was left out ({problem})')
+    return {k: v for k, v in element.items() if k != "original"}
 
 
 def input_file(folder: Path, input_id: str) -> Path:
@@ -369,6 +389,8 @@ def layout_to_dict(layout: Layout) -> dict[str, Any]:
     }
     if layout.backdrop:
         data["backdrop"] = layout.backdrop
+    if layout.backdrop_original:
+        data["backdrop_original"] = layout.backdrop_original
     if abs(layout.backdrop_opacity - 0.55) > 1e-9:
         data["backdrop_opacity"] = round(layout.backdrop_opacity, 3)
     return data
@@ -378,6 +400,7 @@ def layout_from_dict(data: Any, expected_id: str | None = None) -> tuple[Layout,
     """Check and convert a layout file's data. Raises InputFileError with a readable reason."""
     if not isinstance(data, dict):
         raise InputFileError("it must be a JSON object")
+    data = no_markup(data)
     if data.get("format", FORMAT_LAYOUT) != FORMAT_LAYOUT:
         raise InputFileError(f'"format" must be "{FORMAT_LAYOUT}"')
     version = data.get("version", LAYOUT_VERSION)
@@ -405,7 +428,15 @@ def layout_from_dict(data: Any, expected_id: str | None = None) -> tuple[Layout,
     opacity = min(1.0, max(0.0, _soft_number(data.get("backdrop_opacity"), 0.55)))
     name = data.get("name")
     name = " ".join(name.split()) if isinstance(name, str) and name.strip() else layout_id
-    return Layout(layout_id, name, frozen_map(positions), backdrop, opacity), warnings
+    original = data.get("backdrop_original", "")
+    if original:
+        from .links import original_problem
+
+        problem = original_problem(original, "image")
+        if problem:
+            warnings.append(f"the room photo's link to its original was left out ({problem})")
+            original = ""
+    return Layout(layout_id, name, frozen_map(positions), backdrop, opacity, original if isinstance(original, str) else ""), warnings
 
 
 def layout_file(folder: Path, layout_id: str) -> Path:
@@ -501,6 +532,7 @@ def automation_from_dict(data: Any, expected_id: str | None = None, scope: str =
 
     if not isinstance(data, dict):
         raise InputFileError("it must be a JSON object")
+    data = no_markup(data, keep=("expr", "compare"))  # ("<" and ">" are comparisons there)
     if data.get("format", FORMAT_AUTOMATION) != FORMAT_AUTOMATION:
         raise InputFileError(f'"format" must be "{FORMAT_AUTOMATION}"')
     version = data.get("version", AUTOMATION_VERSION)
@@ -637,6 +669,8 @@ def show_to_dict(show: Show) -> dict[str, Any]:
     }
     if show.active_layout:
         data["active_layout"] = show.active_layout
+    if show.notes:
+        data["notes"] = show.notes
     if show.automation_order or show.automations:
         data["automation_order"] = [a.id for a in show.ordered_automations()] if show.automations else list(show.automation_order)
     return data
@@ -656,6 +690,7 @@ def show_from_dict(data: Any) -> tuple[Show, list[str]]:
     """Check and convert show.json data. Raises ShowError with a readable reason."""
     if not isinstance(data, dict):
         raise ShowError("show.json must be a JSON object")
+    data = no_markup(data, keep=("notes",))  # (notes are only ever shown as plain text)
     if data.get("format", FORMAT_SHOW) != FORMAT_SHOW:
         raise ShowError(f'show.json "format" must be "{FORMAT_SHOW}"')
     warnings: list[str] = []
@@ -721,6 +756,7 @@ def show_from_dict(data: Any) -> tuple[Show, list[str]]:
         input_order=tuple(dict.fromkeys(order)),
         active_layout=active_layout,
         automation_order=tuple(dict.fromkeys(automation_order)),
+        notes=clean_notes(data.get("notes", "")),
     )
     return show, warnings
 

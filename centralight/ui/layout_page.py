@@ -59,6 +59,7 @@ from fixtures import PROFILES
 
 from ..commands import FlashLights, SetIdentify, SetTestColour
 from ..elements import media_path
+from ..links import carry_record as _carry_record
 from ..engine import EngineFrame
 from ..files import write_atomic
 from ..layouts import (
@@ -91,7 +92,7 @@ from ..show_edit import (
     set_identify_seed,
     set_profile,
 )
-from . import theme
+from . import icons, theme
 from .dashboard import Swatch
 from .document import ShowDocument, folder_key
 from .light_view import rgb_colour
@@ -587,6 +588,25 @@ class LayoutPage(QWidget):
         photo_row.addWidget(self.photo_button)
         photo_row.addWidget(self.clear_photo_button)
         map_tools.body.addLayout(photo_row)
+        # the room photo's link to its original (M13): "Not checked yet · Allow", "Original not found: …"
+        self.linked = None
+        link_row = QHBoxLayout()
+        self.photo_warning = QLabel()
+        self.photo_warning.setPixmap(icons.line_icon(icons.draw_warning, theme.WARN).pixmap(16, 16))
+        self.photo_warning.hide()
+        self.photo_status = QLabel()
+        self.photo_status.setObjectName("RowDetail")
+        self.photo_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.photo_status.setWordWrap(True)
+        self.photo_status.hide()
+        self.photo_allow = QPushButton("Allow")
+        self.photo_allow.setToolTip("Let CentraLight read this photo and copy in its changes")
+        self.photo_allow.clicked.connect(self._allow_photo)
+        self.photo_allow.hide()
+        link_row.addWidget(self.photo_warning, 0, Qt.AlignmentFlag.AlignTop)
+        link_row.addWidget(self.photo_status, 1)
+        link_row.addWidget(self.photo_allow, 0, Qt.AlignmentFlag.AlignTop)
+        map_tools.body.addLayout(link_row)
         strength_row, self.photo_strength, self.photo_strength_text = fader_row("Photo strength", "How strongly the room photo shows behind the map")
         self.photo_strength.moved.connect(self._photo_strength_moved)
         map_tools.body.addLayout(strength_row)
@@ -796,7 +816,50 @@ class LayoutPage(QWidget):
             return None
         return media_path(show.folder, layout.backdrop)
 
+    def set_linked(self, linked) -> None:
+        """Linked pictures (M13): the room photo is linked to its original like a picture element."""
+        self.linked = linked
+        linked.changed.connect(self._show_photo_link)
+        self._show_photo_link()
+
+    def _show_photo_link(self) -> None:
+        from ..links import file_name
+
+        layout = self.show_data.layout()
+        linked = self.linked
+        original = layout.backdrop_original if layout is not None else ""
+        key = ("", layout.id if layout is not None else "")
+        copying = linked.copying.get(key, "") if linked is not None else ""
+        problem = linked.problems.get(key, "") if linked is not None else ""
+        state = linked.state(original) if linked is not None and original else None
+        warn, text, allow = False, "", False
+        if copying:
+            text = f"Copying {file_name(copying)} into the show…"
+        elif problem:
+            warn, text = True, problem
+        elif original and state is not None:
+            if state.status == "unchecked":
+                text, allow = f"Linked to {original}: not checked yet.", True
+            elif state.status in ("missing", "unreachable", "bad", "refused"):
+                warn = True
+                text = (f"Original not found: {original}. CentraLight is using its own copy." if state.status == "missing"
+                        else f"The original ({original}) can't be used{f': {state.detail}' if state.detail else ''}. "
+                             "CentraLight is using its own copy.")
+        self.photo_warning.setVisible(warn)
+        self.photo_status.setText(text)
+        self.photo_status.setVisible(bool(text))
+        self.photo_allow.setVisible(allow)
+        self.photo_button.setToolTip("Put a photo of the room behind the map, to place the lights on"
+                                     + (f"\nLinked to: {original}" if original else ""))
+
+    def _allow_photo(self) -> None:
+        layout = self.show_data.layout()
+        if self.linked is not None and layout is not None and layout.backdrop_original:
+            self.linked.allow(layout.backdrop_original)
+
     def _load_backdrop(self, show: Show) -> None:
+        if self.linked is not None:
+            self._show_photo_link()
         layout = show.layout()
         opacity = layout.backdrop_opacity if layout is not None else 0.55
         self.backdrop.setOpacity(opacity)
@@ -814,7 +877,7 @@ class LayoutPage(QWidget):
         if key == self._backdrop_key:
             return  # the same photo: don't read it again (this runs on every change)
         self._backdrop_key = key
-        image = QImage(str(path)) if key is not None else QImage()
+        image = _read_photo(path) if key is not None else QImage()
         if image.isNull():
             self.backdrop.setPixmap(QPixmap())
             return
@@ -951,6 +1014,7 @@ class LayoutPage(QWidget):
                     target = Path(show.folder) / backdrop
                     if not target.is_file():
                         write_atomic(target, data)
+                    _carry_record(other.folder, source.backdrop, show.folder, backdrop)
                 except OSError as exc:
                     log_exception("copying the room photo", exc)
                     backdrop = ""
@@ -1186,9 +1250,16 @@ class LayoutPage(QWidget):
             self.set_room_photo(Path(path))
 
     def set_room_photo(self, source: Path) -> bool:
-        """Copy a photo into the show's media folder and put it behind this layout's map.
-        Each photo gets its own file name (from its contents), so undo can bring back the old one."""
+        """Put a photo behind this layout's map: linked to the photo where it is, with CentraLight's own copy made on
+        the links thread (the layout changes when the copy is ready; one undo step). Without linked media (some tests):
+        copied here and now, its file named from its contents, so undo can bring back the old one."""
         show = self.show_data
+        layout = show.layout()
+        if self.linked is not None:
+            if show.read_only or not show.folder or layout is None:
+                return False
+            self.linked.choose_photo(layout.id, str(source))
+            return True
         image = QImage(str(source))
         if show.read_only or not show.folder or image.isNull():
             return False
@@ -1247,6 +1318,21 @@ class LayoutPage(QWidget):
         if self.identify_switch.isChecked() or self._identify_on:
             self.set_identify(False)
         self.engine.submit(SetTestColour(None))
+
+
+def _read_photo(path: Path) -> QImage:
+    """A room photo, read at no more than 1920 pixels wide (a linked original is the full-size file: a 24-megapixel
+    photo read whole would hold the window up)."""
+    from PySide6.QtGui import QImageReader
+
+    reader = QImageReader(str(path))
+    reader.setAutoTransform(True)
+    size = reader.size()
+    if size.isValid() and size.width() > 1920:
+        reader.setScaledSize(size.scaled(1920, 1920 * size.height() // max(1, size.width()),
+                                         Qt.AspectRatioMode.KeepAspectRatio))
+    image = reader.read()
+    return image if not image.isNull() else QImage()
 
 
 class ImportLayoutDialog(QDialog):

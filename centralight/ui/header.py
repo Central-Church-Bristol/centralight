@@ -43,6 +43,7 @@ from .widgets import (
     HoldButton,
     StatusChip,
     ToggleSwitch,
+    plain_tip,
     set_property,
     discard,
 )
@@ -62,6 +63,9 @@ class ShowPicker(QToolButton):
     duplicate_requested = Signal()
     rename_requested = Signal()
     delete_requested = Signal(str)  # a show's folder (never the loaded one)
+    notes_requested = Signal()  # Notes… (the loaded show's)
+    export_requested = Signal(bool)  # Export… (False) or Export everything… (True)
+    import_requested = Signal()  # Import… (a .clshow file)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -77,6 +81,7 @@ class ShowPicker(QToolButton):
         self._provider: Callable[[], list] = lambda: []
         self._name = ""
         self._folder = ""
+        self.notes = ""  # the loaded show's notes (newer than its file while a change waits to be saved)
         self._limit = SHOW_NAME_MAX_PX
         self._same: Callable[[str, str], bool] = lambda a, b: a == b
         self.set_show("", "")
@@ -112,6 +117,7 @@ class ShowPicker(QToolButton):
         """The shows (the loaded one ticked), then New / Duplicate / Rename / Delete."""
         menu = self.picker_menu
         menu.clear()
+        menu.setToolTipsVisible(True)  # (the shows' notes, in full)
         try:
             shows = list(self._provider())
         except Exception:
@@ -121,12 +127,21 @@ class ShowPicker(QToolButton):
         group = QActionGroup(menu)
         group.setExclusive(True)
         for info in shows:
+            loaded = self._same(info.folder, self._folder)
             action = menu.addAction(info.name)
             action.setCheckable(True)
-            action.setChecked(self._same(info.folder, self._folder))
-            action.setToolTip(info.folder)
+            action.setChecked(loaded)
+            notes = self.notes if loaded else getattr(info, "notes", "")
+            action.setToolTip(plain_tip(f"{info.folder}\n\n{notes}" if notes else info.folder))
             action.triggered.connect(lambda _checked=False, folder=info.folder: self.load_requested.emit(folder))
             group.addAction(action)
+            if notes:  # under its name: the notes' first line (all of them in the tooltip)
+                first = notes.splitlines()[0].replace("\t", " ") if notes.splitlines() else ""
+                line = menu.fontMetrics().elidedText(first, Qt.TextElideMode.ElideRight, 320)
+                more = " …" if len(notes.splitlines()) > 1 and not line.endswith("…") else ""
+                note = menu.addAction(f"      {line}{more}".replace("&", "&&"))  # (a lone "&" would underline a letter)
+                note.setEnabled(False)
+                note.setToolTip(plain_tip(notes))
         if not shows:
             none = menu.addAction("(no shows found)")
             none.setEnabled(False)
@@ -134,6 +149,12 @@ class ShowPicker(QToolButton):
         menu.addAction("New show…", self.new_requested.emit)
         menu.addAction(f"Duplicate “{self._name}”…", self.duplicate_requested.emit)
         menu.addAction(f"Rename “{self._name}”…", self.rename_requested.emit)
+        menu.addAction(f"Notes about “{self._name}”…", self.notes_requested.emit)
+        menu.addSeparator()
+        menu.addAction(f"Export “{self._name}”…", lambda: self.export_requested.emit(False))
+        menu.addAction("Export everything…", lambda: self.export_requested.emit(True))
+        menu.addAction("Import…", self.import_requested.emit)
+        menu.addSeparator()
         delete = menu.addMenu("Delete a show")
         others = [info for info in shows if not self._same(info.folder, self._folder)]
         for info in others:

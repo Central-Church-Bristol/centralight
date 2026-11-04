@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..expressions import AUDIO_NAMES, FUNCTIONS, SPECIALS, check
+from .widgets import plain_tip
 
 WORD_BEFORE_CURSOR = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*$")
 EXAMPLES = (
@@ -61,10 +62,10 @@ class ExprButton(QToolButton):
             self.style().polish(self)
         if not text:
             self.setToolTip("Set this with an expression (a formula, e.g. sin(time))")
-        elif broken:
-            self.setToolTip(f"= {text}\nProblem: {problem}\n(the setting's own value is used meanwhile)")
+        elif broken:  # (a formula keeps its "<" and ">": escaped, so it's never read as HTML)
+            self.setToolTip(plain_tip(f"= {text}\nProblem: {problem}\n(the setting's own value is used meanwhile)"))
         else:
-            self.setToolTip(f"= {text}")
+            self.setToolTip(plain_tip(f"= {text}"))
 
 
 def completion_words(variables: Iterable[str]) -> list[str]:

@@ -98,8 +98,10 @@ SMOOTHING = (
               "Glide = they glide like any other change"),
 )
 NDI = (Spec("source", "NDI source", "source", "Media Background Pane", animatable=False, help="Any NDI source whose name contains this"),)
-IMAGE = (Spec("file", "Picture", "file", "", animatable=False, help="A picture in the show's media folder"),)
-VIDEO = (Spec("file", "Video", "file", "", animatable=False, help="A video in the show's media folder"),
+IMAGE = (Spec("file", "Picture", "file", "", animatable=False,
+              help="CentraLight's own copy of the picture, in the show's media folder. Choose… links it to the original, wherever it is"),)
+VIDEO = (Spec("file", "Video", "file", "", animatable=False,
+              help="CentraLight's own copy of the video, in the show's media folder. Choose… links it to the original, wherever it is"),
          Spec("speed", "Speed", "number", 1.0, 0.1, 4.0, 0.05, unit="×"))
 
 TRANSITION = (

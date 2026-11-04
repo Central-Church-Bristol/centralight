@@ -579,3 +579,15 @@ QScrollBar::add-line, QScrollBar::sub-line {
 QScrollBar::add-page, QScrollBar::sub-page {
     background: transparent;
 }
+
+/* ---------------------------------------------------------------- the countdown before an automatic change (M13) */
+
+QFrame#CountdownBanner {
+    background: #3A2A10;
+    border: none;
+    border-bottom: 1px solid @warn;
+}
+QLabel#CountdownText {
+    color: @warn;
+    font-weight: 600;
+}

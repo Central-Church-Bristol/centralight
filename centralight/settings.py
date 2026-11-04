@@ -43,10 +43,12 @@ class Settings:
     remote_lan: bool = False
     remote_key: str = ""
     start_with_windows: bool = False  # in the tray at sign-in; switched on by hand (WEDNESDAY_TESTS.md) once it has been tried
+    clshow_files: bool = True  # Windows opens .clshow files (exported shows) with CentraLight (filetype.py)
     audio_source: str = ""  # "" off, "output" this PC's output, or an input's name (audio.AUDIO sources)
     audio_attack: float = 0.05  # seconds for audio values to rise
     audio_release: float = 0.3  # ... and to fall
     black_fade: float = 2.0  # seconds Fade to black takes (the header's button, and the API's default)
+    countdown: int = 15  # seconds of countdown before an automation loads a show or goes to black (0 = none)
     geometry: list[int] | None = None
     maximized: bool = False
     splitters: dict[str, list[int]] = field(default_factory=dict)
@@ -80,6 +82,7 @@ class Settings:
         self.remote_lan = bool(self.remote_lan)
         self.remote_key = str(self.remote_key or "")
         self.start_with_windows = bool(self.start_with_windows)
+        self.clshow_files = bool(self.clshow_files)
         self.audio_source = str(self.audio_source or "")
         for name, default in (("audio_attack", defaults.audio_attack), ("audio_release", defaults.audio_release)):
             value = getattr(self, name)
@@ -87,6 +90,7 @@ class Settings:
             setattr(self, name, float(value) if ok else default)
         value = self.black_fade
         self.black_fade = float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and 0.0 <= value <= 60.0 else defaults.black_fade
+        self.countdown = _int(self.countdown, defaults.countdown, 0, 60)
         self.maximized = bool(self.maximized)
         geometry = self.geometry
         if not (isinstance(geometry, list) and len(geometry) == 4 and all(isinstance(v, int) for v in geometry)):
