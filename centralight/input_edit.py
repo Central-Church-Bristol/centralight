@@ -91,6 +91,21 @@ def delete_input(show: Show, input_id: str) -> Show:
     return show.with_inputs(inputs, tuple(i for i in show.input_order if i != input_id))
 
 
+def move_input(show: Show, input_id: str, index: int) -> Show:
+    """An input moved to another place on the Dashboard (a tile dragged, M14). index counts the tiles as they are
+    now, the moved one included: it goes before the tile that was at index (at or past the end: last)."""
+    order = [inp.id for inp in show.ordered_inputs()]
+    if input_id not in order:
+        return show
+    old = order.index(input_id)
+    order.remove(input_id)
+    index = max(0, min(int(index), len(order) + 1))
+    if old < index:
+        index -= 1
+    order.insert(min(index, len(order)), input_id)
+    return show.with_inputs(show.inputs, tuple(order))
+
+
 def update_input(show: Show, input_id: str, **changes: Any) -> Show:
     """Change an input's own settings (name, colour, transition, house, ...)."""
     inp = show.inputs[input_id]

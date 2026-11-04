@@ -59,7 +59,7 @@ class InputGridTests(M1WindowTestCase):
         window, engine = self.make()
         grid = window.dashboard.grid
         self.assertEqual(list(grid.tiles), ["follow-screen", "stage-shapes", "warm-white", "pillars-purple", "worship-blue", "christmas", "off"])
-        QTest.mouseClick(grid.tiles["warm-white"], Qt.MouseButton.LeftButton)
+        QTest.mouseClick(grid.tiles["warm-white"].base_button, Qt.MouseButton.LeftButton)  # Send to Base (M14)
         engine.settle(1.2)
         window.bridge.poll()
         process(self.app)
@@ -68,12 +68,14 @@ class InputGridTests(M1WindowTestCase):
         self.assertFalse(grid.tiles["follow-screen"].property("onBase"))
         self.assertIn("Warm white", window.dashboard.caption.full_text())
 
-    def test_shift_click_cuts(self) -> None:
+    def test_cut_to_base_from_the_menu(self) -> None:
+        """M14: Shift-click is gone (clicking a tile does nothing); Cut to Base is on the tile's right-click menu."""
         window, engine = self.make()
-        QTest.mouseClick(window.dashboard.grid.tiles["off"], Qt.MouseButton.LeftButton)  # fades over 1 s
+        QTest.mouseClick(window.dashboard.grid.tiles["off"].base_button, Qt.MouseButton.LeftButton)  # fades over 1 s
         engine.tick()
         self.assertIsNotNone(engine.frames.get().base_progress)
-        QTest.mouseClick(window.dashboard.grid.tiles["worship-blue"], Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier)
+        menu = window.dashboard.tile_menu("worship-blue")
+        next(a for a in menu.actions() if a.text() == "Cut to Base").trigger()
         engine.tick()
         frame = engine.frames.get()
         self.assertEqual(frame.base_id, "worship-blue")
@@ -83,7 +85,7 @@ class InputGridTests(M1WindowTestCase):
     def test_locked_tiles_do_nothing(self) -> None:
         window, engine = self.make()
         window.set_locked(True)
-        QTest.mouseClick(window.dashboard.grid.tiles["warm-white"], Qt.MouseButton.LeftButton)
+        QTest.mouseClick(window.dashboard.grid.tiles["warm-white"].base_button, Qt.MouseButton.LeftButton)
         engine.settle(0.2)
         self.assertEqual(engine.frames.get().base_id, "")
 

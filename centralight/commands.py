@@ -148,22 +148,45 @@ class SetTestColour:
 
 @dataclass(frozen=True)
 class SendToOverlay:
-    """Send an input to Overlay 1-4. state None = the toggle rule (the same input again turns
-    it off); "on" or "off" says exactly what to do."""
+    """Send an input to the Overlay (M14): a new copy on top of what's there, appearing with the input's transition.
+    An input has at most 4 copies there at once (a send beyond that is ignored). tag: names the copy, so
+    ClearFromOverlay(tag=...) clears just that one (a held Send to Overlay button, let go). toggle: if the input has
+    copies there already, clear them instead (what the old Overlay 1-4 URLs did); once: if it has one there already,
+    do nothing (an old URL's ?state=on)."""
 
-    slot: int
     input_id: str
-    state: str | None = None
+    tag: str = ""
+    toggle: bool = False
+    once: bool = False
 
 
 @dataclass(frozen=True)
-class OverlayOff:
-    slot: int
+class ClearFromOverlay:
+    """Clear copies from the Overlay, each leaving the way it came in: one copy (copy: its number), the copy a tag
+    sent, or all of an input's copies (input_id). cut: at once."""
+
+    input_id: str = ""
+    copy: int = 0
+    tag: str = ""
+    cut: bool = False
+
+
+@dataclass(frozen=True)
+class ClearOverlay:
+    """Clear every copy from the Overlay (Clear all), each the way it came in (cut: at once)."""
+
+    cut: bool = False
+
+
+@dataclass(frozen=True)
+class SetOverlayOn:
+    """The Overlay's switch: hide it without emptying it (False), show it again (True), or flip it (None)."""
+
+    on: bool | None = None
 
 
 @dataclass(frozen=True)
 class SetOverlayOpacity:
-    slot: int
     level: float
     fade: float = MASTER_SLEW
 
@@ -274,7 +297,9 @@ Command = (
     | FlashLights
     | SetTestColour
     | SendToOverlay
-    | OverlayOff
+    | ClearFromOverlay
+    | ClearOverlay
+    | SetOverlayOn
     | SetOverlayOpacity
     | SetSolo
     | SetVariable

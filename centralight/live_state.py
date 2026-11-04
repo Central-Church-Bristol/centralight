@@ -33,7 +33,8 @@ class LiveState:
     quit_at: float = 0.0  # when that quit was (kept through later saves, restarts and quits), or 0
     house: dict[str, HouseSetting] = field(default_factory=dict)
     base: dict[str, Any] | None = None  # {"input": id, "time": seconds}
-    overlays: list[dict[str, Any] | None] = field(default_factory=lambda: [None, None, None, None])
+    # the Overlay (M14): {"on": its switch, "opacity": 0-1, "copies": [{"input": id, "time": seconds}], bottom first}
+    overlay: dict[str, Any] | None = None
     frozen: dict[str, Any] | None = None  # Base holding the last show's look: {"from": its name, "colours": {id: [r, g, b, a]}}
     globals: dict[str, Any] = field(default_factory=dict)  # the loaded show's variables
     show_globals: dict[str, dict[str, Any]] = field(default_factory=dict)  # other shows' variables, by folder
@@ -49,7 +50,7 @@ class LiveState:
             "quit_at": self.quit_at,
             "house": {k: {"level": v.level, "on": v.on} for k, v in self.house.items()},
             "base": self.base,
-            "overlays": self.overlays,
+            "overlay": self.overlay,
             "frozen": self.frozen,
             "globals": self.globals,
             "show_globals": self.show_globals,
@@ -94,10 +95,7 @@ class LiveState:
                     state.house[str(key)] = HouseSetting(_unit(value.get("level"), 1.0), bool(value.get("on", False)))
         base = data.get("base")
         state.base = base if isinstance(base, dict) else None
-        overlays = data.get("overlays")
-        if isinstance(overlays, list):
-            state.overlays = [o if isinstance(o, dict) else None for o in overlays[:4]]
-            state.overlays += [None] * (4 - len(state.overlays))
+        state.overlay = _overlay(data)
         frozen = data.get("frozen")
         state.frozen = frozen if isinstance(frozen, dict) and isinstance(frozen.get("colours"), dict) else None
         values = data.get("globals")
@@ -113,7 +111,7 @@ class LiveState:
         state.saved_at = float(saved) if isinstance(saved, (int, float)) and not isinstance(saved, bool) else 0.0
         if blacked_out:  # it was blacked out then: it starts black now (nothing playing, house lights off, levels kept)
             state.base = None
-            state.overlays = [None, None, None, None]
+            state.overlay = None
             state.frozen = None
             state.house = {k: HouseSetting(v.level, False) for k, v in state.house.items()}
         return state
@@ -155,3 +153,21 @@ def _unit(value: Any, default: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return default
     return max(0.0, min(1.0, float(value)))
+
+
+def _overlay(data: dict[str, Any]) -> dict[str, Any] | None:
+    """The Overlay from live.json; one saved before M14 had Overlays 1-4, which become copies on the one Overlay (in
+    their old order, 1 at the bottom), with Overlay 1's opacity."""
+    overlay = data.get("overlay")
+    if isinstance(overlay, dict):
+        copies = overlay.get("copies")
+        return {"on": overlay.get("on", True) is not False, "opacity": _unit(overlay.get("opacity"), 1.0),
+                "copies": [c for c in copies if isinstance(c, dict)] if isinstance(copies, list) else []}
+    old = data.get("overlays")
+    if not isinstance(old, list):
+        return None
+    slots = [o for o in old[:4] if isinstance(o, dict) and isinstance(o.get("input"), str)]
+    if not slots:
+        return None
+    return {"on": True, "opacity": _unit(slots[0].get("opacity"), 1.0),
+            "copies": [{"input": o["input"], "time": o.get("time", 0.0)} for o in slots]}

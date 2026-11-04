@@ -299,11 +299,13 @@ class EngineTimedTests(unittest.TestCase):
             self.run_for(1.0)
         self.assertEqual(seen, [(255, 0, 0), (0, 0, 255), (255, 0, 0), (0, 0, 255)])  # round and round
         self.engine.submit(SendToBase("base", cut=True))
-        self.engine.submit(SendToOverlay(1, "flash"))
+        self.engine.submit(SendToOverlay("flash"))
         self.run_for(1.0)
-        self.assertTrue(self.engine.frames.get().overlays[0].on)
+        self.assertEqual([c.input_id for c in self.engine.frames.get().overlay.copies], ["flash"])
         self.run_for(1.6)
-        self.assertFalse(self.engine.frames.get().overlays[0].on)  # finished: the overlay went off
+        self.assertEqual(self.engine.frames.get().overlay.copies, ())  # finished: the copy is leaving the Overlay...
+        self.assertNotEqual(self.rgb(), (0, 255, 0))  # ...the way it came in (its 1 s fade), not with a cut (M14)
+        self.run_for(0.5)
         self.assertEqual(self.rgb(), (0, 255, 0))
 
 

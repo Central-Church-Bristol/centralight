@@ -1,4 +1,4 @@
-"""M2 engine pieces: compositing, elements, shapes, transitions, buses, overlays, solo, house levels."""
+"""M2 engine pieces: compositing, elements, shapes, transitions, buses, the Overlay (M14: copies), solo, house levels."""
 
 from __future__ import annotations
 
@@ -10,12 +10,14 @@ from pathlib import Path
 
 import numpy as np
 
-from centralight.bus import Bus, Frozen, Instance, OverlaySlot, render_input
+from centralight.bus import Bus, Frozen, Instance, OverlayLayer, render_input
 from centralight.commands import (
-    OverlayOff,
+    ClearFromOverlay,
+    ClearOverlay,
     SendToBase,
     SendToOverlay,
     SetHouse,
+    SetOverlayOn,
     SetOverlayOpacity,
     SetSolo,
     SwapShow,
@@ -283,24 +285,56 @@ class BusTests(unittest.TestCase):
         np.testing.assert_allclose(bus.render(10.5, self.ctx), before, atol=1e-6)  # no jump
         np.testing.assert_allclose(bus.render(11.6, self.ctx)[:, 0, 0], (1, 0, 0, 1))
 
-    def test_overlay_toggle_rules(self) -> None:
-        slot = OverlaySlot(1)
-        slot.send(self.red, 0.0, self.ctx)
-        self.assertTrue(slot.on)
-        self.assertAlmostEqual(slot.visibility(0.5), 0.5)
-        slot.send(self.red, 2.0, self.ctx)  # the same input again: toggles off
-        self.assertFalse(slot.on)
-        self.assertIsNotNone(slot.render(2.5, self.ctx))  # still fading out
-        self.assertIsNone(slot.render(3.1, self.ctx))
-        self.assertEqual(slot.input_id(), "")
-        slot.send(self.red, 4.0, self.ctx, state="on")
-        slot.send(self.red, 6.0, self.ctx, state="on")  # explicit on: stays on
-        self.assertTrue(slot.on)
-        slot.send(self.blue, 7.0, self.ctx)  # another input: replaces it
-        self.assertTrue(slot.on)
-        np.testing.assert_allclose(slot.render(8.1, self.ctx)[:, 0, 0], (0, 0, 1, 1))
-        slot.send(self.blue, 9.0, self.ctx, state="off")
-        self.assertFalse(slot.on)
+    def test_overlay_copies_stack_and_leave_the_way_they_came(self) -> None:
+        layer = OverlayLayer()
+        first = layer.send(self.red, 0.0)
+        self.assertAlmostEqual(first.visibility(0.5), 0.5)  # appearing with its 1 s fade
+        layer.send(self.red, 0.2)  # the same input again: another copy on top (not a toggle)
+        self.assertEqual(layer.count("red"), 2)
+        layer.send(self.red, 0.3)
+        layer.send(self.red, 0.3)
+        self.assertIsNone(layer.send(self.red, 0.4))  # 4 copies of one input at most
+        blue = layer.send(self.blue, 0.4)
+        self.assertIsNotNone(blue)  # (another input still goes)
+        np.testing.assert_allclose(layer.render(2.0, self.ctx)[:, 0, 0], (0, 0, 1, 1))  # the newest is on top
+        self.assertTrue(layer.clear_copy(blue.number, 3.0))
+        self.assertIsNotNone(layer.render(3.5, self.ctx))
+        self.assertAlmostEqual(blue.visibility(3.5), 0.5)  # it goes the way it came in: a 1 s fade
+        np.testing.assert_allclose(layer.render(4.1, self.ctx)[:, 0, 0], (1, 0, 0, 1))
+        self.assertNotIn(blue, layer.copies)  # (gone once it's faded)
+        self.assertTrue(layer.clear_input("red", 5.0))
+        self.assertEqual(layer.count("red"), 0)
+        self.assertEqual(len(layer.copies), 4)  # (leaving...)
+        layer.render(6.1, self.ctx)
+        self.assertEqual(layer.copies, [])
+        self.assertFalse(layer.clear_all(7.0))  # (nothing left to clear)
+
+    def test_the_overlays_switch_hides_it_without_emptying_it(self) -> None:
+        layer = OverlayLayer()
+        layer.send(self.red, 0.0)
+        np.testing.assert_allclose(layer.render(1.1, self.ctx)[:, 0, 0], (1, 0, 0, 1))
+        layer.set_on(False, 2.0)
+        np.testing.assert_allclose(layer.render(2.25, self.ctx)[:, 0, 0], (0.5, 0, 0, 0.5))  # (a short fade)
+        self.assertIsNone(layer.render(2.6, self.ctx))
+        self.assertEqual(layer.count("red"), 1)  # kept, hidden
+        self.assertEqual(layer.input_ids(), frozenset())
+        layer.send(self.blue, 3.0)  # sending turns it back on
+        self.assertTrue(layer.on)
+        self.assertEqual(layer.input_ids(), frozenset({"red", "blue"}))
+
+    def test_a_timed_copy_plays_once_then_leaves(self) -> None:
+        for end in ("hold", "loop", "stop"):
+            layer = OverlayLayer()
+            timed = Input(id="timed", name="timed", infinite=False, length=5.0, end=end,
+                          tracks=freeze([[{"id": "E1", "kind": "paint", **fill("#00FF00"), "start": 0.0, "end": 5.0}], [], [], []]))
+            copy = layer.send(timed, 0.0)
+            self.assertAlmostEqual(copy.progress(2.5), 0.5)
+            self.assertFalse(layer.finish_timed(4.9))
+            self.assertTrue(layer.finish_timed(5.0), end)
+            self.assertTrue(copy.leaving)
+            np.testing.assert_allclose(layer.render(5.5, self.ctx)[:, 0, 0], (0, 0.5, 0, 0.5), atol=1e-6)  # its last moment, fading
+            self.assertIsNone(layer.render(6.1, self.ctx))
+            self.assertEqual(layer.copies, [])
 
     def test_render_input_blends_tracks_in_order(self) -> None:
         tracks = freeze([
@@ -335,20 +369,64 @@ class EngineM2Tests(unittest.TestCase):
 
     def test_overlay_on_top_of_base_with_see_through_parts(self) -> None:
         self.engine.submit(SendToBase("red", cut=True))
-        self.engine.submit(SendToOverlay(1, "glow"))
+        self.engine.submit(SendToOverlay("glow"))
         self.run_for(1.1)
         self.assertEqual(self.rgb(5), (0, 255, 0))  # SlimPAR 101 (top left) is under the green box
         self.assertEqual(self.rgb(41), (255, 0, 0))  # SlimPAR 105: the overlay is clear there, Base shows
         frame = self.engine.frames.get()
-        self.assertEqual(frame.overlays[0].input_id, "glow")
+        self.assertEqual([c.input_id for c in frame.overlay.copies], ["glow"])
         self.assertEqual(frame.live_inputs, frozenset({"red", "glow"}))
-        self.engine.submit(SetOverlayOpacity(1, 0.5, fade=0))
+        self.engine.submit(SetOverlayOpacity(0.5, fade=0))
         self.run_for(0.1)
         self.assertEqual(self.rgb(5), (128, 128, 0))
-        self.engine.submit(OverlayOff(1))
+        self.engine.submit(ClearOverlay())
         self.run_for(1.1)
         self.assertEqual(self.rgb(5), (255, 0, 0))
-        self.assertEqual(self.engine.frames.get().overlays[0].input_id, "")
+        self.assertEqual(self.engine.frames.get().overlay.copies, ())
+
+    def test_copies_that_touch_different_lights_both_show(self) -> None:
+        """The reason for one stacking Overlay: two inputs on different lights don't cancel each other out."""
+        right = paint_input("right", {"fill": {"type": "none"}, "shapes": [{"id": "S1", "type": "rect", "x": 0.8, "y": 0.2,
+                                                                             "w": 0.4, "h": 0.4, "colour": "#0000FF"}]})
+        self.engine.submit(SwapShow(self.show.with_inputs({**self.show.inputs, "right": right})))
+        self.engine.submit(SendToBase("red", cut=True))
+        self.engine.submit(SendToOverlay("glow"))
+        self.engine.submit(SendToOverlay("right"))
+        self.run_for(1.1)
+        self.assertEqual(self.rgb(5), (0, 255, 0))  # SlimPAR 101: the first copy's green box (top left)
+        right_light = next(fx for fx in self.show.fixtures if fx.is_colour and fx.map.x > 0.75 and fx.map.y < 0.3)
+        self.assertEqual(tuple(self.output.last[right_light.address - 1:right_light.address + 2]), (0, 0, 255))
+        self.assertEqual(self.rgb(41), (255, 0, 0))  # Base where neither is
+
+    def test_send_clear_and_the_switch_through_the_engine(self) -> None:
+        for _ in range(5):
+            self.engine.submit(SendToOverlay("glow", tag="press"))
+        self.run_for(0.1)
+        frame = self.engine.frames.get()
+        self.assertEqual(len(frame.overlay.of("glow")), 4)  # (the fifth is refused)
+        self.engine.submit(ClearFromOverlay(copy=frame.overlay.copies[0].number))
+        self.run_for(0.1)
+        self.assertEqual(len(self.engine.frames.get().overlay.of("glow")), 3)
+        self.engine.submit(SendToOverlay("red", tag="held"))
+        self.run_for(0.1)
+        self.engine.submit(ClearFromOverlay(tag="held"))  # (a held Send to Overlay, let go: just its copy)
+        self.run_for(0.1)
+        self.assertEqual([c.input_id for c in self.engine.frames.get().overlay.copies], ["glow"] * 3)
+        self.engine.submit(SetOverlayOn(False))
+        self.run_for(0.6)
+        frame = self.engine.frames.get()
+        self.assertFalse(frame.overlay.on)
+        self.assertEqual(len(frame.overlay.copies), 3)  # (hidden, kept)
+        self.assertNotIn("glow", frame.live_inputs)
+        self.engine.submit(SendToOverlay("glow", toggle=True))  # (an old Overlay 1-4 URL: it's there, so it clears)
+        self.run_for(1.1)
+        self.assertEqual(self.engine.frames.get().overlay.copies, ())
+        self.engine.submit(SendToOverlay("glow", once=True))  # (an old ?state=on URL: once only)
+        self.engine.submit(SendToOverlay("glow", once=True))
+        self.run_for(0.1)
+        frame = self.engine.frames.get()
+        self.assertEqual(len(frame.overlay.copies), 1)
+        self.assertTrue(frame.overlay.on)  # (sending turned it back on)
 
     def test_solo_replaces_the_result(self) -> None:
         self.engine.submit(SendToBase("red", cut=True))
@@ -414,19 +492,31 @@ class EngineM2Tests(unittest.TestCase):
         self.run_for(2.0)
         self.assertTrue(120 <= self.output.last[0] <= 135, self.output.last[0])
 
-    def test_overlays_come_back_after_a_restart(self) -> None:
+    def test_the_overlay_comes_back_after_a_restart(self) -> None:
         self.engine.submit(SendToBase("red", cut=True))
-        self.engine.submit(SendToOverlay(2, "glow"))
-        self.engine.submit(SetOverlayOpacity(2, 0.5, fade=0))
+        self.engine.submit(SendToOverlay("glow"))
+        self.engine.submit(SendToOverlay("blue"))
+        self.engine.submit(SetOverlayOpacity(0.5, fade=0))
         self.run_for(1.2)
         state = LiveState.from_dict(self.engine.stop().to_dict())
         engine2 = Engine(self.show, FakeOutput(), state, clock=FakeClock())
         engine2.tick()
-        self.assertEqual(engine2.frames.get().overlays[1].input_id, "glow")
-        self.assertEqual(engine2.frames.get().overlays[1].opacity, 0.5)
+        overlay = engine2.frames.get().overlay
+        self.assertEqual([c.input_id for c in overlay.copies], ["glow", "blue"])  # (in order: the newest on top)
+        self.assertEqual(overlay.opacity, 0.5)
+
+    def test_a_live_json_from_before_m14_brings_its_overlays_back_as_copies(self) -> None:
+        old = {"show": "", "base": {"input": "red", "time": 1.0},
+               "overlays": [{"input": "glow", "time": 2.0, "opacity": 0.7}, None, {"input": "blue", "time": 1.0, "opacity": 1.0}, None]}
+        state = LiveState.from_dict(old)
+        self.assertEqual(state.overlay, {"on": True, "opacity": 0.7, "copies": [{"input": "glow", "time": 2.0},
+                                                                               {"input": "blue", "time": 1.0}]})
+        engine2 = Engine(self.show, FakeOutput(), state, clock=FakeClock())
+        engine2.tick()
+        self.assertEqual([c.input_id for c in engine2.frames.get().overlay.copies], ["glow", "blue"])
 
     def test_engine_time_per_tick(self) -> None:
-        """Typical (one NDI element) and worst case (a transition and four busy overlays)."""
+        """Typical (one NDI element) and worst case (a transition and four busy copies on the Overlay)."""
         sources = StubSources()
         rng = np.random.default_rng(1)
         sources.put("Media Background Pane", rng.integers(0, 255, (180, 320, 3), dtype=np.uint8))
@@ -443,7 +533,7 @@ class EngineM2Tests(unittest.TestCase):
         }
         inputs = {
             "follow": follow_screen_input(),
-            # the plan's worst case: a transition on Base and four overlays, everything moving
+            # the plan's worst case: a transition on Base and four copies on the Overlay, everything moving
             "busy": Input(id="busy", name="Busy", transition=Transition("random", 2.0), tracks=freeze([[busy], [bar], [], []])),
         }
         show = show_from_patch().with_inputs(inputs, tuple(inputs))
@@ -466,10 +556,10 @@ class EngineM2Tests(unittest.TestCase):
         measure(10)
         typical = float(np.median(measure(80)))
         engine.submit(SendToBase("busy"))
-        for slot in range(1, 5):
-            engine.submit(SendToOverlay(slot, "busy"))
+        for _ in range(4):
+            engine.submit(SendToOverlay("busy"))
         busy_times = measure(40)[5:]
-        # the worst case is the scenario (a transition and four busy overlays): its 90th percentile, so one tick that
+        # the worst case is the scenario (a transition and four busy copies): its 90th percentile, so one tick that
         # Windows happened to hold up (ProPresenter and MBP run on this PC too) doesn't count as the engine being slow
         worst = float(np.percentile(busy_times, 90))
         print(f"\n    engine: typical {typical:.2f} ms per tick, worst case {worst:.2f} ms (slowest single tick {max(busy_times):.2f} ms)")

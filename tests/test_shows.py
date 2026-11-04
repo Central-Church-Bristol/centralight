@@ -119,8 +119,8 @@ class LoadingAShowTests(EngineCase):
         morning, evening = self.morning_and_evening()
         self.make(morning)
         self.send(SendToBase("red", cut=True))
-        self.send(SendToOverlay(1, "blue", "on"))
-        self.send(SetOverlayOpacity(1, 0.5, 0.0))
+        self.send(SendToOverlay("blue"))
+        self.send(SetOverlayOpacity(0.5, 0.0))
         self.send(SetHouse("dimmer-4", level=0.6, on=True))
         self.send(SetMaster(0.8, 0.0))
         self.run_for(1.5)  # (the overlay's reveal)
@@ -137,7 +137,7 @@ class LoadingAShowTests(EngineCase):
                 self.assertAlmostEqual(got, wanted, places=4)
         self.assertEqual(frame.base, "frozen (from Morning)")
         self.assertEqual(frame.frozen_from, "Morning")
-        self.assertFalse(any(o.on for o in frame.overlays))  # the overlays were folded into the still look
+        self.assertEqual(frame.overlay.copies, ())  # the Overlay was folded into the still look
         self.assertFalse(frame.colour_black)
         self.assertTrue(frame.house["dimmer-4"].on)  # the house lights and Master keep their levels
         self.assertAlmostEqual(frame.house["dimmer-4"].level, 0.6, places=3)

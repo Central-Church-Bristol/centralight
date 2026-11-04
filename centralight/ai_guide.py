@@ -70,7 +70,7 @@ def examples(show: Show) -> list[tuple[str, dict]]:
     pillars = [fx.id for fx in show.colour_fixtures() if fx.group.casefold() == "pillars"] or [fx.id for fx in show.colour_fixtures()][:2]
     others = [fx.id for fx in show.colour_fixtures() if fx.id not in pillars]
     return [
-        ("Only the pillar lights, purple (every other light is left alone, so this works over another input in an overlay)", {
+        ("Only the pillar lights, purple (every other light is left alone, so this works over another input when it's sent to the Overlay)", {
             "format": FORMAT_INPUT, "version": INPUT_VERSION, "id": "pillars-purple", "name": "Pillars purple", "colour": "#7A3CFF",
             "tracks": [[{"id": "E1", "kind": "paint", "fill": {"type": "colour", "colour": "#7A3CFF"}, "mask": {"exclude": others}}], [], [], []],
         }),
@@ -209,7 +209,7 @@ def input_schema(show: Show) -> dict[str, Any]:
             "infinite": {"type": "boolean", "description": "true (the default): plays until something replaces it; false: timed"},
             "length": {"type": "number", "exclusiveMinimum": 0, "description": "Timed inputs: how long it lasts, in seconds"},
             "end": {"enum": ["hold", "loop", "stop"], "description": "Timed inputs: what happens at the end"},
-            "transition": {"type": "object", "description": "How it appears when sent to Base or switched on in an overlay",
+            "transition": {"type": "object", "description": "How it appears when sent to Base or the Overlay (on the Overlay it also leaves this way)",
                            "properties": _nested(TRANSITION)},
             "hotkey": {"type": "string", "description": "A key that sends it to Base, e.g. F5"},
             "ai": {"type": "boolean", "description": "Made by AI (CentraLight sets this)"},
@@ -313,18 +313,20 @@ def guide_text(show: Show, full: bool = True) -> str:
         "```json\n" + json_text(examples(show)[0][1]) + "```",
         "- `tracks`: up to 4 lists of elements. The first track is at the bottom, the last is drawn on top. An "
         "infinite input (the default) has at most one element per track.\n"
-        "- `transition`: how it appears when sent to Base or switched on in an overlay: `kind` is one of "
+        "- `transition`: how it appears when sent to Base or the Overlay (a copy on the Overlay also leaves this way): "
+        "`kind` is one of "
         + ", ".join(f'"{k}"' for k in TRANSITION_KINDS) + "; `duration` in seconds; wipe also has `direction` (degrees, "
         "0 = left to right) and wipe / iris `softness` (0-1).\n"
         f"- `house`: house-light levels (0-1). When the input goes on Base they fade to these levels over its "
-        f"transition (at once on a cut), and they stay there when it leaves. Overlays don't change house lights. "
+        f"transition (at once on a cut), and they stay there when it leaves. The Overlay doesn't change house lights. "
         f"House lights: {house}.\n"
         "- `colour`: its tile's colour on the Dashboard. `name`: shown on the tile.\n"
         "- Optional: `hotkey`, a key such as `\"F5\"` that sends it to Base while CentraLight's window is in front. "
         "Leave out `ai` (CentraLight sets it).\n"
         "- **Infinite or timed.** Inputs are infinite unless they say otherwise: each track holds one element, which "
         "plays until the input is replaced. A timed input has `\"infinite\": false`, a `length` in seconds and an "
-        "`end`: \"hold\" (stay on the last moment; the default), \"loop\" or \"stop\" (leave Base or the overlay). "
+        "`end`: \"hold\" (stay on the last moment; the default), \"loop\" or \"stop\" (leave Base) - on the Overlay a timed "
+        "input plays once and then leaves. "
         "Each of its elements has a `start` and an `end` (seconds of the input), and can appear and go with its own "
         "transitions: `\"in\": {\"kind\": \"fade\", \"duration\": 1}`, `\"out\": {...}` (kinds as for "
         "`transition`). Where two elements on a track overlap, the later one crosses in over the earlier one (its `in` "
@@ -374,7 +376,7 @@ def guide_text(show: Show, full: bool = True) -> str:
         "they are when you edit an input, and don't make up new names.",
         "### Leaving lights alone (masks)",
         "`\"mask\": {\"exclude\": [\"light-id\", ...]}` on any element: those lights ignore that element (they show the "
-        "tracks below, or whatever is underneath in an overlay). This is how \"only the pillars\" works.",
+        "tracks below, or whatever is underneath on the Overlay). This is how \"only the pillars\" works.",
         "## The lights",
         lights + "\n\nEach light is a point (its dot). Paint is read exactly at the dot, so a shape's `softness` decides "
         "whether a light fades or switches as an edge passes it; pictures are averaged around the dot (`area`).",
@@ -497,7 +499,7 @@ def global_guide_text(shows: list[tuple[str, str]], house_labels: list[str]) -> 
         "# CentraLight: global automations",
         "Each `<id>.json` file here is a global automation: app-wide, whichever show is loaded. They're for what isn't "
         "about one show: load a show at a set time, cut or fade to black, Master, the Festoon and Key lights, and turning "
-        "another global automation on or off. They can't touch a show's inputs, overlays, variables or layouts (a show's "
+        "another global automation on or off. They can't touch a show's inputs, the Overlay, variables or layouts (a show's "
         "own automations do that: they're in each show's `automations` folder). Each second the global automations are "
         f"checked first, then the loaded show's. `{ORDER_FILE}` is their order (CentraLight keeps it; a new file goes at "
         "the end). The file format is the same as a show's automations.",

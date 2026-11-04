@@ -858,7 +858,7 @@ class TimelineView(QFrame):
         return ""
 
     def set_transition_kind(self, kind: str) -> None:
-        """The input's own transition (how it appears on Base or in an overlay)."""
+        """The input's own transition (how it appears on Base or the Overlay, and how a copy leaves the Overlay)."""
         inp = self.current_input()
         if inp is not None:
             names = dict(TRANSITION_CHOICES)

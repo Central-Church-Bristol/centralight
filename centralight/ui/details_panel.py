@@ -860,14 +860,14 @@ class DetailsPanel(QScrollArea):
             self._apply(update_input(self.show_data, self.input_id, hotkey=text), f"Hotkey → {text}" if text else "Remove the hotkey")
 
     def copy_urls(self, button: QPushButton | None = None) -> str:
-        """Copy this input's Stream Deck URLs (Base, cut, overlays 1-4) to the clipboard."""
+        """Copy this input's Stream Deck URLs (Base, cut, Send to Overlay, Clear from Overlay) to the clipboard."""
         inp = self.current_input()
         if inp is None:
             return ""
         base = f"{self._url_base()}/api/input/{inp.id}"
         lines = [f"{inp.name}: Stream Deck URLs (Website action, tick “GET request in background”)",
                  f"Send to Base:  {base}", f"Cut to Base:   {base}/cut"]
-        lines += [f"Overlay {n} on / off:  {base}/overlay/{n}" for n in (1, 2, 3, 4)]
+        lines += [f"Send to Overlay:  {base}/overlay", f"Clear from Overlay:  {base}/overlay/clear"]
         text = "\n".join(lines)
         QGuiApplication.clipboard().setText(text)
         if button is not None:

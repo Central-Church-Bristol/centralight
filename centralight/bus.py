@@ -1,4 +1,4 @@
-"""Buses: what's playing. Base holds one input; Overlays 1-4 each hold one on top.
+"""Buses: what's playing. Base holds one input; the Overlay stacks copies of inputs on top (M14).
 
 Base:
 - Sending an input transitions from what's live now, with the input's transition.
@@ -6,11 +6,13 @@ Base:
 - Sending during a transition freezes the picture as it is at that moment, and
   transitions from that.
 
-Overlays (4 is the top layer; transparent parts show the layers below):
-- Sending an input to an empty slot reveals it with its transition (dip reveals as a fade).
-- Sending the input that's already in the slot turns it off again (a toggle).
-- Sending a different input to a slot that's on transitions between the two.
-- Each slot has an opacity.
+The Overlay (transparent parts show what's below):
+- Each send adds a copy of the input on top, newest on top, appearing with the input's
+  transition (dip appears as a fade). Copies that touch different lights don't cancel out.
+- An input has at most 4 copies there at once.
+- A copy leaves the way it came in: when it's cleared, when a held Send to Overlay button
+  is let go, and (a timed input) when its timeline has played once.
+- Its switch hides the whole layer without emptying it, and it has an opacity.
 
 Every running copy of an input keeps its own clock, starting at 0 when it's sent.
 
@@ -20,6 +22,7 @@ pictures for people (layers (4, h, w)); a mix frozen mid-transition keeps one of
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -27,7 +30,7 @@ import numpy as np
 from .compositor import blend, over, transparent
 from .elements import RenderContext, blend_mode, render_element
 from .log import log_exception
-from .model import Input, Transition, element_span, input_time
+from .model import END_EPSILON, Input, Transition, element_span, input_time
 from .transitions import mix, reveal, seed_for
 from .variables import scope_for, use_scope
 
@@ -322,95 +325,214 @@ class Bus:
         return {i.input.id for i in (self.current, self.outgoing) if isinstance(i, Instance)}
 
 
-class OverlaySlot:
-    """One overlay slot: an input on top of Base, with on/off reveals and an opacity."""
+COPIES_PER_INPUT = 4  # copies of one input on the Overlay at once (its tile has room for four boxes)
+MAX_COPIES = 16  # copies of all inputs at once (each one is drawn every tick)
+SWITCH_FADE = 0.5  # seconds: the Overlay's on / off switch fades the whole layer
 
-    def __init__(self, number: int) -> None:
-        self.number = number
-        self.content = Bus(f"overlay{number}")
-        self.opacity = 1.0
-        self.on = False
-        self.reveal_from = 0.0  # where the on/off animation started (0 = hidden, 1 = shown)
-        self.reveal_to = 0.0
-        self.reveal_start = 0.0
-        self.reveal_transition = Transition("cut", 0.0)
 
-    def input_id(self) -> str:
-        return self.content.current.input.id if self.content.current is not None else ""
+@dataclass
+class OverlayCopy:
+    """One send to the Overlay: a running copy of an input, on top of the copies sent before it."""
 
-    def send(self, inp: Input, now: float, ctx: RenderContext | None = None, state: str | None = None) -> None:
-        """Toggle rules: the same input again turns it off; another input replaces it."""
-        already = self.on and self.content.current is not None and self.content.current.input.id == inp.id
-        if state == "off" or (state is None and already):
-            self.off(now)
-            return
-        if already:
-            return  # state "on" and it's already on
-        if self.on and self.content.current is not None:
-            self.content.send(inp, now, ctx)  # swap inputs with the new one's transition
-            return
-        self.content.send(inp, now, ctx, cut=True)
-        self._start_reveal(1.0, now, inp.transition)
+    number: int  # unique while CentraLight runs: the tiles' copy boxes (and the API) name a copy by it
+    instance: Instance
+    tag: str = ""  # who sent it: a held Send to Overlay button clears its own copy when it's let go
+    transition: Transition = field(default_factory=Transition)  # how it came in, and so how it goes
+    reveal_from: float = 0.0  # 0 = hidden, 1 = shown: where its appearing (or leaving) started...
+    reveal_to: float = 1.0  # ...and where it's going
+    reveal_start: float = 0.0
+    leaving: bool = False
+    hold_at: float | None = None  # a timed copy that has played: shown at its last moment while it leaves
 
-    def clear_now(self) -> None:
-        """Off at once, with nothing left in it (its look went into a Cut / Fade to black's still mix)."""
-        self.content.current = None
-        self.content.outgoing = None
-        self.content.transition = Transition("cut", 0.0)
-        self.on = False
-        self.reveal_from = self.reveal_to = 0.0
-        self.reveal_transition = Transition("cut", 0.0)
-
-    def off(self, now: float, cut: bool = False) -> None:
-        if not self.on:
-            return
-        transition = self.content.current.input.transition if self.content.current is not None else Transition()
-        self._start_reveal(0.0, now, Transition("cut", 0.0) if cut else transition)
-
-    def _start_reveal(self, target: float, now: float, transition: Transition) -> None:
-        self.reveal_from = self.visibility(now)
-        self.reveal_to = target
-        self.reveal_start = now
-        self.reveal_transition = transition
-        self.on = target > 0.0
-
-    def visibility(self, now: float) -> float:
-        """0 = hidden, 1 = fully shown (moves during the on/off transition)."""
-        if not self.revealing(now):
-            return self.reveal_to
-        progress = min(1.0, max(0.0, (now - self.reveal_start) / self.reveal_transition.duration))
-        return self.reveal_from + (self.reveal_to - self.reveal_from) * progress
+    @property
+    def input(self) -> Input:
+        return self.instance.input
 
     def revealing(self, now: float) -> bool:
-        tr = self.reveal_transition
+        tr = self.transition
         return tr.kind != "cut" and tr.duration > 0 and now < self.reveal_start + tr.duration - FINISHED_MARGIN
+
+    def visibility(self, now: float) -> float:
+        """0 = hidden, 1 = fully shown (moving while it appears or leaves)."""
+        if not self.revealing(now):
+            return self.reveal_to
+        progress = min(1.0, max(0.0, (now - self.reveal_start) / self.transition.duration))
+        return self.reveal_from + (self.reveal_to - self.reveal_from) * progress
+
+    def gone(self, now: float) -> bool:
+        return self.leaving and not self.revealing(now)
+
+    def progress(self, now: float) -> float | None:
+        """How far through a timed input this copy is (0-1; it plays once on the Overlay), None for an infinite one."""
+        inp = self.input
+        if inp.infinite:
+            return None
+        return min(1.0, max(0.0, self.instance.time(now) / max(float(inp.length), 1e-3)))
+
+    def leave(self, now: float, cut: bool = False) -> None:
+        """Go the way it came in (its input's transition), or at once."""
+        if self.leaving:
+            return
+        self.reveal_from = self.visibility(now)
+        self.reveal_to = 0.0
+        self.reveal_start = now
+        if cut:
+            self.transition = Transition("cut", 0.0)
+        self.leaving = True
 
     def render(self, now: float, ctx: RenderContext) -> np.ndarray | None:
         visible = self.visibility(now)
         if visible <= 0.0 and not self.revealing(now):
-            if not self.on:
-                self.content.current = None
-                self.content.outgoing = None
             return None
-        layer = self.content.render(now, ctx)
-        tr = self.reveal_transition
+        at = now if self.hold_at is None else min(now, self.instance.started + self.hold_at)
+        layer = render_input(self.instance, at, ctx)
         if visible < 1.0:
-            # the reveal's own progress, from hidden (0) to shown (1), whichever way it's going
-            layer = reveal(tr.kind, layer, visible, direction=tr.direction, softness=tr.softness,
-                           owner=_owner(ctx), seed=seed_for(f"overlay{self.number}"), cache=ctx.cache, points=_points(ctx))
-        if self.opacity < 1.0:
-            layer = layer * self.opacity
+            tr = self.transition  # (the reveal's own progress, from hidden to shown, whichever way it's going)
+            layer = reveal(tr.kind, layer, visible, direction=tr.direction, softness=tr.softness, owner=_owner(ctx),
+                           seed=seed_for(f"overlay copy {self.number}"), cache=ctx.cache, points=_points(ctx))
         return layer
 
-    def update_inputs(self, inputs) -> None:
-        self.content.update_inputs(inputs)
 
-    def inputs_in_use(self) -> set[str]:
-        return self.content.inputs_in_use()
+class OverlayLayer:
+    """The Overlay (M14): copies of inputs stacked on top of Base, oldest at the bottom. Each send adds a copy; each
+    copy leaves the way it came in. Its switch hides the whole layer without emptying it (sending turns it on again),
+    and it has an opacity."""
+
+    def __init__(self) -> None:
+        self.copies: list[OverlayCopy] = []  # bottom first: the newest is on top
+        self.opacity = 1.0
+        self.on = True
+        self._switch_from = 1.0
+        self._switch_start = 0.0
+        self._numbers = itertools.count(1)
+
+    # ---------------------------------------------------------------- what's there
+
+    def shown(self) -> list[OverlayCopy]:
+        """The copies that are there (not on their way out), bottom first."""
+        return [copy for copy in self.copies if not copy.leaving]
+
+    def count(self, input_id: str) -> int:
+        return sum(1 for copy in self.copies if not copy.leaving and copy.input.id == input_id)
+
+    def input_ids(self) -> frozenset[str]:
+        """Inputs with a copy there while the switch is on (what "this input is in the Overlay" means)."""
+        return frozenset(copy.input.id for copy in self.shown()) if self.on else frozenset()
+
+    def switch_visibility(self, now: float) -> float:
+        """The switch's fade: 1 = on, 0 = hidden."""
+        target = 1.0 if self.on else 0.0
+        if now >= self._switch_start + SWITCH_FADE:
+            return target
+        progress = max(0.0, (now - self._switch_start) / SWITCH_FADE)
+        return self._switch_from + (target - self._switch_from) * progress
+
+    def switching(self, now: float) -> bool:
+        return now < self._switch_start + SWITCH_FADE and self.switch_visibility(now) != (1.0 if self.on else 0.0)
+
+    def lit(self, now: float, including_fades: bool = True) -> bool:
+        """Something of it shows on the lights now (including_fades: or is still appearing or fading out)."""
+        if self.switch_visibility(now) <= 0.0 and not (including_fades and self.switching(now)):
+            return False
+        return any(copy.visibility(now) > 0.0 or (including_fades and copy.revealing(now)) for copy in self.copies)
+
+    def inputs_in_use(self, now: float) -> set[str]:
+        """Inputs whose pictures and videos are on the lights through it now (appearing or leaving too)."""
+        if self.switch_visibility(now) <= 0.0 and not self.switching(now):
+            return set()
+        return {copy.input.id for copy in self.copies if copy.visibility(now) > 0.0 or copy.revealing(now)}
+
+    # ---------------------------------------------------------------- sending and clearing
+
+    def send(self, inp: Input, now: float, tag: str = "") -> OverlayCopy | None:
+        """A new copy on top, appearing with the input's transition (None: the input has 4 there already, or the
+        Overlay is full). Sending turns the switch on."""
+        self.tidy(now)
+        if self.count(inp.id) >= COPIES_PER_INPUT or len(self.copies) >= MAX_COPIES:
+            return None
+        transition = inp.transition if inp.transition.kind != "cut" and inp.transition.duration > 0 else Transition("cut", 0.0)
+        copy = OverlayCopy(next(self._numbers), Instance(inp, now), tag=tag, transition=transition, reveal_start=now,
+                           reveal_from=0.0, reveal_to=1.0)
+        self.copies.append(copy)
+        self.set_on(True, now)
+        return copy
+
+    def clear_copy(self, number: int, now: float, cut: bool = False) -> bool:
+        return self._clear([c for c in self.copies if c.number == number], now, cut)
+
+    def clear_tag(self, tag: str, now: float, cut: bool = False) -> bool:
+        return bool(tag) and self._clear([c for c in self.copies if c.tag == tag], now, cut)
+
+    def clear_input(self, input_id: str, now: float, cut: bool = False) -> bool:
+        return self._clear([c for c in self.copies if c.input.id == input_id], now, cut)
+
+    def clear_all(self, now: float, cut: bool = False) -> bool:
+        return self._clear(list(self.copies), now, cut)
+
+    def _clear(self, copies: list[OverlayCopy], now: float, cut: bool) -> bool:
+        cleared = False
+        for copy in copies:
+            if not copy.leaving:
+                copy.leave(now, cut)
+                cleared = True
+        self.tidy(now)
+        return cleared
+
+    def clear_now(self) -> None:
+        """Empty at once (its look went into a Cut / Fade to black's still mix, or another show is loading)."""
+        self.copies.clear()
+
+    def set_on(self, on: bool, now: float) -> None:
+        if on == self.on:
+            return
+        self._switch_from = self.switch_visibility(now)
+        self._switch_start = now
+        self.on = on
+
+    def finish_timed(self, now: float) -> bool:
+        """Timed copies leave by themselves once their timeline has played (whatever its end: on the Overlay a timed
+        input plays once). True if one started leaving."""
+        changed = False
+        for copy in self.copies:
+            inp = copy.input
+            if not copy.leaving and not inp.infinite and copy.instance.time(now) >= inp.length:
+                copy.hold_at = max(0.0, float(inp.length) - END_EPSILON)
+                copy.leave(now)
+                changed = True
+        return changed
+
+    def tidy(self, now: float) -> None:
+        """Copies that have finished leaving go."""
+        if any(copy.gone(now) for copy in self.copies):
+            self.copies = [copy for copy in self.copies if not copy.gone(now)]
+
+    def update_inputs(self, inputs) -> None:
+        """Edited inputs play live; a deleted one carries on until it's cleared."""
+        for copy in self.copies:
+            if copy.input.id in inputs:
+                copy.instance.input = inputs[copy.input.id]
+
+    # ---------------------------------------------------------------- drawing
+
+    def render(self, now: float, ctx: RenderContext) -> np.ndarray | None:
+        self.tidy(now)
+        if not self.copies:
+            return None
+        factor = self.switch_visibility(now) * self.opacity
+        if factor <= 0.0:
+            return None
+        layer = None
+        for copy in self.copies:
+            part = copy.render(now, ctx)
+            if part is not None:
+                layer = part if layer is None else over(layer, part)
+        if layer is None:
+            return None
+        return layer * factor if factor < 1.0 else layer
 
 
 def composite(base: np.ndarray, overlays: list[np.ndarray | None]) -> np.ndarray:
-    """Base with the overlays on top, Overlay 1 first and Overlay 4 at the very top."""
+    """Base with the layers on top (the Overlay), the last at the very top."""
     canvas = base
     for layer in overlays:
         if layer is not None:

@@ -22,7 +22,7 @@ PALETTE = (
     ("Accent (church pale blue)", theme.ACCENT),
     ("Text on accent", theme.ACCENT_TEXT),
     ("On Base (coral)", theme.LIVE),
-    ("In an overlay (lime)", theme.OVERLAY),
+    ("On the Overlay (lime)", theme.OVERLAY),
     ("OK (turquoise)", theme.OK),
     ("Cut / Fade to black, errors", theme.DANGER),
     ("Warning (chips only)", theme.WARN),

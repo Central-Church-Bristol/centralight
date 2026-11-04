@@ -110,7 +110,7 @@ def sample_automations(long: bool = False) -> list[Automation]:
                            {"type": "colour_black", "invert": True}]),
         actions=freeze([{"do": "base", "input": "warm-white", "transition": {"kind": "fade", "duration": 3}},
                         {"do": "house", "light": "dimmer-4", "level": 0.7, "fade": 2},
-                        {"do": "overlay", "input": "pillars-purple", "slot": 2, "state": "on", "delay": 30}]),
+                        {"do": "overlay", "input": "pillars-purple", "delay": 30}]),
         on_end=freeze([{"do": "base", "input": "follow-screen"}]),
     )
     evening = Automation(
@@ -123,7 +123,7 @@ def sample_automations(long: bool = False) -> list[Automation]:
                            {"type": "sun", "when": "after", "event": "sunset", "minutes": -30}]),
         actions=freeze([{"do": "variable", "name": "accent", "value": "#FF6F59"}, {"do": "master", "level": 0.8, "fade": 5},
                         {"do": "layout", "layout": "main"}, {"do": "automation", "automation": "sunday-welcome", "enabled": False},
-                        {"do": "fade_black", "fade": 3, "all": True}, {"do": "overlay_off", "slot": 3}]),
+                        {"do": "fade_black", "fade": 3, "all": True}, {"do": "overlay_clear_all"}]),
     )
     return [welcome, evening]
 

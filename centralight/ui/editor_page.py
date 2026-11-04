@@ -11,7 +11,7 @@
     │ itions   │                                   │                │
     └──────────┴──────────────────────────────────┴────────────────┘
 
-Editing an input that's on Base or in an overlay changes the lights straight away (the red
+Editing an input that's on Base or the Overlay changes the lights straight away (the red
 LIVE banner says so); otherwise editing is "blind" until you send it or use Show on lights.
 
 The viewports show the input at the playhead. It plays when an input is opened (so expressions

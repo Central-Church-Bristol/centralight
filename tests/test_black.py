@@ -42,14 +42,14 @@ class EngineBlackTests(unittest.TestCase):
 
     def test_a_fade_takes_the_overlays_with_it_as_one_look(self) -> None:
         self.engine.submit(SendToBase("blue", cut=True))
-        self.engine.submit(SendToOverlay(1, "pillars", state="on"))
+        self.engine.submit(SendToOverlay("pillars"))
         self.run_for(0.1)
         self.assertEqual(self.output.last[PILLAR - 1], 255)  # the pillars red over blue
         self.engine.submit(ToBlack(1.0))
         self.run_for(0.5)
         self.assertTrue(100 <= self.output.last[PILLAR - 1] <= 155)  # still red, half faded (not blue)
         self.assertEqual(self.output.last[PILLAR + 1], 0)
-        self.assertFalse(self.engine.frames.get().overlays[0].on)  # the overlay is cleared: its look is in the fade
+        self.assertEqual(self.engine.frames.get().overlay.copies, ())  # the Overlay is cleared: its look is in the fade
         self.run_for(0.6)
         self.assertEqual(self.output.last[PILLAR - 1], 0)
         self.assertEqual(self.output.last[LEFT + 1], 0)

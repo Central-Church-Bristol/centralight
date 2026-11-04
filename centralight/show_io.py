@@ -502,6 +502,10 @@ def _updated_condition(cond: dict, warnings: list[str], scope: str = "show") -> 
     if cond.get("type") == "blackout":
         warnings.append('the condition "Blackout is on" is now "The colour lights are black"')
         return {**cond, "type": "colour_black"}
+    where = cond.get("where")
+    if cond.get("type") == "input_live" and isinstance(where, str) and where[:7] == "overlay" and where != "overlay":
+        warnings.append(f'"in Overlay {where[7:]}" is now "in the Overlay" (there is one Overlay now)')
+        return {**cond, "where": "overlay"}
     if scope == "show" and cond.get("type") in MOVED_EVENTS:
         warnings.append(f'the condition "{CONDITIONS[cond["type"]]}" is now "When this show loads" (the PC starting, '
                         "CentraLight starting and the PC waking are for global automations now)")
@@ -511,7 +515,11 @@ def _updated_condition(cond: dict, warnings: list[str], scope: str = "show") -> 
 
 def _updated_action(action: Any, warnings: list[str]) -> Any:
     """An action from before Cut / Fade to black: Blackout on is now Fade to black (everything, as Blackout did);
-    Blackout off has nothing to turn off now, so it's left out (the next input lights things again)."""
+    Blackout off has nothing to turn off now, so it's left out (the next input lights things again). One from before
+    M14's single Overlay: an input in Overlay 1-4 is now Send to Overlay (out of one: Clear from Overlay), and clearing
+    Overlay 1-4 is now Clear the Overlay."""
+    if isinstance(action, dict) and (action.get("do") == "overlay_off" or (action.get("do") == "overlay" and "slot" in action)):
+        return _updated_overlay_action(action, warnings)
     if not isinstance(action, dict) or action.get("do") != "blackout":
         return action
     if action.get("on", True) is True:
@@ -522,6 +530,19 @@ def _updated_action(action: Any, warnings: list[str]) -> Any:
         return updated
     warnings.append('"Blackout off" was left out: there\'s no Blackout to turn off now (the next input lights things again)')
     return None
+
+
+def _updated_overlay_action(action: dict, warnings: list[str]) -> dict:
+    delay = {"delay": action["delay"]} if "delay" in action else {}
+    slot = action.get("slot", "?")
+    if action.get("do") == "overlay_off":
+        warnings.append(f'"Clear Overlay {slot}" is now "Clear the Overlay" (there is one Overlay now)')
+        return {"do": "overlay_clear_all", **delay}
+    if action.get("state", "toggle") == "off":
+        warnings.append(f'"{action.get("input", "?")} out of Overlay {slot}" is now "Clear it from the Overlay"')
+        return {"do": "overlay_clear", "input": action.get("input"), **delay}
+    warnings.append(f'"{action.get("input", "?")} in Overlay {slot}" is now "Send it to the Overlay" (there is one Overlay now)')
+    return {"do": "overlay", "input": action.get("input"), **delay}
 
 
 def automation_from_dict(data: Any, expected_id: str | None = None, scope: str = "show") -> tuple[Automation, list[str]]:

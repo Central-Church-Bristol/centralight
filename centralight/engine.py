@@ -2,7 +2,7 @@
 
 Each tick:
 1. apply the commands that arrived (fader moves, Cut / Fade to black, sending inputs...)
-2. render Base (a transition mixes two inputs) and Overlays 1-4 on top, into a
+2. render Base (a transition mixes two inputs) and the Overlay's copies on top, into a
    160x90 picture. "Show on lights" (solo) replaces all of that with one input.
 3. sample the picture: each colour light takes the average colour of its patch
 4. Master (colour lights only)
@@ -45,18 +45,32 @@ from .automations import (
     show_matches,
     system_uptime,
 )
-from .bus import Bus, Frozen, Instance, OverlaySlot, composite, frozen_for_lights, frozen_mix, layer_kind, render_input
+from .bus import (
+    COPIES_PER_INPUT,
+    MAX_COPIES,
+    SWITCH_FADE,
+    Bus,
+    Frozen,
+    Instance,
+    OverlayLayer,
+    composite,
+    frozen_for_lights,
+    frozen_mix,
+    layer_kind,
+    render_input,
+)
 from .commands import (
     HOUSE_SLEW,
     HOUSE_SWITCH_FADE,
     QUIT_FADE,
     ClearBase,
+    ClearFromOverlay,
+    ClearOverlay,
     Command,
     CountdownAction,
     FlashLights,
     ForgetShow,
     LoadShow,
-    OverlayOff,
     PowerEvent,
     QuietAutomations,
     RequestShow,
@@ -71,6 +85,7 @@ from .commands import (
     SetHouse,
     SetIdentify,
     SetMaster,
+    SetOverlayOn,
     SetOverlayOpacity,
     SetSolo,
     SetTestColour,
@@ -114,7 +129,8 @@ PREVIEW_INTERVAL = 0.2  # seconds between preview pictures for the screen (only 
 LATE_PREVIEW_INTERVAL = 1.0  # ...while ticks run late (the lights come first; the picture slows, it doesn't stop)
 # commands a person sends (the window, the Stream Deck, the phone page) that mean they've taken charge of the lights:
 # after a "Turn lights off" quit, automations are held back only until one of these comes
-PERSON_TAKES_CHARGE = (SendToBase, ClearBase, SendToOverlay, SetHouse, ToBlack, RunAutomation, SetSolo)
+PERSON_TAKES_CHARGE = (SendToBase, ClearBase, SendToOverlay, ClearFromOverlay, ClearOverlay, SetHouse, ToBlack, RunAutomation,
+                       SetSolo)
 LATE_TICK = 0.005  # seconds: a tick that starts this much after its time is late (pictures for the screen wait then)
 TIMING_WINDOW = 60  # seconds of tick timings kept for the lateness figures
 TIDY_INTERVAL = 1.0
@@ -122,7 +138,6 @@ WATCHDOG_INTERVAL = 1.0
 STALL_SECONDS = 2.0
 FLASH_STEP = 0.15  # a flash is on/off/on/off/on/off in steps this long
 FLASH_STEPS = 6
-OVERLAY_SLOTS = 4
 WAKE_GAP = 60.0  # seconds: a jump this big in the clocks means the PC slept (or the clock was changed)
 WAKE_DEBOUNCE = 60.0  # seconds: wake signals this close together are the same wake
 STARTUP_HOLD = 3.0  # seconds: at most this long at startup, nothing is sent while the screen feed's first picture comes
@@ -136,11 +151,9 @@ WHITE: RGB = (1.0, 1.0, 1.0)
 
 
 def _brings_lights_up(command: Any) -> bool:
-    """An automation action that means "lights on": an input to Base or an overlay, or a house light up."""
-    if isinstance(command, SendToBase):
+    """An automation action that means "lights on": an input to Base or the Overlay, or a house light up."""
+    if isinstance(command, (SendToBase, SendToOverlay)):
         return True
-    if isinstance(command, SendToOverlay):
-        return getattr(command, "state", None) != "off"
     if isinstance(command, SetHouse):
         level_up = command.level is None or command.level > 0.0
         return (command.on is True and level_up) or (command.on is None and (command.level or 0.0) > 0.0)
@@ -216,12 +229,28 @@ class HouseView:
 
 
 @dataclass(frozen=True)
-class OverlayView:
-    input_id: str = ""
+class CopyView:
+    """One copy of an input on the Overlay (its tile shows a box for it)."""
+
+    number: int
+    input_id: str
     name: str = ""
-    on: bool = False
-    visible: float = 0.0  # 0-1, moves while it turns on or off
+    progress: float | None = None  # a timed input: how far through (0-1); None: infinite
+    tag: str = ""  # who sent it (a held Send to Overlay button)
+
+
+@dataclass(frozen=True)
+class OverlayView:
+    """The Overlay as the screen shows it (M14: one layer of copies)."""
+
+    on: bool = True  # its switch (off hides it without emptying it)
+    visible: float = 1.0  # 0-1, moves while the switch fades
     opacity: float = 1.0
+    copies: tuple[CopyView, ...] = ()  # the copies there, bottom first (not the ones on their way out)
+    leaving: int = 0  # copies on their way out
+
+    def of(self, input_id: str) -> tuple[CopyView, ...]:
+        return tuple(copy for copy in self.copies if copy.input_id == input_id)
 
 
 @dataclass(frozen=True)
@@ -242,20 +271,20 @@ class EngineFrame:
     colours: Mapping[str, RGB] = EMPTY  # colour light id -> (r, g, b) 0-1
     house: Mapping[str, HouseView] = EMPTY
     master: float = 1.0
-    colour_black: bool = False  # nothing on Base or in the overlays (after a Cut / Fade to black, say)
+    colour_black: bool = False  # nothing on Base or the Overlay (after a Cut / Fade to black, say)
     output: OutputStatus = OutputStatus()
     base: str = "Black"  # name of what's on Base
     base_id: str = ""  # its input id ("" = nothing)
     base_progress: float | None = None  # 0-1 while Base is transitioning
-    playing: Mapping[str, float] = EMPTY  # timed inputs on Base or in an overlay -> how far through (0-1)
+    playing: Mapping[str, float] = EMPTY  # timed inputs on Base or the Overlay -> how far through (0-1)
     audio: Mapping[str, float] = EMPTY  # audio.level and friends, now
     audio_state: str = "off"  # off, listening, error
     audio_detail: str = ""  # what it's listening to, or what's wrong
     audio_rate: float = 0.0  # blocks of sound analysed a second (0 = none arriving)
-    overlays: tuple[OverlayView, ...] = ()
+    overlay: OverlayView = OverlayView()
     solo: str = ""  # input shown alone on the lights ("" = none)
-    live_inputs: frozenset[str] = frozenset()  # inputs on Base or in an overlay right now
-    # inputs whose pictures and videos are on the lights now (Base and the overlays, mid-transition too, and solo):
+    live_inputs: frozenset[str] = frozenset()  # inputs on Base or the Overlay right now
+    # inputs whose pictures and videos are on the lights now (Base and the Overlay, mid-transition too, and solo):
     # an update to a linked file waits until its input isn't one of these
     in_use: frozenset[str] = frozenset()
     identify: bool = False
@@ -385,8 +414,8 @@ class Engine:
         self._views: dict[str, tuple] = {}  # "show" / "global" -> (version, AutomationsView)
         self.gui_requests: queue.SimpleQueue[tuple[str, dict]] = queue.SimpleQueue()  # (who, action) for the window
         self._base = Bus("base")
-        self._overlays = [OverlaySlot(n) for n in range(1, OVERLAY_SLOTS + 1)]
-        self._overlay_opacity = [Ramp(1.0) for _ in range(OVERLAY_SLOTS)]
+        self._overlay = OverlayLayer()
+        self._overlay_opacity = Ramp(1.0)
         self._solo: Instance | None = None
         self._solo_fixed = False  # the solo input came with its command (not from the show)
         if self._pc_start:
@@ -395,7 +424,7 @@ class Engine:
             self._restore_buses(live, initial_base, now)
         self._last_canvas = self._lights.empty()
         # At startup the lights keep showing what they showed (the dongle repeats it) until the feeds Base and the
-        # overlays use have their first picture, instead of going black for a second or two meanwhile
+        # Overlay use have their first picture, instead of going black for a second or two meanwhile
         self._holding = True
         self._hold_until = now + STARTUP_HOLD
         self._feeds_until = now + FEED_WAIT
@@ -478,13 +507,9 @@ class Engine:
         base = None
         if self._base.current is not None:
             base = {"input": self._base.current.input.id, "time": round(self._base.current.time(now), 3)}
-        overlays: list[dict | None] = []
-        for slot, ramp in zip(self._overlays, self._overlay_opacity):
-            current = slot.content.current
-            if slot.on and current is not None:
-                overlays.append({"input": current.input.id, "time": round(current.time(now), 3), "opacity": ramp.target})
-            else:
-                overlays.append(None)
+        overlay = {"on": self._overlay.on, "opacity": self._overlay_opacity.target,
+                   "copies": [{"input": copy.input.id, "time": round(copy.instance.time(now), 3)}
+                              for copy in self._overlay.shown()]}
         frozen = None
         held = self._base.held
         if self._base.current is None and held is not None:  # another show's look, held since this one loaded
@@ -499,7 +524,7 @@ class Engine:
             quit_at=(self._quit_at or 0.0) if self._quit_dark else 0.0,
             house={fid: HouseSetting(h.level.target, h.on) for fid, h in self._house.items()},
             base=base,
-            overlays=overlays,
+            overlay=overlay,
             frozen=frozen,
             globals=saveable(self._globals),
             show_globals={k: dict(v) for k, v in self._show_globals.items()},
@@ -558,31 +583,24 @@ class Engine:
             self._publish(now, out_colours, house_out)
 
     def _finish_timed(self, now: float) -> bool:
-        """A timed input that stops at its end leaves Base (or its overlay) when it gets there."""
+        """A timed input that stops at its end leaves Base when it gets there; on the Overlay every timed copy leaves
+        (the way it came in) once its timeline has played."""
         changed = False
         current = self._base.current
         if current is not None and has_finished(current.input, current.time(now)) and not self._base.transitioning(now):
             self._base.clear(now, cut=True)
             changed = True
-        for slot in self._overlays:
-            inside = slot.content.current
-            if slot.on and inside is not None and has_finished(inside.input, inside.time(now)):
-                slot.off(now, cut=True)
-                changed = True
-        return changed
+        return self._overlay.finish_timed(now) or changed
 
     def _render(self, now: float) -> np.ndarray:
-        """Base and the overlays (or the solo input). If rendering fails, the last good picture is held."""
+        """Base and the Overlay (or the solo input). If rendering fails, the last good picture is held."""
         try:
             if self._solo is not None:
                 canvas = render_input(self._solo, now, self._ctx)
             else:
                 canvas = self._base.render(now, self._ctx)
-                layers = []
-                for slot, ramp in zip(self._overlays, self._overlay_opacity):
-                    slot.opacity = ramp.value(now)
-                    layers.append(slot.render(now, self._ctx))
-                canvas = composite(canvas, layers)
+                self._overlay.opacity = self._overlay_opacity.value(now)
+                canvas = composite(canvas, [self._overlay.render(now, self._ctx)])
         except Exception as exc:
             self._faults += 1
             log_exception("rendering", exc)
@@ -591,8 +609,8 @@ class Engine:
         return canvas
 
     def _to_black(self, seconds: float, everything: bool, now: float) -> None:
-        """Cut or fade the colour lights to black: the mix as it is now (Base and the overlays, as one still look)
-        fades to nothing on Base, and the overlays are cleared at once (their look is in it). everything: the house
+        """Cut or fade the colour lights to black: the mix as it is now (Base and the Overlay, as one still look)
+        fades to nothing on Base, and the Overlay is cleared at once (its look is in it). everything: the house
         lights' switches go off too, over the same time, keeping their levels; each remembers how, so its next
         plain switch on brings it back the same way."""
         base = self._base
@@ -606,8 +624,7 @@ class Engine:
             base.transition = Transition("cut", 0.0)
         base.current = None
         base.held = None
-        for slot in self._overlays:
-            slot.clear_now()
+        self._overlay.clear_now()
         self._house_driven.clear()
         if everything:
             for house in self._house.values():
@@ -617,20 +634,20 @@ class Engine:
                     house.mirror = seconds
 
     def colour_black(self, now: float | None = None) -> bool:
-        """Nothing on Base or in any overlay, and no fade still going: the colour lights are black."""
+        """Nothing on Base or the Overlay, and no fade still going: the colour lights are black."""
         now = self._clock() if now is None else now
         base = self._base
         return (base.current is None and base.held is None and not base.transitioning(now)
-                and not any(slot.visibility(now) > 0.0 or slot.revealing(now) for slot in self._overlays))
+                and not self._overlay.lit(now))
 
     def _black_now(self, now: float) -> bool:
         """Nothing shows on the colour lights at this moment (a fade to black may still be ending: not black yet)."""
         base = self._base
         return (base.current is None and base.held is None and not base.transitioning(now)
-                and not any(slot.visibility(now) > 0.0 for slot in self._overlays))
+                and not self._overlay.lit(now, including_fades=False))
 
     def _still_mix(self, now: float, solo: Instance | None = None) -> Frozen:
-        """What the colour lights show now (Base and the overlays, or the Editor's input), as one still look: for the
+        """What the colour lights show now (Base and the Overlay, or the Editor's input), as one still look: for the
         lights, and for the live picture while one is drawn."""
         contexts = self._contexts()
         canvases = {}
@@ -639,7 +656,7 @@ class Engine:
             if solo is not None:
                 canvases[layer_kind(ctx)] = render_input(solo, now, ctx)  # what the lights were showing
             else:
-                canvases[layer_kind(ctx)] = composite(self._base.render(now, ctx), [slot.render(now, ctx) for slot in self._overlays])
+                canvases[layer_kind(ctx)] = composite(self._base.render(now, ctx), [self._overlay.render(now, ctx)])
         return frozen_mix(canvases, contexts, name=self.show.name)
 
     def _end_quit_dark(self, why: str) -> None:
@@ -656,7 +673,7 @@ class Engine:
             if self._solo is not None:
                 return render_input(self._solo, now, ctx)
             canvas = self._base.render(now, ctx)
-            return composite(canvas, [slot.render(now, ctx) for slot in self._overlays])
+            return composite(canvas, [self._overlay.render(now, ctx)])
         except Exception as exc:
             log_exception("drawing the live picture", exc)
             return None
@@ -759,17 +776,30 @@ class Engine:
             self._base.clear(now, self._contexts(), cut=command.cut)
             self._house_driven.clear()
         elif isinstance(command, SendToOverlay):
-            slot = self._slot(command.slot)
             inp = self._input(command.input_id)
-            if slot is not None and inp is not None:
-                slot.send(inp, now, self._contexts(), command.state)
-        elif isinstance(command, OverlayOff):
-            slot = self._slot(command.slot)
-            if slot is not None:
-                slot.off(now)
+            if inp is not None:
+                if command.toggle and self._overlay.count(inp.id):
+                    self._overlay.clear_input(inp.id, now)
+                elif command.once and self._overlay.count(inp.id):
+                    self._overlay.set_on(True, now)  # (it's there already: just make sure it shows)
+                elif self._overlay.send(inp, now, command.tag) is None:
+                    log_info(f"{inp.name} wasn't sent to the Overlay: it has {COPIES_PER_INPUT} copies there already"
+                             if self._overlay.count(inp.id) >= COPIES_PER_INPUT
+                             else f"{inp.name} wasn't sent to the Overlay: it's full ({MAX_COPIES} copies)",
+                             key=f"overlay-full-{inp.id}")
+        elif isinstance(command, ClearFromOverlay):
+            if command.copy:
+                self._overlay.clear_copy(int(command.copy), now, command.cut)
+            elif command.tag:
+                self._overlay.clear_tag(command.tag, now, command.cut)
+            elif command.input_id:
+                self._overlay.clear_input(command.input_id, now, command.cut)
+        elif isinstance(command, ClearOverlay):
+            self._overlay.clear_all(now, command.cut)
+        elif isinstance(command, SetOverlayOn):
+            self._overlay.set_on((not self._overlay.on) if command.on is None else bool(command.on), now)
         elif isinstance(command, SetOverlayOpacity):
-            if 1 <= command.slot <= OVERLAY_SLOTS:
-                self._overlay_opacity[command.slot - 1].set(clamp01(command.level), command.fade, now)
+            self._overlay_opacity.set(clamp01(command.level), command.fade, now)
         elif isinstance(command, SetSolo):
             inp = command.input if command.input is not None else (self._input(command.input_id) if command.input_id else None)
             if inp is None:
@@ -852,9 +882,6 @@ class Engine:
             log_info(f"There's no input called {input_id!r}", key=f"no-input-{input_id}")
         return inp
 
-    def _slot(self, number: int) -> OverlaySlot | None:
-        return self._overlays[number - 1] if 1 <= number <= OVERLAY_SLOTS else None
-
     # ------------------------------------------------------------ automations
 
     def _automations(self, now: float) -> bool:
@@ -867,13 +894,10 @@ class Engine:
             if gap > WAKE_GAP or drift > WAKE_GAP:
                 self._on_wake()
         self._prev_mono, self._prev_wall = now, wall
-        overlays = tuple(
-            slot.content.current.input.id if slot.on and slot.content.current is not None else ""
-            for slot in self._overlays
-        )
+        overlay = self._overlay.input_ids()
         base = self._base.current.input.id if self._base.current is not None else ""
         colour_black = self.colour_black(now)
-        key = (base, overlays, colour_black, id(self._ctx.globals), tuple(sorted(self._ndi_sending.items())), id(self.show.automations),
+        key = (base, overlay, colour_black, id(self._ctx.globals), tuple(sorted(self._ndi_sending.items())), id(self.show.automations),
                id(self.global_automations.automations), self.show.folder)
         events = set()
         if self._first_check:
@@ -899,7 +923,7 @@ class Engine:
             # just after starting (or a show loading), the NDI feeds are still connecting: until one sends (or
             # FEED_WAIT has passed) "feed lost" isn't true yet, so an automation about it waits
             situation = Situation(
-                now=wall, local=self._local_time(wall), base=base, overlays=overlays, variables=self._ctx.globals,
+                now=wall, local=self._local_time(wall), base=base, overlay=overlay, variables=self._ctx.globals,
                 ndi=dict(self._ndi_sending), colour_black=colour_black, audio=dict(self._ctx.audio), events=frozenset(events),
                 ndi_known=now >= self._feeds_until,
                 quit_dark_since=self._quit_at if self._quit_dark else None,
@@ -1179,8 +1203,7 @@ class Engine:
         self._ctx.lights = self._picture_ctx.lights = lights
         self._ctx.folder = self._picture_ctx.folder = show.folder
         self._base.update_inputs(show.inputs)
-        for slot in self._overlays:
-            slot.update_inputs(show.inputs)
+        self._overlay.update_inputs(show.inputs)
         if self._solo is not None and self._solo.input.id in show.inputs and not self._solo_fixed:
             self._solo.input = show.inputs[self._solo.input.id]
         self.sources.set_keep(self._ndi_names())
@@ -1189,7 +1212,7 @@ class Engine:
         self._refresh_identify()
 
     def _load_show(self, show: Show, now: float) -> None:
-        """Another show: the lights freeze on what they show (Base and the overlays become one still look on Base,
+        """Another show: the lights freeze on what they show (Base and the Overlay become one still look on Base,
         held until one of the new show's inputs is sent, which transitions from it). Nothing of the old show plays
         on (its videos and feeds are let go; a feed the new show uses too stays connected). The house lights and
         Master keep their levels. The new show's variables come back as they were when it was last loaded, and its
@@ -1203,7 +1226,7 @@ class Engine:
         self._solo_fixed = False
         base = self._base
         fading_to_black = (solo is None and base.current is None and base.held is None and base.transitioning(now)
-                           and not any(slot.visibility(now) > 0.0 for slot in self._overlays))
+                           and not self._overlay.lit(now, including_fades=False))
         if fading_to_black:  # (a Fade to black, say: frozen now, the lights would stay as they are this moment)
             held = None
             if isinstance(base.outgoing, Instance):  # (Stop: the old show's input fading out, held still as it fades)
@@ -1218,8 +1241,7 @@ class Engine:
             base.outgoing = None
             base.transition = Transition("cut", 0.0)
         base.held = held
-        for slot in self._overlays:
-            slot.clear_now()
+        self._overlay.clear_now()
         self._house_driven.clear()
         if old.folder:
             self._show_globals[_folder_key(old.folder)] = saveable(self._globals)
@@ -1259,14 +1281,18 @@ class Engine:
             self._base.held = self._frozen_from_live(live.frozen)
         elif not live.show and initial_base and initial_base in self.show.inputs:
             self._base.current = Instance(self.show.inputs[initial_base], now)  # the very first run
-        for slot, ramp, saved in zip(self._overlays, self._overlay_opacity, live.overlays):
-            restored = instance(saved)
+        saved = live.overlay if isinstance(live.overlay, Mapping) else {}
+        opacity = saved.get("opacity", 1.0)
+        self._overlay_opacity.set(clamp01(float(opacity)) if isinstance(opacity, (int, float)) and not isinstance(opacity, bool)
+                                  else 1.0, 0.0, now)
+        for item in saved.get("copies") or ():
+            restored = instance(item)
             if restored is not None:
-                slot.content.current = restored
-                slot.on = True
-                slot.reveal_from = slot.reveal_to = 1.0
-                opacity = saved.get("opacity", 1.0)
-                ramp.set(clamp01(float(opacity)) if isinstance(opacity, (int, float)) else 1.0, 0.0, now)
+                copy = self._overlay.send(restored.input, now)
+                if copy is not None:  # (as it was: shown at once, its clock carrying on)
+                    copy.instance = restored
+                    copy.reveal_from = copy.reveal_to = 1.0
+        self._overlay.set_on(saved.get("on", True) is not False, now - SWITCH_FADE)
 
     @staticmethod
     def _frozen_from_live(saved: Any) -> Frozen | None:
@@ -1338,7 +1364,6 @@ class Engine:
             for fid, h in self._house.items()
         }
         current = self._base.current
-        overlays = []
         live_inputs = set()
         playing: dict[str, float] = {}
         if current is not None:
@@ -1346,17 +1371,17 @@ class Engine:
             progress = input_progress(current.input, current.time(now))
             if progress is not None:
                 playing[current.input.id] = progress
-        for slot, ramp in zip(self._overlays, self._overlay_opacity):
-            inside = slot.content.current
-            visible = slot.visibility(now)
-            if inside is not None and (slot.on or visible > 0.0):
-                live_inputs.add(inside.input.id)
-                progress = input_progress(inside.input, inside.time(now))
+        layer = self._overlay
+        copies = []
+        for copy in layer.shown():
+            progress = copy.progress(now)
+            copies.append(CopyView(copy.number, copy.input.id, copy.input.name, progress, copy.tag))
+            if layer.on:
+                live_inputs.add(copy.input.id)
                 if progress is not None:
-                    playing.setdefault(inside.input.id, progress)
-                overlays.append(OverlayView(inside.input.id, inside.input.name, slot.on, visible, ramp.value(now)))
-            else:
-                overlays.append(OverlayView(opacity=ramp.value(now)))
+                    playing.setdefault(copy.input.id, progress)
+        overlay = OverlayView(layer.on, layer.switch_visibility(now), self._overlay_opacity.value(now), tuple(copies),
+                              sum(1 for copy in layer.copies if copy.leaving))
         try:
             ndi = self.sources.statuses()
         except Exception as exc:
@@ -1369,10 +1394,7 @@ class Engine:
                 if key:
                     sending[key] = sending.get(key, False) or on
         self._ndi_sending = sending
-        in_use = self._base.inputs_in_use()
-        for slot in self._overlays:
-            if slot.on or slot.visibility(now) > 0.0:
-                in_use |= slot.inputs_in_use()
+        in_use = self._base.inputs_in_use() | self._overlay.inputs_in_use(now)
         if self._solo is not None:
             in_use.add(self._solo.input.id)
         held = self._base.held if current is None else None
@@ -1397,7 +1419,7 @@ class Engine:
             audio_state=getattr(self.audio, "state", "off") if self.audio is not None else "off",
             audio_detail=getattr(self.audio, "detail", "") if self.audio is not None else "",
             audio_rate=self._audio_rate(),
-            overlays=tuple(overlays),
+            overlay=overlay,
             solo=self._solo.input.id if self._solo is not None else "",
             live_inputs=frozenset(live_inputs),
             in_use=frozenset(in_use),

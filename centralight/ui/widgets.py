@@ -293,9 +293,6 @@ class WheelGuard(QObject):
 _wheel_guard: WheelGuard | None = None
 HOLD_SECONDS = 0.6  # holding a Cut / Fade to black button this long does it to everything
 HOLD_RELABEL = 0.15  # (its label changes only once it's clearly being held, so a click doesn't flicker it)
-# A second click on an overlay button this soon after the first is the same click: a hurried
-# double-click. A person correcting an accidental click takes longer than this, so that still works.
-DOUBLE_CLICK_GUARD_S = 0.35
 
 
 def _no_wheel_focus(widget: QWidget) -> None:

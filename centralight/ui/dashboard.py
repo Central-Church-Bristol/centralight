@@ -2,7 +2,7 @@
 
 - Live: a glowing dot per light over a dim copy of the Base picture.
 - Inputs: one tile per input. Click = send to Base (Shift = cut), right-click = more.
-- Layers: what's on Base (and, from M2, in each overlay).
+- Layers: what's on Base, and the Overlay (M14: one layer of copies, with its switch, Clear all and opacity).
 - Output: exactly what each light is sent (in Simulated mode: what *would* be sent).
 """
 
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QToolButton,
@@ -142,11 +143,12 @@ class OutputRow(QFrame):
 
 
 class LayerRow(QFrame):
-    """One row of the layer stack: the slot's name and what's in it. Overlay rows also have
-    an on/off switch and an opacity fader."""
+    """One row of the layer stack: its name and what's in it. The Overlay's row also has an on/off switch (off hides
+    it without emptying it), Clear all and an opacity fader."""
 
-    switched = Signal(int, bool)  # slot, on
-    opacity_moved = Signal(int, float)  # slot, level
+    switched = Signal(int, bool)  # (1), on
+    opacity_moved = Signal(int, float)  # (1), level
+    cleared = Signal()  # Clear all
 
     def __init__(self, slot: str, number: int = 0, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -164,14 +166,20 @@ class LayerRow(QFrame):
         top.addWidget(self.content, 1)
         self.switch: ToggleSwitch | None = None
         self.opacity: Fader | None = None
+        self.clear_button: QPushButton | None = None
         self.locked = False  # the padlock is on
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 5, 0, 5)
         layout.setSpacing(4)
         layout.addLayout(top)
         if number:
+            self.clear_button = QPushButton("Clear all")
+            self.clear_button.setObjectName("ToolToggle")
+            self.clear_button.setToolTip("Clear every copy from the Overlay (each goes the way it came in)")
+            self.clear_button.clicked.connect(self.cleared.emit)
+            top.addWidget(self.clear_button)
             self.switch = ToggleSwitch()
-            self.switch.setToolTip(f"Overlay {number} on / off")
+            self.switch.setToolTip("The Overlay on / off: off hides it without emptying it (sending to it turns it on)")
             self.switch.clicked.connect(lambda *_: self.switched.emit(self.number, self.switch.isChecked()))
             top.addWidget(self.switch)
             controls = QHBoxLayout()
@@ -181,7 +189,7 @@ class LayerRow(QFrame):
             caption.setObjectName("RowDetail")
             self.opacity = Fader()
             self.opacity.setMaximumWidth(16777215)
-            self.opacity.setToolTip(f"How see-through Overlay {number} is")
+            self.opacity.setToolTip("How see-through the Overlay is")
             self.opacity.moved.connect(lambda level: self.opacity_moved.emit(self.number, level))
             self.opacity_text = QLabel("100%")
             self.opacity_text.setObjectName("RowDetail")
@@ -192,12 +200,14 @@ class LayerRow(QFrame):
             controls.addWidget(self.opacity_text)
             layout.addLayout(controls)
 
-    def set_overlay(self, name: str, on: bool, opacity: float, has_input: bool) -> None:
-        self.content.setText(name or "—")
+    def set_overlay(self, text: str, on: bool, opacity: float, has_copies: bool) -> None:
+        self.content.setText(text or "—")
         if self.switch is not None:
             if self.switch.isChecked() != on:
                 self.switch.setChecked(on)
-            self.switch.setEnabled(has_input and not self.locked)
+            self.switch.setEnabled(not self.locked)
+        if self.clear_button is not None:
+            self.clear_button.setEnabled(has_copies and not self.locked)
         if self.opacity is not None:
             self.opacity.set_level(opacity)
             if not self.opacity.is_dragging():
@@ -207,9 +217,14 @@ class LayerRow(QFrame):
 class DashboardPage(QWidget):
     send_requested = Signal(str, bool)  # input id, cut
     clear_base_requested = Signal(bool)  # cut
-    overlay_requested = Signal(str, int)  # input id, slot (toggle rule)
-    overlay_switched = Signal(int, bool)  # slot, on (False = take it off)
-    overlay_opacity = Signal(int, float)  # slot, level
+    overlay_pressed = Signal(str, str)  # input id, tag: Send to Overlay (a new copy on top)
+    overlay_held = Signal(str, str)  # input id, tag: let go after holding Send to Overlay (that copy clears)
+    copy_clear_requested = Signal(int)  # copy number: its red box was clicked
+    overlay_input_cleared = Signal(str)  # input id: Clear from Overlay (the tile's menu)
+    overlay_switched = Signal(bool)  # the Overlay's switch (off hides it without emptying it)
+    overlay_cleared = Signal()  # Clear all
+    overlay_opacity = Signal(float)  # level
+    reorder_requested = Signal(str, int)  # input id, its new place: a tile dragged
     edit_requested = Signal(str)
     new_requested = Signal()
     duplicate_requested = Signal(str)
@@ -225,6 +240,7 @@ class DashboardPage(QWidget):
         self.show_data = show
         self._preview_seq = -1
         self._base_id = ""
+        self._overlay = None  # the engine's OverlayView (each input's copies there)
         self._locked = False
         self._previewer = Previewer(sources)
         self._preview_timer = QTimer(self)
@@ -243,7 +259,10 @@ class DashboardPage(QWidget):
         self.grid = InputGrid(show)
         self.grid.send_requested.connect(self.send_requested.emit)
         self.grid.menu_requested.connect(self._tile_menu)
-        self.grid.overlay_requested.connect(self.overlay_requested.emit)
+        self.grid.overlay_pressed.connect(self.overlay_pressed.emit)
+        self.grid.overlay_held.connect(self.overlay_held.emit)
+        self.grid.copy_clear_requested.connect(self.copy_clear_requested.emit)
+        self.grid.reorder_requested.connect(self.reorder_requested.emit)
         self.grid.edit_requested.connect(self.edit_requested.emit)
         self.grid.new_requested.connect(self.new_requested.emit)
         self.grid.ai_requested.connect(self.ai_requested.emit)
@@ -265,12 +284,12 @@ class DashboardPage(QWidget):
 
         layers = Panel("Layers")
         self.layer_rows: dict[str, LayerRow] = {}
-        for number in (4, 3, 2, 1):  # top layer first, like the timeline
-            row = LayerRow(f"Overlay {number}", number)
-            row.switched.connect(self.overlay_switched.emit)
-            row.opacity_moved.connect(self.overlay_opacity.emit)
-            layers.body.addWidget(row)
-            self.layer_rows[f"overlay{number}"] = row
+        overlay_row = LayerRow("Overlay", 1)  # (the top layer first, like the timeline)
+        overlay_row.switched.connect(lambda _n, on: self.overlay_switched.emit(on))
+        overlay_row.opacity_moved.connect(lambda _n, level: self.overlay_opacity.emit(level))
+        overlay_row.cleared.connect(self.overlay_cleared.emit)
+        layers.body.addWidget(overlay_row)
+        self.layer_rows["overlay"] = overlay_row
         base_row = LayerRow("Base")
         layers.body.addWidget(base_row)
         self.layer_rows["base"] = base_row
@@ -382,10 +401,12 @@ class DashboardPage(QWidget):
         self._locked = locked
         self.grid.set_locked(locked)
         self.variables.setEnabled(not locked)
-        for row in self.layer_rows.values():  # the overlays' switches and opacity faders too
+        for row in self.layer_rows.values():  # the Overlay's switch, Clear all and opacity fader too
             row.locked = locked
             if row.switch is not None:
-                row.switch.setEnabled(not locked and row.switch.isEnabled())
+                row.switch.setEnabled(not locked)
+            if row.clear_button is not None:
+                row.clear_button.setEnabled(not locked and row.clear_button.isEnabled())
             if row.opacity is not None:
                 row.opacity.setEnabled(not locked)
 
@@ -412,9 +433,11 @@ class DashboardPage(QWidget):
         menu = QMenu(self)
         menu.addAction("Send to Base", lambda: self.send_requested.emit(input_id, False))
         menu.addAction("Cut to Base", lambda: self.send_requested.emit(input_id, True))
-        overlays = menu.addMenu("Overlay")
-        for slot in (1, 2, 3, 4):
-            overlays.addAction(f"Overlay {slot} on / off", lambda s=slot: self.overlay_requested.emit(input_id, s))
+        copies = self._overlay.of(input_id) if self._overlay is not None else ()
+        send = menu.addAction("Send to Overlay", lambda: self.overlay_pressed.emit(input_id, ""))
+        send.setEnabled(len(copies) < 4)
+        clear = menu.addAction("Clear from Overlay", lambda: self.overlay_input_cleared.emit(input_id))
+        clear.setEnabled(bool(copies))
         menu.addSeparator()
         menu.addAction("Edit", lambda: self.edit_requested.emit(input_id))
         menu.addAction("Edit with AI…", lambda: self.ai_requested.emit(input_id))
@@ -454,13 +477,12 @@ class DashboardPage(QWidget):
         if frame.base_progress is not None:
             base = f"{base} (fading in, {round(frame.base_progress * 100)}%)"
         self.layer_rows["base"].content.setText(base)
-        on_names = []
-        for number, view in enumerate(frame.overlays, start=1):
-            row = self.layer_rows.get(f"overlay{number}")
-            if row is not None:
-                row.set_overlay(view.name, view.on, view.opacity, bool(view.input_id))
-            if view.on and view.name:
-                on_names.append(f"{number}: {view.name}")
+        overlay = frame.overlay
+        self._overlay = overlay
+        count = len(overlay.copies)
+        copies = f"{count} cop{'y' if count == 1 else 'ies'}" if count else ""
+        self.layer_rows["overlay"].set_overlay(f"{copies} (off)" if copies and not overlay.on else copies, overlay.on,
+                                               overlay.opacity, bool(count))
         notes = []
         if frame.solo:
             notes.append("the Editor is showing one input on the lights")
@@ -469,7 +491,7 @@ class DashboardPage(QWidget):
         if frame.testing:
             notes.append("test colours are on")
         extra = f"  ·  {', '.join(notes)}" if notes else ""
-        overlays = ", ".join(on_names) if on_names else "none"
-        self.caption.setText(f"Base: {base}  ·  Overlays: {overlays}{extra}")
-        self.grid.set_live(frame.base_id, tuple(v.input_id if v.on else "" for v in frame.overlays), frame.colours)
+        shown = (copies + ("" if overlay.on else ", off")) if copies else ("empty" if overlay.on else "empty, off")
+        self.caption.setText(f"Base: {base}  ·  Overlay: {shown}{extra}")
+        self.grid.set_live(frame.base_id, overlay, frame.colours)
         self.grid.set_playing(frame.playing)

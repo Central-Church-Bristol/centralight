@@ -318,24 +318,32 @@ class DashboardM2Tests(EditorTestCase):
     def test_overlay_buttons_and_layer_controls(self) -> None:
         window, engine = self.make()
         tile = window.dashboard.grid.tiles["pillars-purple"]
-        QTest.mouseClick(tile.overlay_buttons[1], Qt.MouseButton.LeftButton)  # overlay 2
+        QTest.mouseClick(tile.overlay_button, Qt.MouseButton.LeftButton)  # Send to Overlay
         engine.settle(1.2)
         window.bridge.poll()
         process(self.app)
         frame = engine.frames.get()
-        self.assertEqual(frame.overlays[1].input_id, "pillars-purple")
-        self.assertTrue(tile.overlay_buttons[1].property("inSlot"))
-        row = window.dashboard.layer_rows["overlay2"]
+        self.assertEqual([c.input_id for c in frame.overlay.copies], ["pillars-purple"])
+        self.assertEqual(len(tile.boxes.copies()), 1)  # its red box
+        row = window.dashboard.layer_rows["overlay"]
         self.assertTrue(row.switch.isChecked())
+        self.assertEqual(row.content.full_text(), "1 copy")  # (no input names: how many)
         row.opacity._user_set(500)
         engine.settle(0.5)  # opacity glides to the new level
-        self.assertAlmostEqual(engine.frames.get().overlays[1].opacity, 0.5, delta=0.01)
-        QTest.mouseClick(row.switch, Qt.MouseButton.LeftButton)  # off
+        self.assertAlmostEqual(engine.frames.get().overlay.opacity, 0.5, delta=0.01)
+        QTest.mouseClick(row.switch, Qt.MouseButton.LeftButton)  # off: hidden, not emptied
         engine.settle(1.2)
         window.bridge.poll()
         process(self.app)
-        self.assertEqual(engine.frames.get().overlays[1].input_id, "")
-        self.assertFalse(tile.overlay_buttons[1].property("inSlot"))
+        overlay = engine.frames.get().overlay
+        self.assertFalse(overlay.on)
+        self.assertEqual(len(overlay.copies), 1)
+        QTest.mouseClick(row.clear_button, Qt.MouseButton.LeftButton)  # Clear all
+        engine.settle(1.2)
+        window.bridge.poll()
+        process(self.app)
+        self.assertEqual(engine.frames.get().overlay.copies, ())
+        self.assertEqual(tile.boxes.copies(), ())
 
     def test_pencil_duplicate_and_delete(self) -> None:
         window, _engine = self.make()

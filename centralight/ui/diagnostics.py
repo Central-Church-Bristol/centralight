@@ -120,8 +120,9 @@ def report(frame, meter: ProcessMeter | None = None, cores: int | None = None, a
     lines.append(("Audio", f"{frame.audio_state}" + (f": {frame.audio_detail}" if frame.audio_detail else "")
                            + (f" · sound arriving {frame.audio_rate:.0f} times a second" if listening else "")
                            + (f" · loudness {level} %" if listening else "")))
-    overlays = ", ".join(f"{i}: {v.name}" for i, v in enumerate(frame.overlays, start=1) if v.on and v.name) or "none"
-    lines.append(("Playing", f"Base: {frame.base} · overlays: {overlays}" + (f" · Editor showing {frame.solo}" if frame.solo else "")))
+    names = [c.name for c in frame.overlay.copies]
+    overlay = (", ".join(names) if names else "empty") + ("" if frame.overlay.on else " (switched off)")
+    lines.append(("Playing", f"Base: {frame.base} · Overlay: {overlay}" + (f" · Editor showing {frame.solo}" if frame.solo else "")))
     auto = frame.automations
     lines.append(("Automations", "paused" if auto.paused else ("on" + (f" · next: {auto.next_text}" if getattr(auto, "next_text", "") else ""))))
     if frame.element_faults:

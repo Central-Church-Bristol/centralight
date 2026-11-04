@@ -81,14 +81,14 @@ EVENT_HINTS = {
     "pc_startup": "When Windows starts CentraLight at sign-in (Start with Windows), or CentraLight starts within 10 minutes of the PC starting.",
     "app_started": "Every time CentraLight starts (restarts too).",
     "pc_woke": "When the PC wakes from sleep.",
-    "colour_black": "While nothing is on Base or in the overlays (after Cut or Fade to black, say).",
+    "colour_black": "While nothing is on Base or the Overlay (after Cut or Fade to black, say).",
     "show_loads": ("When this show is loaded (by you, the Stream Deck or a global automation), and when the PC starts with "
                    "it. Not when CentraLight reopens after a quit or a crash: then it carries on as it was."),
 }
 SUN_WHEN_LABELS = (("after", "After"), ("before", "Before"))
 SUN_EVENT_LABELS = (("sunset", "sunset"), ("sunrise", "sunrise"))
 AUDIO_BAND_LABELS = (("level", "loudness"), ("bass", "bass"), ("mid", "middle"), ("treble", "treble"), ("beat", "beat"), ("pitch", "pitch"))
-WHERE_LABELS = (("anywhere", "anywhere"), ("base", "on Base")) + tuple((f"overlay{n}", f"in Overlay {n}") for n in range(1, 5))
+WHERE_LABELS = (("anywhere", "anywhere"), ("base", "on Base"), ("overlay", "in the Overlay"))
 COMPARE_LABELS = (("=", "is"), ("!=", "is not"), ("<", "is below"), (">", "is above"), ("on", "is on"), ("off", "is off"))
 TRANSITION_LABELS = (("", "its own transition"), ("cut", "a cut")) + tuple((k, k.title()) for k in TRANSITION_KINDS if k != "cut")
 
@@ -388,18 +388,12 @@ class RuleRow(QFrame):
             how.currentIndexChanged.connect(lambda _i: self._set_transition(how, duration))
             duration.valueChanged.connect(lambda _v: self._set_transition(how, duration))
             self._add(pick, self._text("with"), how, duration)
-        elif kind == "overlay":
+        elif kind in ("overlay", "overlay_clear"):  # (Send to Overlay: a copy on top; Clear: that input's copies)
             pick = _combo(inputs, d.get("input"))
             pick.currentIndexChanged.connect(lambda _i: self._set("input", pick.currentData()))
-            slot = _combo([(n, f"Overlay {n}") for n in range(1, 5)], d.get("slot", 1))
-            slot.currentIndexChanged.connect(lambda _i: self._set("slot", slot.currentData()))
-            state = _combo((("on", "on"), ("off", "off"), ("toggle", "on / off")), d.get("state", "on"))
-            state.currentIndexChanged.connect(lambda _i: self._set("state", state.currentData()))
-            self._add(pick, self._text("in"), slot, state)
-        elif kind == "overlay_off":
-            slot = _combo([(n, f"Overlay {n}") for n in range(1, 5)], d.get("slot", 1))
-            slot.currentIndexChanged.connect(lambda _i: self._set("slot", slot.currentData()))
-            self._add(slot)
+            self._add(pick)
+        elif kind == "overlay_clear_all":
+            self._add(self._text("every copy goes, the way it came in"))
         elif kind == "house":
             light = _combo([(h.fixture, h.label) for h in show.house], d.get("light"))
             light.currentIndexChanged.connect(lambda _i: self._set("light", light.currentData()))

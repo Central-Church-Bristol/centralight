@@ -136,23 +136,24 @@ They're one-off buttons, not a switch: the next input you send lights things aga
 ## 8. The six transitions
 
 For each of **Cut, Fade, Dip, Wipe, Iris, Random**: open Worship blue in the Editor (the pencil on its tile),
-click the transition in the **Transitions** list, go back to the Dashboard, click Warm white, then click
-Worship blue.
+click the transition in the **Transitions** list, go back to the Dashboard, click **Send to Base** on Warm white,
+then on Worship blue (since M14, clicking the tile itself does nothing).
 
 - [ ] Each one looks right on the lights (note any that look odd): Cut is instant; Fade cross-fades; Dip goes
       through black; Wipe sweeps across (Direction in the Input tab turns it); Iris grows from the middle;
       Random changes light by light.
-- [ ] Shift-click a tile: it cuts straight there, whatever its transition.
+- [ ] Right-click a tile → **Cut to Base**: it cuts straight there, whatever its transition.
 
-## 9. Overlays: "Pillars purple" over Follow screen
+## 9. The Overlay: "Pillars purple" over Follow screen
 
 - [ ] Put **Follow screen** on Base.
 - [ ] New input → **Paint**, purple (`#9B30FF`). In its **Lights** list untick everything except the pillar
       lights (SlimPAR 106 and 107 in the standard patch). Name it **Pillars purple**.
-- [ ] Dashboard: click the **1** on its tile: the pillars fade to purple while every other light keeps
-      following the screen. The layer stack shows it on Overlay 1, with a switch and an **Opacity** fader.
-- [ ] Drag Overlay 1's opacity to 50 %: the pillars go half-way between purple and the screen colour.
-- [ ] Click the **1** again (or the switch): it fades away.
+- [ ] Dashboard: click **Send to Overlay** on its tile: the pillars fade to purple while every other light keeps
+      following the screen. A red box appears under the tile's buttons, and the Layers panel's **Overlay** row
+      says "1 copy", with **Clear all**, a switch and an **Opacity** fader.
+- [ ] Drag the Overlay's opacity to 50 %: the pillars go half-way between purple and the screen colour.
+- [ ] Click the red box (or **Clear all**): it fades away, the way it came in.
 
 ## 10. House lights set by an input
 
@@ -208,10 +209,11 @@ Worship blue.
 - [ ] Back in CentraLight: **Paste from clipboard**. It's checked straight away and the preview shows the lights
       moving. Click **Try it on the lights**: the real lights show it (and stop when you close the window).
       Click **Add**: a new tile appears with a small sparkle by its name.
-- [ ] Put it in an overlay (button **2** on its tile) over Follow screen: the pillars breathe over the screen's colours.
+- [ ] Send it to the Overlay (**Send to Overlay** on its tile) over Follow screen: the pillars breathe over the
+      screen's colours.
 - [ ] If CentraLight lists problems instead, click **Copy error for the AI**, paste that into the chat, and paste
       the AI's new reply. Note what went wrong (it helps improve the prompt).
-- [ ] The sparkle at the bottom right of a tile → **Edit with AI** → "make it a bit faster" → Copy prompt → AI →
+- [ ] The sparkle beside a tile's name → **Edit with AI** → "make it a bit faster" → Copy prompt → AI →
       paste. It lists what changes. **Replace**. Then (Editor, that input) Ctrl+Z puts the old version back.
 - [ ] Copy an AI reply again, click an empty part of the Dashboard and press **Ctrl+V**: the same window opens with it.
 - [ ] (Optional) Claude Code or Cursor: Settings (gear) → AI → **Open show folder**, and start Claude Code (or
@@ -391,6 +393,28 @@ Close the app first (it's holding the dongle), then:
 ```
 
 - [ ] The lights follow the screen as before. Press **Esc** to stop.
+
+## 20b. M14: your changes of 4 Nov (try these on the lights next time)
+
+- [ ] **Tick boxes**: the Editor's **Infinite** box (and every other empty tick box) has a grey border you can see;
+      ticked ones are pale blue.
+- [ ] **Rename**: right-click a tile → **Rename…**. And in the Editor, click the name in "Editing: …", type a new
+      one, press Enter. Ctrl+Z puts the old name back.
+- [ ] **The Editor opens paused**: open an input: the playhead stays at the start until you press play.
+- [ ] **Delete a shape**: Editor → a Paint element with a rectangle → click the rectangle in the Selected view →
+      press Delete: it goes (Ctrl+Z brings it back). With nothing selected, Delete does nothing there.
+- [ ] **The Overlay** (one now, instead of Overlays 1–4):
+  - [ ] Put Follow screen on Base, then click **Send to Overlay** on Pillars purple three times: three red boxes
+        under its buttons, and the lights look the same as with one (they're the same input).
+  - [ ] Send a different input that lights other lights to the Overlay too: both show, neither cancels the other.
+  - [ ] Click the middle red box: that copy fades away the way it came in, and the boxes close up.
+  - [ ] With 4 boxes, **Send to Overlay** greys out until you clear one.
+  - [ ] **Hold** Send to Overlay: the pillars come on at once and go when you let go (a flash). A quick click stays.
+  - [ ] A **timed** input sent to the Overlay: its box fills as it plays, and it leaves by itself at the end.
+  - [ ] The **Overlay** row's switch off: the Overlay hides but its boxes stay (dimmed); switch on: it's back.
+        **Clear all** empties it.
+  - [ ] A Stream Deck key made before (e.g. `/api/input/pillars-purple/overlay/1`) still turns it on and off.
+  - [ ] Drag a tile to another place: a pale-blue line shows where it'll go. Ctrl+Z puts it back.
 
 ## 21. Afterwards: the commits
 

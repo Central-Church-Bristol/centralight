@@ -37,7 +37,8 @@ from .countdown import GRACE as COUNTDOWN_GRACE
 from .countdown import WAIT as COUNTDOWN_WAIT
 from .commands import (
     BLACK_FADE,
-    OverlayOff,
+    ClearFromOverlay,
+    ClearOverlay,
     SendToBase,
     SendToOverlay,
     ToBlack,
@@ -71,8 +72,9 @@ EVENTS = ("pc_startup", "app_started", "pc_woke", "show_loads")
 MOVED_EVENTS = ("pc_startup", "app_started", "pc_woke")  # global automations' (a show's old ones: "When this show loads")
 ACTIONS: dict[str, str] = {
     "base": "Send an input to Base",
-    "overlay": "An input in an overlay",
-    "overlay_off": "Clear an overlay",
+    "overlay": "Send an input to the Overlay",
+    "overlay_clear": "Clear an input from the Overlay",
+    "overlay_clear_all": "Clear the Overlay",
     "load_show": "Load a show",
     "house": "Festoon or key lights",
     "master": "Master",
@@ -83,19 +85,20 @@ ACTIONS: dict[str, str] = {
     "automation": "Turn an automation on or off",
 }
 # A show's automations, and the global ones (app-wide: they can load a show, but can't touch a show's inputs,
-# overlays, variables or layouts)
+# Overlay, variables or layouts)
 SHOW = "show"
 GLOBAL = "global"
 SHOW_CONDITIONS = ("time", "days", "dates", "sun", "input_live", "variable", "ndi", "colour_black", "audio", "show_loads")
 GLOBAL_CONDITIONS = ("time", "days", "dates", "sun", "ndi", "audio", "colour_black", "loaded_show", "app_started",
                      "pc_startup", "pc_woke")
-SHOW_ACTIONS = ("base", "overlay", "overlay_off", "house", "master", "cut_black", "fade_black", "variable", "layout",
+SHOW_ACTIONS = ("base", "overlay", "overlay_clear", "overlay_clear_all", "house", "master", "cut_black", "fade_black",
+                "variable", "layout",
                 "automation")
 GLOBAL_ACTIONS = ("load_show", "cut_black", "fade_black", "master", "house", "automation")
 GUI_ACTIONS = ("layout", "automation", "load_show")  # these change the show (or load another), so the window does them
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-WHERE = ("base", "overlay1", "overlay2", "overlay3", "overlay4", "anywhere")
+WHERE = ("base", "overlay", "anywhere")  # (an older file's "overlay1"-"overlay4" become "overlay" as it's read)
 COMPARES = ("=", "!=", "<", ">", "on", "off")
 AUDIO_BANDS = ("level", "bass", "mid", "treble", "beat", "pitch")
 SUN_EVENTS = ("sunset", "sunrise")
@@ -230,7 +233,7 @@ def check_action(action: Mapping[str, Any], scope: str = SHOW) -> list[str]:
     delay = action.get("delay", 0)
     if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not 0 <= delay <= 86400:
         problems.append('"delay" must be seconds from 0 to 86400')
-    if kind in ("base", "overlay") and (not isinstance(action.get("input"), str) or not action.get("input")):
+    if kind in ("base", "overlay", "overlay_clear") and (not isinstance(action.get("input"), str) or not action.get("input")):
         problems.append('"input" must be an input id')
     if kind == "base":
         transition = action.get("transition")
@@ -239,10 +242,6 @@ def check_action(action: Mapping[str, Any], scope: str = SHOW) -> list[str]:
             and isinstance(transition.get("duration", 1.0), (int, float))
         ):
             problems.append('"transition" must be "cut" or {"kind": "fade", "duration": 2}')
-    if kind in ("overlay", "overlay_off") and action.get("slot") not in (1, 2, 3, 4):
-        problems.append('"slot" must be 1, 2, 3 or 4')
-    if kind == "overlay" and action.get("state", "toggle") not in ("on", "off", "toggle"):
-        problems.append('"state" must be on, off or toggle')
     if kind == "house" and scope == GLOBAL:
         if not isinstance(action.get("label"), str) or not action.get("label", "").strip():
             problems.append('"label" must be a house light\'s name (e.g. "Festoon" or "Key lights")')
@@ -301,7 +300,7 @@ def describe_condition(cond: Mapping[str, Any], show: Show | None = None, shows:
         inp = show.inputs.get(wanted) if show and isinstance(wanted, str) else None
         name = inp.name if inp else cond.get("input", "?")
         where = cond.get("where", "anywhere")
-        place = {"base": "on Base", "anywhere": "live"}.get(where, f"in Overlay {where[-1]}")
+        place = {"base": "on Base", "overlay": "in the Overlay"}.get(where, "live")
         text = f"{name} is {place}"
     elif kind == "variable":
         compare = cond.get("compare", "=")
@@ -353,10 +352,11 @@ def describe_action(action: Mapping[str, Any], show: Show | None = None, scope: 
     elif kind == "base":
         text = f"{input_name(action.get('input'))} to Base{_transition_text(action.get('transition'))}"
     elif kind == "overlay":
-        state = action.get("state", "toggle")
-        text = f"{input_name(action.get('input'))} {'in' if state == 'on' else 'out of' if state == 'off' else 'on / off in'} Overlay {action.get('slot')}"
-    elif kind == "overlay_off":
-        text = f"clear Overlay {action.get('slot')}"
+        text = f"{input_name(action.get('input'))} to the Overlay"
+    elif kind == "overlay_clear":
+        text = f"clear {input_name(action.get('input'))} from the Overlay"
+    elif kind == "overlay_clear_all":
+        text = "clear the Overlay"
     elif kind == "house":
         label = show.house_label(action.get("light", "")) if show else action.get("light", "?")
         parts = []
@@ -404,10 +404,10 @@ class Situation:
     now: float  # wall clock, seconds since 1970
     local: datetime  # local time (UK, with the clock changes)
     base: str = ""  # input on Base
-    overlays: tuple[str, ...] = ("", "", "", "")  # input showing in each overlay ("" = none)
+    overlay: frozenset[str] = frozenset()  # inputs with a copy on the Overlay (while its switch is on)
     variables: Mapping[str, Any] = field(default_factory=dict)
     ndi: Mapping[str, bool] = field(default_factory=dict)  # feed name (lower case) -> sending now
-    colour_black: bool = False  # nothing on Base or in the overlays (after a Cut / Fade to black, say)
+    colour_black: bool = False  # nothing on Base or the Overlay (after a Cut / Fade to black, say)
     audio: Mapping[str, float] = field(default_factory=dict)  # audio.level and friends, now
     events: frozenset[str] = frozenset()  # app_started, pc_startup, pc_woke happening now
     previous_local: datetime | None = None  # local time at the last check (to spot clock changes)
@@ -804,10 +804,10 @@ class AutomationRunner:
             wanted, where = cond.get("input"), cond.get("where", "anywhere")
             if where == "base":
                 result = situation.base == wanted
-            elif where in WHERE[1:5]:
-                result = situation.overlays[int(where[-1]) - 1] == wanted
+            elif where == "overlay":
+                result = wanted in situation.overlay
             else:
-                result = wanted == situation.base or wanted in situation.overlays
+                result = wanted == situation.base or wanted in situation.overlay
         elif kind == "variable":
             result = _variable_true(cond, situation.variables.get(cond.get("name", "")))
         elif kind == "ndi":
@@ -1240,12 +1240,11 @@ def action_command(action: Mapping[str, Any], show: Show, scope: str = SHOW) -> 
             return SendToBase(input_id, transition=Transition(transition["kind"], _num(duration, own.duration), own.direction, own.softness))
         return SendToBase(input_id)
     if kind == "overlay":
-        if action.get("input") not in show.inputs or action.get("slot") not in (1, 2, 3, 4):
-            return None
-        state = action.get("state", "toggle")
-        return SendToOverlay(action["slot"], action["input"], None if state == "toggle" else state)
-    if kind == "overlay_off":
-        return OverlayOff(action["slot"]) if action.get("slot") in (1, 2, 3, 4) else None
+        return SendToOverlay(action["input"]) if action.get("input") in show.inputs else None
+    if kind == "overlay_clear":
+        return ClearFromOverlay(input_id=action["input"]) if isinstance(action.get("input"), str) and action.get("input") else None
+    if kind == "overlay_clear_all":
+        return ClearOverlay()
     if kind == "house":
         light = action.get("light")
         if not any(h.fixture == light for h in show.house):
@@ -1351,10 +1350,10 @@ def default_action(kind: str, show: Show, scope: str = SHOW, loaded: Show | None
         return {"do": "house", "label": source.house[-1].label if source.house else "Key lights", "level": 0.7, "fade": 2}
     if kind == "base":
         return {"do": "base", "input": input_id}
-    if kind == "overlay":
-        return {"do": "overlay", "input": input_id, "slot": 1, "state": "on"}
-    if kind == "overlay_off":
-        return {"do": "overlay_off", "slot": 1}
+    if kind in ("overlay", "overlay_clear"):
+        return {"do": kind, "input": input_id}
+    if kind == "overlay_clear_all":
+        return {"do": "overlay_clear_all"}
     if kind == "house":
         light = show.house[-1].fixture if show.house else ""
         return {"do": "house", "light": light, "level": 0.7, "fade": 2}

@@ -364,7 +364,10 @@ class DataTests(unittest.TestCase):
         self.assertTrue(check_condition({"type": "dates", "from": "02-30", "to": "03-01"}))
         self.assertTrue(check_condition({"type": "teleport"}))
         self.assertEqual(check_action({"do": "house", "light": "dimmer-4", "level": 0.7, "fade": 2}), [])
-        self.assertTrue(check_action({"do": "overlay", "input": "x", "slot": 7}))
+        self.assertTrue(check_action({"do": "overlay"}))  # (Send to Overlay needs an input)
+        self.assertTrue(check_action({"do": "overlay_clear"}))
+        self.assertEqual(check_action({"do": "overlay_clear_all"}), [])
+        self.assertTrue(check_action({"do": "overlay_off", "slot": 1}))  # (before M14: converted as a file is read)
         self.assertTrue(check_action({"do": "base"}))
 
     def test_files_round_trip_and_bad_ones(self) -> None:

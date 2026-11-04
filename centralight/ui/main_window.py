@@ -34,8 +34,9 @@ from PySide6.QtWidgets import (
 
 from ..commands import (
     ClearBase,
+    ClearFromOverlay,
+    ClearOverlay,
     CountdownAction,
-    OverlayOff,
     QuietAutomations,
     SendToBase,
     SendToOverlay,
@@ -47,6 +48,7 @@ from ..commands import (
     SetAutomationsPaused,
     SetMaster,
     SetCountdownLength,
+    SetOverlayOn,
     SetOverlayOpacity,
     SetVariable,
 )
@@ -56,7 +58,7 @@ from ..links import original_problem
 from ..global_automations import GLOBAL_DIR, GLOBAL_NAME, global_folder
 from ..layouts import switch_layout
 from ..engine import EngineFrame
-from ..input_edit import delete_input, duplicate_input, new_input, update_input
+from ..input_edit import delete_input, duplicate_input, move_input, new_input, update_input
 from ..live_state import LiveState
 from ..log import log_exception, log_info
 from ..model import Show, clean_notes
@@ -126,8 +128,10 @@ def _live_key(state) -> dict:
     data.pop("saved_at", None)
     if data.get("base") is not None:
         data["base"] = {"input": data["base"].get("input")}
-    data["overlays"] = [{k: v for k, v in o.items() if k != "time"} if isinstance(o, dict) else o
-                        for o in data.get("overlays") or ()]
+    overlay = data.get("overlay")
+    if isinstance(overlay, dict):
+        data["overlay"] = {**overlay, "copies": [{k: v for k, v in c.items() if k != "time"} if isinstance(c, dict) else c
+                                                 for c in overlay.get("copies") or ()]}
     return data
 
 
@@ -230,9 +234,16 @@ class MainWindow(QWidget):
         self.dashboard = DashboardPage(show, sources=sources)
         self.dashboard.send_requested.connect(lambda input_id, cut: self.engine.submit(SendToBase(input_id, cut=cut)))
         self.dashboard.clear_base_requested.connect(lambda cut: self.engine.submit(ClearBase(cut=cut)))
-        self.dashboard.overlay_requested.connect(lambda input_id, slot: self.engine.submit(SendToOverlay(slot, input_id)))
-        self.dashboard.overlay_switched.connect(self._overlay_switched)
-        self.dashboard.overlay_opacity.connect(lambda slot, level: self._locked or self.engine.submit(SetOverlayOpacity(slot, level)))
+        self.dashboard.overlay_pressed.connect(lambda input_id, tag: self._locked or self.engine.submit(SendToOverlay(input_id, tag=tag)))
+        # (letting go of a held Send to Overlay always clears its copy, so a flash never sticks)
+        self.dashboard.overlay_held.connect(lambda _input_id, tag: self.engine.submit(ClearFromOverlay(tag=tag)))
+        self.dashboard.copy_clear_requested.connect(lambda number: self._locked or self.engine.submit(ClearFromOverlay(copy=number)))
+        self.dashboard.overlay_input_cleared.connect(
+            lambda input_id: self._locked or self.engine.submit(ClearFromOverlay(input_id=input_id)))
+        self.dashboard.overlay_switched.connect(lambda on: self._locked or self.engine.submit(SetOverlayOn(on)))
+        self.dashboard.overlay_cleared.connect(lambda: self._locked or self.engine.submit(ClearOverlay()))
+        self.dashboard.overlay_opacity.connect(lambda level: self._locked or self.engine.submit(SetOverlayOpacity(level)))
+        self.dashboard.reorder_requested.connect(self.move_tile)
         self.dashboard.edit_requested.connect(self.open_editor)
         self.dashboard.new_requested.connect(self.new_input)
         self.dashboard.duplicate_requested.connect(self.duplicate_input)
@@ -437,6 +448,15 @@ class MainWindow(QWidget):
         if inp is None or not name.strip() or name.strip() == inp.name or self.document.read_only:
             return False
         return bool(self.document.apply(update_input(self.document.show, input_id, name=name), f"Rename {inp.name} → {name.strip()}"))
+
+    def move_tile(self, input_id: str, index: int) -> None:
+        """A tile dragged to another place on the Dashboard (index: before the tile that was there; one undo step)."""
+        inp = self.document.show.inputs.get(input_id)
+        if inp is None or self._locked or self.document.read_only:
+            return
+        show = move_input(self.document.show, input_id, index)
+        if [i.id for i in show.ordered_inputs()] != [i.id for i in self.document.show.ordered_inputs()]:
+            self.document.apply(show, f"Move {inp.name}")
 
     def delete_input(self, input_id: str) -> None:
         inp = self.document.show.inputs.get(input_id)
@@ -658,16 +678,6 @@ class MainWindow(QWidget):
         self.engine.submit(ForgetShow(folder))  # (and its variables)
         if self._save_files:
             self._guide_timer.start()  # (the global automations' guide lists the shows)
-
-    def _overlay_switched(self, slot: int, on: bool) -> None:
-        if self._locked:
-            return
-        if not on:
-            self.engine.submit(OverlayOff(slot))
-            return
-        frame = self.last_frame
-        if frame is not None and 1 <= slot <= len(frame.overlays) and frame.overlays[slot - 1].input_id:
-            self.engine.submit(SendToOverlay(slot, frame.overlays[slot - 1].input_id, state="on"))
 
     def current_page(self) -> str:
         current = self.stack.currentWidget()

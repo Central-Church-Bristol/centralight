@@ -1,6 +1,6 @@
 """SourceManager: shares NDI receivers between everything that needs a picture.
 
-Users are named (base, overlay1-4, transition, solo, editor). NDI feeds used by any
+Users are named (base, the Overlay, transition, solo, editor). NDI feeds used by any
 input stay connected all the time (in practice just Media Background Pane), so sending
 an input is instant. Other feeds stop 10 seconds after their last user lets go.
 """

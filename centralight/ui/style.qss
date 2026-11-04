@@ -242,6 +242,39 @@ QToolButton#TileIcon {
     border-radius: 6px;
     padding: 1px;
 }
+/* M14: a tile's Send to Base and Send to Overlay (the overlay colour, lime) */
+QPushButton#TileSend {
+    background: transparent;
+    color: @text_2;
+    border: 1px solid @border;
+    border-radius: 6px;
+    padding: 3px 6px;
+    font-size: 12px;
+    font-weight: 500;
+}
+QPushButton#TileSend[target="base"]:hover {
+    color: @text;
+    border-color: @live;
+}
+QPushButton#TileSend[target="overlay"] {
+    color: @overlay;
+    border-color: #4E5C2E;
+}
+QPushButton#TileSend[target="overlay"]:hover {
+    border-color: @overlay;
+}
+QPushButton#TileSend:pressed {
+    background: @accent_soft;
+}
+QPushButton#TileSend[target="overlay"]:pressed {
+    background: @overlay;
+    color: #1B2600;
+    border-color: @overlay;
+}
+QPushButton#TileSend:disabled {
+    color: @text_3;
+    border-color: @border;
+}
 QToolButton#ToolIcon {
     background: transparent;
     border: 1px solid @border;

@@ -31,7 +31,7 @@ from .log import log_info
 from .model import Automation, GlobalVar, Input, Show, slugify
 from .show_io import freeze, safe_relative_file, thaw
 
-INPUT_ACTIONS = ("base", "overlay")  # automation actions that name an input
+INPUT_ACTIONS = ("base", "overlay", "overlay_clear")  # automation actions that name an input
 COPIED_FOLDERS = ("media/", "paint/", "masks/")  # the files an input's elements point at
 
 

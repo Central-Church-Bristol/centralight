@@ -4,18 +4,22 @@ A tile shows a mini light map (the live colours while the input is on Base, othe
 the colours it showed last time), its name, and small icons for timed, sound-driven and
 AI-made inputs. A coral border means it's on Base.
 
-Click: send to Base with its transition. Shift-click: cut. Right-click: more.
+Its buttons (M14): Send to Base, and Send to Overlay (each press a new copy on top; held
+down, the copy shows only while it's held). A red box under them for each copy on the
+Overlay: click one to clear that copy. Clicking the tile itself does nothing; dragging it
+moves it. Right-click: more.
 Tiles are laid out in rows of equal width that wrap like words, and the grid scrolls
 instead of squashing them.
 """
 
 from __future__ import annotations
 
+import itertools
 import time
 from collections.abc import Mapping
 
-from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import QMimeData, QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QDrag, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -34,9 +38,10 @@ from ..model import Input, Show
 from ..output import RGB
 from . import icons, theme
 from .light_view import rgb_colour
-from .widgets import DOUBLE_CLICK_GUARD_S, ElidedLabel, discard, set_property
+from .widgets import ElidedLabel, discard, set_property
 
-TILE_MIN = 200  # wide enough for the bottom row: overlays 1-4, pencil and sparkle
+TILE_MIN = 228  # wide enough for Send to Base and Send to Overlay side by side
+TILE_MIME = "application/x-centralight-input"  # a tile being dragged (its input's id)
 TILE_MAX = 270
 
 
@@ -112,35 +117,158 @@ class MiniLightMap(QWidget):
         painter.end()
 
 
+HOLD_S = 0.5  # seconds: Send to Overlay held longer than this is a flash (its copy clears when it's let go)
+COPY_BOX_HEIGHT = 10
+_tags = itertools.count(1)
+
+
+class HoldButton(QPushButton):
+    """A button that acts as soon as it's pressed (went_down), then says how long it was held when the mouse button
+    comes up, wherever the mouse is by then (let_go). The keyboard (Space) clicks it as usual (clicked)."""
+
+    went_down = Signal()
+    let_go = Signal(float)  # seconds held
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self._down_at: float | None = None
+        self._enabled_after = True  # (it stays usable while it's held, so letting go always arrives)
+
+    def is_held(self) -> bool:
+        return self._down_at is not None
+
+    def set_usable(self, usable: bool) -> None:
+        """Enabled or not; while it's held, that waits for it to be let go."""
+        self._enabled_after = usable
+        if self._down_at is None:
+            self.setEnabled(usable)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
+            self._down_at = time.monotonic()
+            self.setDown(True)
+            self.went_down.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._down_at is not None:
+            event.accept()  # (still held, even outside the button)
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self._down_at is not None:
+            held = time.monotonic() - self._down_at
+            self._down_at = None
+            self.setDown(False)
+            self.setEnabled(self._enabled_after)
+            self.let_go.emit(held)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class CopyBoxes(QWidget):
+    """A tile's copies on the Overlay (M14): a red box for each, a quarter of the tile wide, oldest on the left. A
+    timed copy's box fills as its timeline plays; an infinite one's is full. Clicking a box clears that copy."""
+
+    clear_requested = Signal(int)  # copy number
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._copies: tuple[tuple[int, float | None], ...] = ()  # (number, progress)
+        self._dim = False
+        self.setFixedHeight(COPY_BOX_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMouseTracking(True)
+
+    def set_copies(self, copies: tuple[tuple[int, float | None], ...], dim: bool = False) -> None:
+        """dim: the Overlay is switched off (its copies are kept, hidden)."""
+        copies = tuple(copies)
+        if copies != self._copies or dim != self._dim:
+            self._copies = copies
+            self._dim = dim
+            self.setCursor(Qt.CursorShape.PointingHandCursor if copies else Qt.CursorShape.ArrowCursor)
+            self.setToolTip("Click a box to clear that copy from the Overlay" if copies else "")
+            self.update()
+
+    def copies(self) -> tuple[tuple[int, float | None], ...]:
+        return self._copies
+
+    def box_rects(self) -> list[QRectF]:
+        gap = 3.0
+        width = (self.width() - gap * 3) / 4
+        return [QRectF(i * (width + gap), 0.0, width, float(self.height())) for i in range(min(4, len(self._copies)))]
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        if not self._copies:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        red = QColor(theme.DANGER)
+        if self._dim:
+            painter.setOpacity(0.45)
+        for rect, (_number, progress) in zip(self.box_rects(), self._copies):
+            box = rect.adjusted(0.5, 0.5, -0.5, -0.5)
+            painter.setPen(QPen(red, 1.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(box, 2.5, 2.5)
+            filled = 1.0 if progress is None else max(0.0, min(1.0, progress))
+            if filled > 0.0:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(red)
+                painter.drawRoundedRect(QRectF(box.left(), box.top(), box.width() * filled, box.height()), 2.5, 2.5)
+        painter.end()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            at = event.position()
+            for rect, (number, _progress) in zip(self.box_rects(), self._copies):
+                if rect.adjusted(-1.5, -3.0, 1.5, 3.0).contains(at):
+                    self.clear_requested.emit(number)
+                    event.accept()
+                    return
+        super().mousePressEvent(event)
+
+
 class InputTile(QFrame):
-    clicked = Signal(str, bool)  # input id, cut (Shift)
+    base_requested = Signal(str)  # input id: Send to Base
+    overlay_pressed = Signal(str, str)  # input id, tag: Send to Overlay pressed (a copy goes on at once)
+    overlay_held = Signal(str, str)  # input id, tag: let go after holding it (that copy clears)
+    copy_clear_requested = Signal(int)  # copy number: its box was clicked
+    drag_requested = Signal(str)  # input id: pressed and moved, to move the tile
     menu_requested = Signal(str, QPoint)  # input id, where (global)
-    overlay_requested = Signal(str, int)  # input id, overlay slot 1-4
     edit_requested = Signal(str)
     ai_requested = Signal(str)  # input id: edit it with AI
 
     def __init__(self, inp: Input, show: Show, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("Tile")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.input = inp
         self.map = MiniLightMap(show)
-        self.overlay_buttons: list[QToolButton] = []
-        self._last_overlay_click: dict[int, float] = {}
-        bottom = QHBoxLayout()
-        bottom.setContentsMargins(0, 0, 0, 0)
-        bottom.setSpacing(3)
-        for slot in range(1, 5):
-            button = QToolButton()
-            button.setObjectName("TileButton")
-            button.setText(str(slot))
-            button.setToolTip(f"Overlay {slot}: put this input on top (click again to take it off)")
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.clicked.connect(lambda _c=False, s=slot: self._overlay_clicked(s))
-            button.setProperty("inSlot", False)
-            bottom.addWidget(button)
-            self.overlay_buttons.append(button)
-        bottom.addStretch(1)
+        self.base_button = QPushButton("Send to Base")
+        self.base_button.setObjectName("TileSend")
+        self.base_button.setProperty("target", "base")
+        self.base_button.setToolTip("Put this input on Base, with its transition")
+        self.base_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.base_button.clicked.connect(lambda: self.base_requested.emit(self.input.id))
+        self.overlay_button = HoldButton("Send to Overlay")
+        self.overlay_button.setObjectName("TileSend")
+        self.overlay_button.setProperty("target", "overlay")
+        self.overlay_button.setToolTip("A copy of this input on top of what's showing (up to 4 at once).\n"
+                                       "Hold it down: the copy shows only while it's held, like a flash button")
+        self.overlay_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.overlay_button.went_down.connect(self._overlay_down)
+        self.overlay_button.let_go.connect(self._overlay_up)
+        self.overlay_button.clicked.connect(lambda: self.overlay_pressed.emit(self.input.id, ""))  # (Space)
+        for button in (self.base_button, self.overlay_button):
+            button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._hold_tag = ""
+        self.boxes = CopyBoxes()
+        self.boxes.clear_requested.connect(self.copy_clear_requested.emit)
         self.edit_button = QToolButton()
         self.edit_button.setObjectName("TileIcon")
         self.edit_button.setIcon(icons.line_icon(icons.draw_pencil, theme.TEXT_2, theme.ACCENT))
@@ -153,9 +281,6 @@ class InputTile(QFrame):
         self.ai_button.setToolTip("Edit with AI: describe a change, and let any AI chat write it")
         self.ai_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.ai_button.clicked.connect(lambda: self.ai_requested.emit(self.input.id))
-        bottom.addWidget(self.edit_button)
-        bottom.addWidget(self.ai_button)
-        self.bottom = bottom
         self.name = ElidedLabel(inp.name)
         self.name.setObjectName("TileName")
         self.badges = QWidget()
@@ -177,34 +302,52 @@ class InputTile(QFrame):
             self._badge_labels[key] = label
         name_row = QHBoxLayout()
         name_row.setContentsMargins(0, 0, 0, 0)
-        name_row.setSpacing(6)
+        name_row.setSpacing(4)
         name_row.addWidget(self.name, 1)
         name_row.addWidget(self.badges)
+        name_row.addSpacing(6)  # (the badges, then the buttons)
+        name_row.addWidget(self.edit_button)
+        name_row.addWidget(self.ai_button)
+        bottom = QHBoxLayout()
+        bottom.setContentsMargins(0, 0, 0, 0)
+        bottom.setSpacing(4)
+        bottom.addWidget(self.base_button, 1)
+        bottom.addWidget(self.overlay_button, 1)
+        self.bottom = bottom
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
         layout.addWidget(self.map)
         layout.addLayout(name_row)
         layout.addLayout(bottom)
+        layout.addWidget(self.boxes)
         # Preferred (not Fixed): the grid decides the width, so tiles fill their columns
         policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         policy.setHeightForWidth(True)
         self.setSizePolicy(policy)
         self.setProperty("onBase", False)
-        self._pressed = False
+        self._press_at: QPoint | None = None
+        self._locked = False
+        self._full = False
         self.set_input(inp)
 
-    def _overlay_clicked(self, slot: int) -> None:
-        now = time.monotonic()
-        if now - self._last_overlay_click.get(slot, -1e9) < DOUBLE_CLICK_GUARD_S:
-            return  # a double-click is one click (the toggle rule would take it straight off again)
-        self._last_overlay_click[slot] = now
-        self.overlay_requested.emit(self.input.id, slot)
+    # ---------------------------------------------------------------- Send to Overlay, click or hold
+
+    def _overlay_down(self) -> None:
+        self._hold_tag = f"{self.input.id}#{next(_tags)}"
+        self.overlay_pressed.emit(self.input.id, self._hold_tag)
+
+    def _overlay_up(self, held: float) -> None:
+        tag, self._hold_tag = self._hold_tag, ""
+        if tag and held >= HOLD_S:
+            self.overlay_held.emit(self.input.id, tag)  # (held: a flash, so its copy clears now)
+
+    # ---------------------------------------------------------------- what it shows
 
     def set_input(self, inp: Input) -> None:
         self.input = inp
         self.name.setText(inp.name)
-        self.setToolTip(f"{inp.name}\nClick: send to Base · Shift-click: cut · Right-click: more")
+        self.setToolTip(f"{inp.name}\nDrag to move it · Right-click: more")
         self._badge_labels["timed"].setVisible(not inp.infinite)
         self._badge_labels["ai"].setVisible(inp.ai)
         self._badge_labels["audio"].setVisible(_uses_audio(inp))
@@ -221,10 +364,27 @@ class InputTile(QFrame):
     def set_on_base(self, on_base: bool) -> None:
         set_property(self, "onBase", on_base)
 
-    def set_overlays(self, slots: set[int]) -> None:
-        """Which overlay slots this input is in (their buttons turn lime)."""
-        for slot, button in enumerate(self.overlay_buttons, start=1):
-            set_property(button, "inSlot", slot in slots)
+    def set_copies(self, copies: tuple[tuple[int, float | None], ...], dim: bool = False) -> None:
+        """Its copies on the Overlay: (number, progress) each. With 4, Send to Overlay waits until one goes."""
+        self.boxes.set_copies(copies, dim)
+        self._full = len(copies) >= 4
+        self._sync_buttons()
+
+    def set_locked(self, locked: bool) -> None:
+        self._locked = locked
+        self.setCursor(Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.OpenHandCursor)
+        self.boxes.setEnabled(not locked)
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        self.base_button.setEnabled(not self._locked)
+        self.overlay_button.set_usable(not self._locked and not self._full)
+        self.overlay_button.setToolTip(
+            "It has 4 copies on the Overlay: clear one (its red box) to send another" if self._full and not self._locked
+            else "A copy of this input on top of what's showing (up to 4 at once).\n"
+                 "Hold it down: the copy shows only while it's held, like a flash button")
+
+    # ---------------------------------------------------------------- size
 
     def hasHeightForWidth(self) -> bool:  # noqa: N802
         return True
@@ -232,10 +392,11 @@ class InputTile(QFrame):
     def heightForWidth(self, width: int) -> int:  # noqa: N802
         margins = self.layout().contentsMargins()
         inner = width - margins.left() - margins.right()
-        name_height = max(self.name.sizeHint().height(), self.badges.sizeHint().height())
-        bottom_height = max(self.edit_button.sizeHint().height(), self.overlay_buttons[0].sizeHint().height())
+        name_height = max(self.name.sizeHint().height(), self.badges.sizeHint().height(), self.edit_button.sizeHint().height())
+        bottom_height = max(self.base_button.sizeHint().height(), self.overlay_button.sizeHint().height())
         spacing = self.layout().spacing()
-        return margins.top() + self.map.heightForWidth(inner) + spacing + name_height + spacing + bottom_height + margins.bottom()
+        return (margins.top() + self.map.heightForWidth(inner) + spacing + name_height + spacing + bottom_height + spacing
+                + COPY_BOX_HEIGHT + margins.bottom())
 
     def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(TILE_MIN, self.heightForWidth(TILE_MIN))
@@ -243,19 +404,27 @@ class InputTile(QFrame):
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return QSize(TILE_MIN, self.heightForWidth(TILE_MIN))
 
+    # ---------------------------------------------------------------- the mouse: clicking does nothing; drag to move
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
-            self._pressed = True
+            self._press_at = event.position().toPoint()
             event.accept()
             return
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if (self._press_at is not None and event.buttons() & Qt.MouseButton.LeftButton and not self._locked
+                and (event.position().toPoint() - self._press_at).manhattanLength() >= QApplication.startDragDistance()):
+            self._press_at = None
+            self.drag_requested.emit(self.input.id)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton and self._pressed:
-            self._pressed = False
-            if self.rect().contains(event.position().toPoint()):
-                cut = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-                self.clicked.emit(self.input.id, cut)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_at = None  # (a click on a tile does nothing now: its buttons send it)
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -400,7 +569,10 @@ class TileGridLayout(QLayout):
 class InputGrid(QWidget):
     send_requested = Signal(str, bool)  # input id, cut
     menu_requested = Signal(str, QPoint)
-    overlay_requested = Signal(str, int)  # input id, slot
+    overlay_pressed = Signal(str, str)  # input id, tag: Send to Overlay
+    overlay_held = Signal(str, str)  # input id, tag: let go after holding it
+    copy_clear_requested = Signal(int)  # copy number
+    reorder_requested = Signal(str, int)  # input id, its new place among the tiles
     edit_requested = Signal(str)
     new_requested = Signal()
     ai_requested = Signal(str)  # input id ("" = a new one)
@@ -415,8 +587,10 @@ class InputGrid(QWidget):
         self.tiles: dict[str, InputTile] = {}
         self._last_colours: dict[str, Mapping[str, RGB]] = {}
         self._base_id = ""
-        self._overlay_ids: tuple[str, ...] = ()
+        self._overlay = None  # the engine's OverlayView: each input's copies there
         self._locked = False
+        self._drop_index: int | None = None  # while a tile is dragged over the grid: where it would go
+        self.setAcceptDrops(True)
         self.new_tile = NewInputTile(self)
         self.new_tile.new_requested.connect(self._new)
         self.new_tile.ai_requested.connect(lambda: self._locked or self.ai_requested.emit(""))
@@ -445,10 +619,14 @@ class InputGrid(QWidget):
             tile = self.tiles.get(inp.id)
             if tile is None:
                 tile = InputTile(inp, show, self)
-                tile.clicked.connect(self._clicked)
+                tile.base_requested.connect(lambda input_id: self._clicked(input_id, False))
+                tile.overlay_pressed.connect(lambda input_id, tag: self._locked or self.overlay_pressed.emit(input_id, tag))
+                tile.overlay_held.connect(self.overlay_held.emit)  # (letting go always counts, so a flash never sticks)
+                tile.copy_clear_requested.connect(lambda number: self._locked or self.copy_clear_requested.emit(number))
+                tile.drag_requested.connect(self._drag)
                 tile.menu_requested.connect(self.menu_requested.emit)
-                tile.overlay_requested.connect(self._overlay)
                 tile.edit_requested.connect(self.edit_requested.emit)
+                tile.set_locked(self._locked)
                 tile.ai_requested.connect(lambda input_id: self._locked or self.ai_requested.emit(input_id))
                 tile.set_problem(self._problems.get(inp.id, ""))
                 self.tiles[inp.id] = tile
@@ -465,7 +643,7 @@ class InputGrid(QWidget):
         self._layout.addWidget(self.new_tile)
         self.new_tile.show()
         self.updateGeometry()
-        self.set_live(self._base_id, self._overlay_ids, {})
+        self.set_live(self._base_id, self._overlay, {})
 
     def set_problems(self, problems: dict) -> None:
         """Input files that can't be used (from the folder watcher): their tiles get a red badge."""
@@ -476,35 +654,113 @@ class InputGrid(QWidget):
     def set_locked(self, locked: bool) -> None:
         self._locked = locked
         for tile in self.tiles.values():
-            tile.setCursor(Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor)
-            for button in tile.overlay_buttons:
-                button.setEnabled(not locked)
+            tile.set_locked(locked)
         self.new_tile.setEnabled(not locked)
 
-    def set_live(self, base_id: str, overlay_ids: tuple[str, ...], colours: Mapping[str, RGB]) -> None:
-        """Mark the tile on Base (coral) and the overlay slots each input is in (lime).
-        The Base tile shows the live colours; the others keep their preview."""
+    def set_live(self, base_id: str, overlay, colours: Mapping[str, RGB]) -> None:
+        """Mark the tile on Base (coral), and each tile's copies on the Overlay (overlay: the engine's OverlayView, or
+        None). The Base tile shows the live colours; the others keep their preview."""
         self._base_id = base_id
-        self._overlay_ids = tuple(overlay_ids)
+        self._overlay = overlay
         if base_id and colours:
             self._last_colours[base_id] = colours
+        copies = tuple(getattr(overlay, "copies", ()) or ())
+        dim = overlay is not None and not overlay.on
         for input_id, tile in self.tiles.items():
             live = input_id == base_id
             tile.set_on_base(live)
-            tile.set_overlays({slot for slot, other in enumerate(self._overlay_ids, start=1) if other == input_id})
+            tile.set_copies(tuple((c.number, c.progress) for c in copies if c.input_id == input_id), dim)
             tile.map.set_colours(self._last_colours.get(input_id, {}), live)
 
     def set_playing(self, playing: Mapping[str, float]) -> None:
-        """Timed inputs on Base or in an overlay: a progress bar on their tiles."""
+        """Timed inputs on Base or the Overlay: a progress bar on their tiles."""
         for input_id, tile in self.tiles.items():
             tile.map.set_progress(playing.get(input_id))
 
     def set_base(self, base_id: str, colours: Mapping[str, RGB]) -> None:
-        self.set_live(base_id, self._overlay_ids, colours)
+        self.set_live(base_id, self._overlay, colours)
 
-    def _overlay(self, input_id: str, slot: int) -> None:
-        if not self._locked:
-            self.overlay_requested.emit(input_id, slot)
+    # ---------------------------------------------------------------- dragging a tile to move it
+
+    def _drag(self, input_id: str) -> None:
+        tile = self.tiles.get(input_id)
+        if tile is None or self._locked:
+            return
+        mime = QMimeData()
+        mime.setData(TILE_MIME, input_id.encode("utf-8"))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        picture = tile.grab()
+        drag.setPixmap(picture.scaledToWidth(max(1, picture.width() * 2 // 3), Qt.TransformationMode.SmoothTransformation))
+        drag.setHotSpot(QPoint(drag.pixmap().width() // 2, drag.pixmap().height() // 2))
+        drag.exec(Qt.DropAction.MoveAction)
+        self._set_drop_index(None)
+
+    def drop_index(self, at: QPoint) -> int:
+        """Where a tile dropped at this point goes among the tiles (0 = first)."""
+        ordered = [self.tiles[i] for i in (inp.id for inp in self._show.ordered_inputs()) if i in self.tiles]
+        for index, tile in enumerate(ordered):
+            rect = tile.geometry()
+            same_row = rect.top() - self._layout.spacing() / 2 <= at.y() < rect.bottom() + self._layout.spacing() / 2
+            if (same_row and at.x() < rect.center().x()) or at.y() < rect.top() - self._layout.spacing() / 2:
+                return index
+        return len(ordered)
+
+    def _set_drop_index(self, index: int | None) -> None:
+        if index != self._drop_index:
+            self._drop_index = index
+            self.update()
+
+    @staticmethod
+    def _dragged_id(event) -> str:
+        mime = event.mimeData()
+        return bytes(mime.data(TILE_MIME)).decode("utf-8", "replace") if mime is not None and mime.hasFormat(TILE_MIME) else ""
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if self._dragged_id(event) in self.tiles and not self._locked:
+            event.acceptProposedAction()
+            self._set_drop_index(self.drop_index(event.position().toPoint()))
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if self._dragged_id(event) in self.tiles and not self._locked:
+            event.acceptProposedAction()
+            self._set_drop_index(self.drop_index(event.position().toPoint()))
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        self._set_drop_index(None)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        input_id = self._dragged_id(event)
+        index = self.drop_index(event.position().toPoint())
+        self._set_drop_index(None)
+        if input_id in self.tiles and not self._locked:
+            event.acceptProposedAction()
+            self.reorder_requested.emit(input_id, index)
+        else:
+            event.ignore()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if self._drop_index is None:
+            return
+        ordered = [self.tiles[i] for i in (inp.id for inp in self._show.ordered_inputs()) if i in self.tiles]
+        if not ordered:
+            return
+        if self._drop_index < len(ordered):
+            rect = ordered[self._drop_index].geometry()
+            x = rect.left() - self._layout.spacing() / 2
+        else:
+            rect = ordered[-1].geometry()
+            x = rect.right() + self._layout.spacing() / 2
+        painter = QPainter(self)
+        painter.setPen(QPen(QColor(theme.ACCENT), 3.0))
+        painter.drawLine(QPoint(round(x), rect.top()), QPoint(round(x), rect.bottom()))
+        painter.end()
 
     def _new(self) -> None:
         if not self._locked:

@@ -8,9 +8,15 @@ in a browser for a page listing every URL, with big buttons (it doubles as a pho
     /api/input/<id>                        send to Base with its own transition
                                            (?transition=fade&duration=2 to choose another)
     /api/input/<id>/cut                    straight to Base, no transition
-    /api/input/<id>/overlay/<1-4>          toggle it in an overlay (?state=on or off to be exact)
-    /api/overlay/<1-4>/off                 switch an overlay off
-    /api/overlay/<1-4>/opacity?value=0.5   (&fade=1)
+    /api/input/<id>/overlay                send a copy of it to the Overlay, on top of what's there (up to 4
+                                           copies of one input at once)
+    /api/input/<id>/overlay/clear          clear its copies from the Overlay
+    /api/overlay/clear                     clear the Overlay (every copy)
+    /api/overlay/on, /off, /toggle         the Overlay's switch (off hides it without emptying it)
+    /api/overlay/opacity?value=0.5         (&fade=1)
+                                           (URLs from before, with Overlays 1-4, still work: /api/input/<id>/
+                                           overlay/2 sends it, or clears it if it's there; ?state=on / off;
+                                           /api/overlay/2/off clears the Overlay)
     /api/var/<name>?value=0.7              a show variable: numbers; colours as FF6F59;
                                            switches on / off / toggle
     /api/master?level=0.8                  (&fade=2)
@@ -56,8 +62,9 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .commands import (
     BLACK_FADE,
+    ClearFromOverlay,
+    ClearOverlay,
     CountdownAction,
-    OverlayOff,
     RequestShow,
     RunAutomation,
     SendToBase,
@@ -65,6 +72,7 @@ from .commands import (
     SetHouse,
     SetIdentify,
     SetMaster,
+    SetOverlayOn,
     SetOverlayOpacity,
     SetAutomationEnabled,
     SetAutomationsPaused,
@@ -81,7 +89,7 @@ from .variables import coerce_global
 DEFAULT_PORT = 8746
 SHOWS_FRESH = 3.0  # seconds the list of shows is kept before it's read again
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
-OVERLAYS = (1, 2, 3, 4)
+OVERLAYS = (1, 2, 3, 4)  # (the old Overlay numbers, still understood in URLs)
 MAX_BODY = 64_000
 
 
@@ -166,6 +174,12 @@ def _overlay(raw: str) -> int:
     raise BadRequest(404, "overlays are numbered 1 to 4")
 
 
+def _opacity(params: dict[str, str]) -> SetOverlayOpacity:
+    fade = _fade(params)
+    level = _number(params, "value")
+    return SetOverlayOpacity(level) if fade is None else SetOverlayOpacity(level, fade)
+
+
 def _on_off(word: str) -> bool | None:
     """True / False, or None for toggle."""
     word = word.lower()
@@ -212,19 +226,32 @@ def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any
             return SendToBase(input_id, transition=transition)
         if rest[1:] == ["cut"]:
             return SendToBase(input_id, cut=True)
-        if len(rest) == 3 and rest[1] == "overlay":
+        if rest[1:] == ["overlay"]:
+            return SendToOverlay(input_id)
+        if rest[1:] == ["overlay", "clear"]:
+            return ClearFromOverlay(input_id=input_id)
+        if len(rest) == 3 and rest[1] == "overlay":  # (a URL from when there were Overlays 1-4)
+            _overlay(rest[2])
             state = params.get("state")
             if state not in (None, "on", "off"):
                 raise BadRequest(400, "state must be on or off (or leave it out to toggle)")
-            return SendToOverlay(_overlay(rest[2]), input_id, state)
-    elif head == "overlay" and len(rest) == 2:
-        slot = _overlay(rest[0])
+            if state == "off":
+                return ClearFromOverlay(input_id=input_id)
+            return SendToOverlay(input_id, toggle=state is None, once=state == "on")
+    elif head == "overlay" and len(rest) == 1:
+        if rest[0] == "clear":
+            return ClearOverlay()
+        if rest[0] in ("on", "off", "toggle"):
+            return SetOverlayOn(_on_off(rest[0]))
+        if rest[0] == "opacity":
+            return _opacity(params)
+        raise BadRequest(404, "use /api/overlay/clear, /on, /off, /toggle or /opacity?value=0.5")
+    elif head == "overlay" and len(rest) == 2:  # (URLs from when there were Overlays 1-4)
+        _overlay(rest[0])
         if rest[1] == "off":
-            return OverlayOff(slot)
+            return ClearOverlay()
         if rest[1] == "opacity":
-            fade = _fade(params)
-            level = _number(params, "value")
-            return SetOverlayOpacity(slot, level) if fade is None else SetOverlayOpacity(slot, level, fade)
+            return _opacity(params)
     elif head == "var" and len(rest) == 1:
         name = rest[0]
         var = next((g for g in show.globals if g.name == name), None)
@@ -301,9 +328,18 @@ def command_from_json(payload: Any, show: Show, frame: Any = None, black_fade: f
         if op == "cut":
             parts.append("cut")
         elif op == "overlay":
-            parts += ["overlay", str(payload.get("slot", ""))]
-    elif op in ("overlay_off", "overlay_opacity"):
-        parts = ["overlay", str(payload.get("slot", "")), "off" if op == "overlay_off" else "opacity"]
+            parts.append("overlay")
+            if payload.get("slot") is not None:  # (from when there were Overlays 1-4)
+                parts.append(str(payload["slot"]))
+    elif op == "overlay_clear":  # {"op": "overlay_clear", "id": optional: that input's copies, else every copy}
+        parts = ["input", str(payload["id"]), "overlay", "clear"] if payload.get("id") else ["overlay", "clear"]
+    elif op == "overlay_switch":  # {"op": "overlay_switch", "state": "on" | "off" | "toggle"}
+        parts = ["overlay", str(payload.get("state", "toggle"))]
+        params.pop("state", None)
+    elif op == "overlay_off":  # (from when there were Overlays 1-4: cleared the overlay)
+        parts = ["overlay", "clear"]
+    elif op == "overlay_opacity":
+        parts = ["overlay", "opacity"]
     elif op == "var":
         parts = ["var", str(payload.get("name", ""))]
     elif op == "master":
@@ -364,8 +400,10 @@ def state_of(engine: Any, shows: list[ShowInfo] | None = None) -> dict[str, Any]
     if frame is not None:
         data.update({
             "base": {"id": frame.base_id, "name": frame.base, "progress": frame.base_progress},
-            "overlays": [{"slot": n, "id": o.input_id, "name": o.name, "on": o.on, "opacity": round(o.opacity, 3)}
-                         for n, o in enumerate(frame.overlays, start=1)],
+            "overlay": {"on": frame.overlay.on, "opacity": round(frame.overlay.opacity, 3),
+                        "copies": [{"copy": c.number, "id": c.input_id, "name": c.name,
+                                    "progress": None if c.progress is None else round(c.progress, 3)}
+                                   for c in frame.overlay.copies]},
             "master": round(frame.master, 3),
             "colour_black": frame.colour_black,
             "levels": {fid: {"level": round(h.level, 3), "on": h.on} for fid, h in frame.house.items()},
@@ -603,7 +641,7 @@ class RemoteServer:
         base = f"{self.base_url()}/api/input/{quote(input_id)}"
         key = f"?key={self.key}" if self.lan and self.key else ""
         urls = [("Send to Base", base + key), ("Cut to Base", base + "/cut" + key)]
-        urls += [(f"Overlay {n} on / off", f"{base}/overlay/{n}{key}") for n in OVERLAYS]
+        urls += [("Send to Overlay", f"{base}/overlay{key}"), ("Clear from Overlay", f"{base}/overlay/clear{key}")]
         return urls
 
 
@@ -623,11 +661,11 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
     rows = []
     for inp in show.ordered_inputs():
         path = f"/api/input/{quote(inp.id)}"
-        overlays = "".join(button(str(n), f"{path}/overlay/{n}", "small") for n in OVERLAYS)
         rows.append(
             f'<div class="tile" data-id="{esc(inp.id)}" style="--tag:{esc(inp.colour)}">'
             f'{button(inp.name, path, "big")}<div class="row">{button("Cut", path + "/cut", "small")}'
-            f'<span class="label">Overlay</span>{overlays}</div></div>'
+            f'{button("Overlay", path + "/overlay", "small overlay")}'
+            f'{button("Clear", path + "/overlay/clear", "small clear")}</div></div>'
         )
     variables = []
     for var in show.globals:
@@ -656,10 +694,11 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
         ("Send an input to Base", "/api/input/<id>"),
         ("…with another transition", "/api/input/<id>?transition=fade&duration=2"),
         ("Cut an input to Base", "/api/input/<id>/cut"),
-        ("Overlay on / off", "/api/input/<id>/overlay/1"),
-        ("Overlay exactly on (or off)", "/api/input/<id>/overlay/1?state=on"),
-        ("Overlay off", "/api/overlay/1/off"),
-        ("Overlay opacity", "/api/overlay/1/opacity?value=0.5"),
+        ("Send an input to the Overlay (a copy on top)", "/api/input/<id>/overlay"),
+        ("Clear an input from the Overlay", "/api/input/<id>/overlay/clear"),
+        ("Clear the Overlay", "/api/overlay/clear"),
+        ("The Overlay's switch", "/api/overlay/toggle  (or /on, /off: off hides it without emptying it)"),
+        ("Overlay opacity", "/api/overlay/opacity?value=0.5"),
         ("Set a variable", "/api/var/<name>?value=0.7  (colours: FF6F59, switches: on / off / toggle)"),
         ("Master", "/api/master?level=0.8&fade=2"),
         ("House light level", "/api/house/<light>?level=0.4&fade=3"),
@@ -725,6 +764,8 @@ button:active {{ background: var(--accent); color: #06202E; }}
 button.big {{ width: 100%; min-height: 64px; font-size: 17px; font-weight: 600; }}
 button.small {{ min-width: 38px; min-height: 34px; padding: 0 8px; }}
 button.on {{ background: var(--lime); color: #1B2600; }}
+button.overlay {{ border-color: var(--lime); }}
+button.clear {{ border-color: var(--red); color: var(--red); }}
 .row {{ display: flex; gap: 4px; margin-top: 6px; align-items: center; flex-wrap: wrap; }}
 .label {{ color: var(--dim); font-size: 12px; margin: 0 2px 0 6px; }}
 .vars {{ padding: 0 16px; display: grid; gap: 8px; }}
@@ -762,6 +803,9 @@ p {{ margin: 8px 16px; color: var(--dim); }}
 <div id="notes" class="notes">{notes}</div>
 <h2>Inputs: tap to send to Base</h2>
 <div class="grid">{tiles}</div>
+<div class="row" style="padding: 0 16px"><span class="label">The Overlay</span>
+<button class="small" data-path="/api/overlay/toggle" title="On / off: off hides it without emptying it">On / off</button>
+<button class="small clear" data-path="/api/overlay/clear">Clear all</button></div>
 <h2>Variables</h2><div class="vars">{variables}</div>
 <h2>House lights</h2><div class="vars">{house}</div>
 <h2>Stream Deck URLs</h2>
@@ -836,11 +880,11 @@ async function refresh() {{
     if (notes.textContent !== (state.notes || "")) notes.textContent = state.notes || "";  // (changed in CentraLight)
     document.getElementById("status").textContent = "Base: " + state.base.name;
     document.querySelectorAll(".tile").forEach(t => t.classList.toggle("base", t.dataset.id === state.base.id));
-    document.querySelectorAll(".tile").forEach(t => t.querySelectorAll(".row button[data-path*='/overlay/']").forEach(b => {{
-      const slot = Number(b.textContent);
-      const o = state.overlays[slot - 1];
-      b.classList.toggle("on", !!o && o.on && o.id === t.dataset.id);
-    }}));
+    document.querySelectorAll(".tile").forEach(t => {{  // (the Overlay button lights up while it has copies there)
+      const copies = state.overlay.copies.filter(c => c.id === t.dataset.id).length;
+      const send = t.querySelector("button.overlay");
+      if (send) {{ send.classList.toggle("on", copies > 0 && state.overlay.on); send.textContent = copies ? "Overlay ×" + copies : "Overlay"; }}
+    }});
   }} catch (e) {{ document.getElementById("status").textContent = "Can't reach CentraLight"; }}
 }}
 refresh(); setInterval(refresh, 1000);

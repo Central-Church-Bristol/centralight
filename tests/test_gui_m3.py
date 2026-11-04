@@ -248,7 +248,7 @@ class HotkeyAndUrlTests(M3WindowTestCase):
         text = window.editor_page.details.copy_urls()
         self.assertEqual(QGuiApplication.clipboard().text(), text)
         self.assertIn("http://127.0.0.1:8746/api/input/warm-white", text)
-        self.assertIn("/api/input/warm-white/overlay/4", text)
+        self.assertIn("/api/input/warm-white/overlay/clear", text)  # (M14: Send to Overlay and Clear from Overlay)
 
 
 class RemoteInTheWindowTests(M3WindowTestCase):

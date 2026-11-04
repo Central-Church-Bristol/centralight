@@ -260,19 +260,19 @@ class AutomationReviewTests(AutomationEngineTestCase):
 
     def test_delayed_actions_dont_outlive_the_match(self) -> None:
         later = automation("later", [{"type": "input_live", "input": "warm-welcome", "where": "base"}],
-                           [{"do": "overlay", "input": "ping", "slot": 1, "state": "on", "delay": 5}],
-                           on_end=[{"do": "overlay_off", "slot": 1}])
+                           [{"do": "overlay", "input": "ping", "delay": 5}],
+                           on_end=[{"do": "overlay_clear_all"}])
         self.make(_dt(2026, 11, 9, 12, 0), [later])
         self.engine.submit(SendToBase("warm-welcome", cut=True))
         self.run_until(_dt(2026, 11, 9, 12, 0, 2), step=0.5)
         self.engine.submit(SendToBase("evening", cut=True))  # moved on after 2 s
         self.run_until(_dt(2026, 11, 9, 12, 0, 10), step=0.5)
-        self.assertFalse(self.engine.frames.get().overlays[0].on)  # the overlay never came on
+        self.assertEqual(self.engine.frames.get().overlay.copies, ())  # the Overlay never got it
 
     def test_music_with_gaps_doesnt_trip_the_loop_guard(self) -> None:
         loud = Automation("loud", "Loud", True, "all", freeze([{"type": "audio", "band": "level", "above": 0.5, "for": 5}]),
-                          freeze([{"do": "overlay", "input": "x", "slot": 1, "state": "on"}]),
-                          freeze([{"do": "overlay_off", "slot": 1}]))
+                          freeze([{"do": "overlay", "input": "x"}]),
+                          freeze([{"do": "overlay_clear_all"}]))
         show = show_from_patch().with_automations({"loud": loud}, ("loud",))
         runner = AutomationRunner()
         local = _dt(2026, 11, 8, 10, 0)
@@ -503,28 +503,35 @@ class WindowReviewTests(unittest.TestCase):
         self.assertNotEqual(fader.value(), before)
 
     def test_the_padlock_locks_the_layers_panel(self) -> None:
-        self.engine.submit(SendToOverlay(2, "pillars-purple", state="on"))
+        self.engine.submit(SendToOverlay("pillars-purple"))
         self.engine.settle(0.5)
         self.refresh()
-        row = self.window.dashboard.layer_rows["overlay2"]
+        row = self.window.dashboard.layer_rows["overlay"]
         self.assertTrue(row.switch.isEnabled())
+        self.assertTrue(row.clear_button.isEnabled())
         self.window.set_locked(True)
         self.refresh()
         self.assertFalse(row.switch.isEnabled())
+        self.assertFalse(row.clear_button.isEnabled())
         self.assertFalse(row.opacity.isEnabled())
-        self.window._overlay_switched(2, False)  # even if a click got through
+        self.window.dashboard.overlay_switched.emit(False)  # even if a click got through
+        self.window.dashboard.overlay_cleared.emit()
         self.engine.settle(0.5)
-        self.assertTrue(self.engine.frames.get().overlays[1].on)
+        overlay = self.engine.frames.get().overlay
+        self.assertTrue(overlay.on)
+        self.assertEqual(len(overlay.copies), 1)
         self.window.set_locked(False)
         self.refresh()
         self.assertTrue(row.switch.isEnabled())
 
-    def test_a_double_click_on_an_overlay_button_is_one_click(self) -> None:
+    def test_each_press_of_send_to_overlay_is_a_copy(self) -> None:
+        """M14: a double-click used to be one click (the toggle rule); now each press is a new copy (to the beat)."""
         tile = self.window.dashboard.grid.tiles["pillars-purple"]
-        tile.overlay_buttons[0].click()
-        tile.overlay_buttons[0].click()  # straight after: a double-click
+        for _ in range(2):
+            tile.overlay_button.went_down.emit()
+            tile.overlay_button.let_go.emit(0.05)  # (a quick click: the copy stays)
         self.engine.settle(0.5)
-        self.assertTrue(self.engine.frames.get().overlays[0].on)
+        self.assertEqual(len(self.engine.frames.get().overlay.of("pillars-purple")), 2)
 
     def test_typing_in_a_number_box_while_the_editor_plays(self) -> None:
         from centralight.ui.editor_widgets import NumberField
@@ -679,15 +686,15 @@ class WindowReviewTests2(unittest.TestCase):
         from centralight.live_state import LiveState
 
         self.window._save_files = True
-        a = LiveState(show="x", overlays=[{"input": "pillars-purple", "time": 1.0}, None, None, None])
-        b = LiveState(show="x", overlays=[{"input": "pillars-purple", "time": 2.5}, None, None, None])
+        a = LiveState(show="x", overlay={"on": True, "opacity": 1.0, "copies": [{"input": "pillars-purple", "time": 1.0}]})
+        b = LiveState(show="x", overlay={"on": True, "opacity": 1.0, "copies": [{"input": "pillars-purple", "time": 2.5}]})
         from dataclasses import replace
 
         frame = self.engine.frames.get()
         self.window._saved_live = None
         self.window._save_live_soon(replace(frame, live=a))
         first = self.window._pending_live
-        self.window._saved_live = {**a.to_dict(), "overlays": [{"input": "pillars-purple"}, None, None, None]}
+        self.window._saved_live = {**a.to_dict(), "overlay": {"on": True, "opacity": 1.0, "copies": [{"input": "pillars-purple"}]}}
         self.window._saved_live.pop("saved_at", None)
         if self.window._saved_live.get("base") is not None:
             self.window._saved_live["base"] = {"input": self.window._saved_live["base"].get("input")}
@@ -983,7 +990,7 @@ class RemoteReviewTests(RemoteTestCase):
         self.assertIn(self.key, page)  # the real key is still passed on to the page's buttons
 
     def test_odd_overlay_numbers_and_head(self) -> None:
-        status, _reply = self.request("/api/overlay/%C2%B2/off")  # "²" is a digit to Python, not a number
+        status, _reply = self.request("/api/overlay/%C2%B2/off")  # "²" is a digit to Python, not a number (an old URL)
         self.assertEqual(status, 404)
         before = len(self.engine.commands)
         status, _reply = self.request("/api/blackout/toggle", method="HEAD")
@@ -1206,7 +1213,7 @@ class SecondReviewAutomationTests(AutomationEngineTestCase):
         from dataclasses import replace
 
         music = Automation("music", "Music", True, "all", freeze([{"type": "audio", "band": "level", "above": 0.5, "for": 3}]),
-                           freeze([{"do": "overlay", "input": "x", "slot": 1, "state": "on"}]))
+                           freeze([{"do": "overlay", "input": "x"}]))
         show = show_from_patch().with_automations({"music": music}, ("music",))
         runner = AutomationRunner()
         local = _dt(2026, 11, 8, 12, 0)
@@ -1595,8 +1602,8 @@ class LiveStateSavingTests(unittest.TestCase):
         window._save_files = True
         window._live_path = Path(self._tmp.name) / "live.json"
         frame = self.engine.frames.get()
-        a = LiveState(show="x", overlays=[{"input": "pillars-purple", "time": 1.0}, None, None, None])
-        b = LiveState(show="x", overlays=[{"input": "pillars-purple", "time": 2.5}, None, None, None])
+        a = LiveState(show="x", overlay={"on": True, "opacity": 1.0, "copies": [{"input": "pillars-purple", "time": 1.0}]})
+        b = LiveState(show="x", overlay={"on": True, "opacity": 1.0, "copies": [{"input": "pillars-purple", "time": 2.5}]})
         window._pending_live = a
         window._save_live()
         window._pending_live = None

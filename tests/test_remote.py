@@ -11,17 +11,19 @@ from dataclasses import replace
 from types import MappingProxyType
 
 from centralight.commands import (
-    OverlayOff,
+    ClearFromOverlay,
+    ClearOverlay,
     SendToBase,
     SendToOverlay,
     SetHouse,
     SetIdentify,
     SetMaster,
+    SetOverlayOn,
     SetOverlayOpacity,
     SetVariable,
     ToBlack,
 )
-from centralight.engine import EngineFrame, HouseView, OverlayView
+from centralight.engine import CopyView, EngineFrame, HouseView, OverlayView
 from centralight.model import GlobalVar, Input, Transition
 from centralight.new_show import show_from_patch
 from centralight.remote import RemoteServer, new_key
@@ -35,7 +37,8 @@ class RecordingEngine:
         self.commands: list = []
         self.frames: LatestSlot[EngineFrame] = LatestSlot(EngineFrame(
             base="Warm white", base_id="warm-white",
-            overlays=(OverlayView("pillars-purple", "Pillars purple", True, 1.0, 0.5), OverlayView(), OverlayView(), OverlayView()),
+            overlay=OverlayView(True, 1.0, 0.5, (CopyView(7, "pillars-purple", "Pillars purple"),
+                                                CopyView(9, "christmas", "Candlelight", 0.25))),
             house=MappingProxyType({"dimmer-4": HouseView(0.4, True, 0.4)}),
             variables=MappingProxyType({"speed": 0.5, "accent": (1.0, 0.0, 0.0), "party": 0.0}),
         ))
@@ -90,13 +93,24 @@ class RouteTests(RemoteTestCase):
         self.assertEqual(self.sent("/api/input/warm-white/cut"), SendToBase("warm-white", cut=True))
         self.assertEqual(self.sent("/api/input/warm-white?transition=wipe&duration=2"),
                          SendToBase("warm-white", transition=Transition("wipe", 2.0)))
-        self.assertEqual(self.sent("/api/input/pillars-purple/overlay/2"), SendToOverlay(2, "pillars-purple"))
-        self.assertEqual(self.sent("/api/input/pillars-purple/overlay/2?state=off"), SendToOverlay(2, "pillars-purple", "off"))
+        self.assertEqual(self.sent("/api/input/pillars-purple/overlay"), SendToOverlay("pillars-purple"))
+        self.assertEqual(self.sent("/api/input/pillars-purple/overlay/clear"), ClearFromOverlay(input_id="pillars-purple"))
+
+    def test_old_overlay_urls_keep_working(self) -> None:
+        """Stream Deck keys made before M14 (Overlays 1-4) still do what they did, on the one Overlay."""
+        self.assertEqual(self.sent("/api/input/pillars-purple/overlay/2"), SendToOverlay("pillars-purple", toggle=True))
+        self.assertEqual(self.sent("/api/input/pillars-purple/overlay/2?state=on"), SendToOverlay("pillars-purple", once=True))
+        self.assertEqual(self.sent("/api/input/pillars-purple/overlay/2?state=off"), ClearFromOverlay(input_id="pillars-purple"))
+        self.assertEqual(self.sent("/api/overlay/3/off"), ClearOverlay())
+        self.assertEqual(self.sent("/api/overlay/1/opacity?value=0.25"), SetOverlayOpacity(0.25))
 
     def test_overlays_master_house_black_identify(self) -> None:
-        self.assertEqual(self.sent("/api/overlay/3/off"), OverlayOff(3))
-        self.assertEqual(self.sent("/api/overlay/1/opacity?value=0.25"), SetOverlayOpacity(1, 0.25))
-        self.assertEqual(self.sent("/api/overlay/1/opacity?value=0.25&fade=2"), SetOverlayOpacity(1, 0.25, 2.0))
+        self.assertEqual(self.sent("/api/overlay/clear"), ClearOverlay())
+        self.assertEqual(self.sent("/api/overlay/off"), SetOverlayOn(False))
+        self.assertEqual(self.sent("/api/overlay/on"), SetOverlayOn(True))
+        self.assertEqual(self.sent("/api/overlay/toggle"), SetOverlayOn(None))
+        self.assertEqual(self.sent("/api/overlay/opacity?value=0.25"), SetOverlayOpacity(0.25))
+        self.assertEqual(self.sent("/api/overlay/opacity?value=0.25&fade=2"), SetOverlayOpacity(0.25, 2.0))
         self.assertEqual(self.sent("/api/master?level=0.8&fade=2"), SetMaster(0.8, 2.0))
         self.assertEqual(self.sent("/api/master?level=7"), SetMaster(1.0))  # kept in range
         self.assertEqual(self.sent("/api/house/key-lights?level=0.4&fade=3"), SetHouse("dimmer-4", level=0.4, on=True, fade=3.0))
@@ -154,9 +168,19 @@ class RouteTests(RemoteTestCase):
         self.assertEqual(self.engine.commands, [])
 
     def test_post_command(self) -> None:
-        status, reply = self.request("/api/command", "POST", {"op": "overlay", "id": "warm-white", "slot": 4, "state": "on"})
+        status, reply = self.request("/api/command", "POST", {"op": "overlay", "id": "warm-white"})
         self.assertEqual((status, reply), (200, {"ok": True}))
-        self.assertEqual(self.engine.commands[-1], SendToOverlay(4, "warm-white", "on"))
+        self.assertEqual(self.engine.commands[-1], SendToOverlay("warm-white"))
+        self.request("/api/command", "POST", {"op": "overlay", "id": "warm-white", "slot": 4, "state": "on"})  # (before M14)
+        self.assertEqual(self.engine.commands[-1], SendToOverlay("warm-white", once=True))
+        self.request("/api/command", "POST", {"op": "overlay_clear", "id": "warm-white"})
+        self.assertEqual(self.engine.commands[-1], ClearFromOverlay(input_id="warm-white"))
+        self.request("/api/command", "POST", {"op": "overlay_clear"})
+        self.assertEqual(self.engine.commands[-1], ClearOverlay())
+        self.request("/api/command", "POST", {"op": "overlay_switch", "state": "off"})
+        self.assertEqual(self.engine.commands[-1], SetOverlayOn(False))
+        self.request("/api/command", "POST", {"op": "overlay_opacity", "value": 0.5})
+        self.assertEqual(self.engine.commands[-1], SetOverlayOpacity(0.5))
         self.request("/api/command", "POST", {"op": "var", "name": "speed", "value": 1.5})
         self.assertEqual(self.engine.commands[-1], SetVariable("speed", "1.5"))
         self.request("/api/command", "POST", {"op": "house", "light": "key-lights", "state": "toggle"})
@@ -168,7 +192,9 @@ class RouteTests(RemoteTestCase):
         status, state = self.request("/api/state")
         self.assertEqual(status, 200)
         self.assertEqual(state["base"]["id"], "warm-white")
-        self.assertEqual(state["overlays"][0], {"slot": 1, "id": "pillars-purple", "name": "Pillars purple", "on": True, "opacity": 0.5})
+        self.assertEqual(state["overlay"], {"on": True, "opacity": 0.5, "copies": [
+            {"copy": 7, "id": "pillars-purple", "name": "Pillars purple", "progress": None},
+            {"copy": 9, "id": "christmas", "name": "Candlelight", "progress": 0.25}]})
         self.assertEqual(state["variables"], {"speed": 0.5, "accent": "#FF0000", "party": 0.0})
         self.assertIn({"id": "warm-white", "name": "Warm white"}, state["inputs"])
 
@@ -184,7 +210,8 @@ class RouteTests(RemoteTestCase):
     def test_urls_for_an_input(self) -> None:
         urls = dict(self.server.urls_for_input("warm-white"))
         self.assertEqual(urls["Send to Base"], f"http://127.0.0.1:{self.server.port}/api/input/warm-white")
-        self.assertEqual(urls["Overlay 2 on / off"], f"http://127.0.0.1:{self.server.port}/api/input/warm-white/overlay/2")
+        self.assertEqual(urls["Send to Overlay"], f"http://127.0.0.1:{self.server.port}/api/input/warm-white/overlay")
+        self.assertEqual(urls["Clear from Overlay"], f"http://127.0.0.1:{self.server.port}/api/input/warm-white/overlay/clear")
 
 
 class SafetyTests(RemoteTestCase):

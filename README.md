@@ -50,7 +50,8 @@ Some useful ones:
 |---|---|
 | Send an input to Base | `/api/input/warm-white` (add `?transition=fade&duration=2` for another transition) |
 | Cut to it | `/api/input/warm-white/cut` |
-| Overlay 1 on / off | `/api/input/pillars-purple/overlay/1` |
+| Send to the Overlay (a copy on top) | `/api/input/pillars-purple/overlay`; clear its copies: `/api/input/pillars-purple/overlay/clear` |
+| The Overlay | `/api/overlay/clear` (Clear all), `/api/overlay/toggle` (or `/on`, `/off`: off hides it without emptying it) |
 | Set a show variable | `/api/var/speed?value=0.7` (colours: `?value=FF6F59`; switches: `on`, `off`, `toggle`) |
 | Key lights | `/api/house/key-lights?level=0.6&fade=3`, `/api/house/key-lights/toggle` |
 | Master, Cut / Fade to black | `/api/master?level=0.8`, `/api/black/cut`, `/api/black/fade` (`?all=1`: the Festoon and Key lights too; `?seconds=2`, or else the time in Settings) |

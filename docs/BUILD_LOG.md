@@ -36,6 +36,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | A 3-hour soak of M13 (show loads, a linked video replaced while it plays, countdowns) | **done** (4 Nov, 04:16; 90 loads, no errors; it found a video cache with no limit: fixed, 806 tests pass twice) |
 | M14, your nine changes after the rig test (4 Nov), in a separate copy of the code: | |
 | — 3 tick boxes, 1 rename, 2 Editor opens paused, 7 Delete removes a shape | **done** (4 Nov, 22:15) |
+| — 4 one Overlay (copies, red boxes, hold for a flash, drag tiles to move them) | **done** (4 Nov, 23:30) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -80,6 +81,30 @@ The small ones first (3, 1, 2, 7):
   as Remove on the details panel does (one undo step, "Remove Rectangle S1"). With no shape selected it does
   nothing, it never removes the element (only the timeline's Delete does that), and typing in a box isn't
   affected. Clicking the Selected view gives it the keys.
+
+**4. One Overlay instead of Overlays 1–4.**
+- **Base and the Overlay.** Each Send to Overlay puts a new copy of the input on top of what's already there, so
+  inputs that touch different lights don't cancel each other out, and one input can be sent again and again (to
+  the beat, say). A copy appears with the input's own transition and leaves the same way: when it's cleared, when
+  a held Send to Overlay is let go, and, for a timed input, when its timeline has played. Up to 4 copies of one
+  input at once.
+- **Tiles:** **Send to Base** and **Send to Overlay** (lime) replace the 1–4 buttons; the pencil and the sparkle
+  moved up beside the name. Clicking the tile itself does nothing now, and dragging it moves it (a pale-blue line
+  shows where it'll go; one undo step, "Move Warm white"). Under the buttons, a **red box for each copy** on the
+  Overlay, a quarter of the tile wide: a timed copy's box fills as it plays, an infinite one's is full, and
+  clicking a box clears that copy. With 4 boxes, Send to Overlay greys out until one goes.
+- **Hold Send to Overlay** for a flash: the copy goes on as soon as it's pressed; let go within half a second and
+  it stays (a click), hold it longer and it clears when you let go.
+- **The Overlay row** on the Dashboard: how many copies there are (no input names), **Clear all**, its switch
+  (off hides it without emptying it; sending to it turns it on again) and its opacity. The right-click menu has
+  Send to Overlay and Clear from Overlay.
+- **Automations:** Send to Overlay, Clear from Overlay (that input's copies) and Clear the Overlay. "An input is
+  live … in the Overlay" replaces "in Overlay 2". Older automation files are brought up to date as they're read.
+- **Stream Deck and the phone page:** `/api/input/<id>/overlay` sends a copy, `/overlay/clear` clears its copies;
+  `/api/overlay/clear`, `/api/overlay/on`, `/off`, `/toggle` and `/opacity`. Every URL from before still works
+  (see the decisions). The phone page has Overlay and Clear on each tile, and On / off and Clear all for the
+  Overlay.
+- A live.json from before (Overlays 1–4) comes back as copies on the one Overlay.
 
 ## The overnight soaks (4 Nov, early morning)
 
@@ -1187,6 +1212,29 @@ Problems the tests found and that are fixed:
 
 ## Decisions (made without you, as agreed — easy to change)
 
+- **M14, to check** (the plan's "proposed" points, built as written after you said go, and the choices I made):
+  - **Proposed:** when a copy's box clears, the boxes to its right move left, and the newest copy is on top.
+  - **Proposed:** automations, the Stream Deck and the phone page have Send to Overlay, Clear from Overlay (that
+    input's copies) and Clear the Overlay. Older automations are converted as they're read: "in Overlay n" (on, or
+    on / off) becomes Send to Overlay, "out of Overlay n" becomes Clear from Overlay, "Clear Overlay n" becomes
+    Clear the Overlay, and "is live in Overlay n" becomes "in the Overlay".
+  - **Proposed:** the 1–4 buttons and Shift-click are gone; each input's hotkey still sends it to Base. Cut to Base
+    is on the tile's right-click menu.
+  - **Stream Deck keys from before keep working:** `/api/input/<id>/overlay/2` sends a copy, or clears that input's
+    copies if it has any there (the old on / off); `?state=on` sends one only if there isn't one already;
+    `?state=off` clears its copies; `/api/overlay/2/off` clears the Overlay; `/api/overlay/2/opacity` sets the
+    Overlay's opacity.
+  - **A timed input on the Overlay plays once** and then leaves, whatever its end (Hold, Loop and Stop are for
+    Base), as the plan says it clears itself when it runs out.
+  - **A cleared copy's box goes at once**, while the copy itself fades out the way it came in.
+  - **The Overlay keeps an opacity fader** (one now, as each overlay had), under its switch and Clear all; its switch
+    fades the whole layer over half a second.
+  - **At most 16 copies on the Overlay at once** (all inputs together), so a runaway automation can't slow the
+    lights; a send past that is skipped, with a line in the session log.
+  - **Hold** means longer than half a second, as agreed. **Dragging a tile** starts when the mouse moves with the
+    button down (rather than after a timed hold), so a click stays a click.
+  - **Tiles are a little wider at their smallest** (228 pixels instead of 200) so both Send buttons fit, so a row
+    may hold one tile fewer.
 - **M13 choices** (all easy to change):
   - **The week schedule is a tab beside the automation's editor** (Automation | Week schedule) rather than squeezed
     in beside the Coming up list: at 1280×720 that panel is too short for a week, and the left column too narrow.
@@ -1332,8 +1380,8 @@ Problems the tests found and that are fixed:
   Background Pane's ffmpeg.exe: nothing extra to install, and it still decodes on its own thread, paced by playback.
 - **Keyframes** are for element and shape settings (the timeline and the ◆). House-light levels and local variables
   can change over time with expressions; keyframes for those can come later if you want them.
-- **Stop** at the end of a timed input is a cut (Base goes black, or the overlay shows what's under it). For a
-  fade, give the last element an out transition.
+- **Stop** at the end of a timed input on Base is a cut (Base goes black). For a fade, give the last element an out
+  transition. (On the Overlay, since M14, a timed copy leaves the way it came in once it has played.)
 - **The Editor's playhead waits at the start** when you open an input (your change of 4 Nov; it used to play
   straight away). Press play to see expressions and videos move.
 - **Painting undo** keeps whole pictures (each stroke a new file named after its contents) rather than the plan's
