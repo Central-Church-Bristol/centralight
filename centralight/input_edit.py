@@ -218,8 +218,10 @@ def new_element_id(inp: Input, prefix: str = "E") -> str:
 
 
 def default_element(kind: str, element_id: str, ndi_source: str = "Media Background Pane") -> dict:
+    if kind == "colour":
+        return {"id": element_id, "kind": "colour", "fill": {"type": "colour", "colour": "#86D6FF"}}
     if kind == "paint":
-        return {"id": element_id, "kind": "paint", "fill": {"type": "colour", "colour": "#86D6FF"}}
+        return {"id": element_id, "kind": "paint"}  # (see-through until something's painted on it, M14)
     if kind == "ndi":
         return {"id": element_id, "kind": "ndi", "source": ndi_source}
     if kind in ("image", "video"):
@@ -259,6 +261,91 @@ def add_element(show: Show, input_id: str, track: int, kind: str, ndi_source: st
         tracks[track].append(data)
         tracks[track].sort(key=lambda e: element_span(e, inp)[0])
     return _set_tracks(show, inp, tracks), element_id
+
+
+def background_track(inp: Input, element_id: str) -> tuple[int, list[int]] | None:
+    """Split into Colour + Paint: room for the Colour element directly under the Paint element. Returns (the Colour
+    element's track, the tracks' new order: order[i] is the track that ends up at i), or None if there's no room.
+    The track just below is used when it's free (in a timed input: nothing else there at the element's times);
+    otherwise the Paint element and the tracks above it move up into an empty track, or the tracks below it move
+    down into one, so everything else keeps its order and looks the same."""
+    found = find_element(inp, element_id)
+    if found is None:
+        return None
+    track = found[0]
+    start, end = element_span(inp.tracks[track][found[1]], inp)
+    tracks = [list(inp.tracks[i]) if i < len(inp.tracks) else [] for i in range(TRACK_COUNT)]
+    order = list(range(TRACK_COUNT))
+    below = track - 1
+    if below >= 0 and (not tracks[below] if inp.infinite else all(
+            e_end <= start + 1e-9 or e_start >= end - 1e-9 for e_start, e_end in (element_span(e, inp) for e in tracks[below]))):
+        return below, order
+    for empty in range(track + 1, TRACK_COUNT):  # the Paint element and the tracks above it move up one
+        if not tracks[empty]:
+            return track, order[:track] + [empty] + order[track:empty] + order[empty + 1:]
+    for empty in range(below - 1, -1, -1):  # or the tracks below it move down one
+        if not tracks[empty]:
+            return below, order[:empty] + order[empty + 1:track] + [empty] + order[track:]
+    return None
+
+
+def split_background(show: Show, input_id: str, element_id: str) -> tuple[Show, str]:
+    """An older Paint element's fill (its Background) moved to a Colour element of its own, directly under it, with
+    the same opacity, blend, move / size, mask and timing; the Paint element keeps its painting and shapes. Returns
+    (show, the Colour element's id); the show unchanged and "" if there's no room (see background_track)."""
+    inp = show.inputs[input_id]
+    found = find_element(inp, element_id)
+    if found is None:
+        return show, ""
+    element = thaw(inp.tracks[found[0]][found[1]])
+    room = background_track(inp, element_id)
+    if element.get("kind") != "paint" or not isinstance(element.get("fill"), dict) or room is None:
+        return show, ""
+    colour_track, order = room
+    colour_id = new_element_id(inp)
+    colour = {"id": colour_id, "kind": "colour", "fill": element["fill"]}
+    for key in ("opacity", "blend", "transform", "mask", "start", "end", "in", "out"):
+        if key in element:
+            colour[key] = element[key]
+    tracks = _tracks(inp)
+    tracks[found[0]][found[1]] = {k: v for k, v in element.items() if k != "fill"}
+    tracks = [tracks[i] for i in order]
+    tracks[colour_track].append(colour)
+    tracks[colour_track].sort(key=lambda e: element_span(e, inp)[0])
+    return _set_tracks(show, inp, tracks), colour_id
+
+
+def split_changes(element: Any) -> list[str]:
+    """What Split into Colour + Paint would change on the lights ([]: nothing, it looks exactly the same). The two
+    parts are then see-through and blended one after the other, so they match exactly only at full opacity, with
+    Normal blend, and with a mask that's either on or off at each light."""
+    if not (element.get("shapes") or element.get("strokes")):
+        return []  # (nothing painted over the Background)
+    changes = []
+    opacity = element.get("opacity", 1.0)
+    if hasattr(opacity, "get"):
+        full = not opacity.get("expr") and not is_keyframed(opacity) and _number(opacity.get("value", 1.0)) >= 1.0
+    else:
+        full = _number(opacity) >= 1.0
+    if not full:
+        changes.append("it isn't always at full opacity, so a little of the Background would show through the painting")
+    elif element.get("in") or element.get("out"):
+        changes.append("while it comes in or goes out, a little of the Background would show through the painting")
+    blend = element.get("blend", "normal")
+    if blend in ("add", "multiply", "screen"):
+        changes.append(f"it blends as {blend.title()}, so where the painting covers the Background the two would "
+                       "blend into each other rather than the painting hiding it")
+    mask = element.get("mask")
+    if hasattr(mask, "get") and (mask.get("paint") or mask.get("shapes")):
+        changes.append("where its mask fades softly, the painting would look a little different")
+    return changes
+
+
+def _number(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 1.0  # (a value that isn't a number counts as the default, as it does on the lights)
 
 
 def remove_element(show: Show, input_id: str, element_id: str) -> Show:

@@ -49,7 +49,8 @@ SLIMPAR_105 = 41  # channel of its red
 
 
 def paint(element_id: str, colour: str, start: float | None = None, end: float | None = None, **extra) -> dict:
-    element = {"id": element_id, "kind": "paint", "fill": {"type": "colour", "colour": colour}, **extra}
+    """A block of colour (a Colour element since M14: a Paint element that was only a fill loads as one)."""
+    element = {"id": element_id, "kind": "colour", "fill": {"type": "colour", "colour": colour}, **extra}
     if start is not None:
         element["start"], element["end"] = start, end
     return element

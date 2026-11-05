@@ -15,7 +15,8 @@ ELEMENT_MIME = "application/x-centralight-element"
 TRANSITION_MIME = "application/x-centralight-transition"
 
 ELEMENTS = (
-    ("paint", "Paint", "Colours, gradients and shapes", icons.draw_pencil, True),
+    ("colour", "Colour", "A solid colour or a gradient across the screen", icons.draw_swatch, True),
+    ("paint", "Paint", "Brush painting and shapes (see-through until you paint on it)", icons.draw_pencil, True),
     ("image", "Image", "A picture", icons.draw_plus, True),
     ("video", "Video", "A video file, looping for as long as the element lasts", icons.draw_clock, True),
     ("ndi", "NDI", "A live feed, e.g. Media Background Pane", icons.draw_wave, True),

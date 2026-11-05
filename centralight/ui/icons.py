@@ -416,6 +416,25 @@ def draw_gradient(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) ->
         painter.drawRect(QRectF(r.left() + r.width() * i / 4, r.top(), r.width() / 4 + 0.5, r.height()))
 
 
+def draw_swatch(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) -> None:
+    """A colour swatch (the Colour element): a rounded square, half of it filled corner to corner."""
+    r = _square(rect, 0.16)
+    radius = r.width() * 0.2
+    outline = QPainterPath()
+    outline.addRoundedRect(r, radius, radius)
+    half = QPainterPath()
+    half.moveTo(r.right(), r.top())
+    half.lineTo(r.right(), r.bottom())
+    half.lineTo(r.left(), r.bottom())
+    half.closeSubpath()
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(colour)
+    painter.drawPath(outline.intersected(half))
+    painter.setPen(_pen(colour, r))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawPath(outline)
+
+
 def draw_dropper(painter: QPainter, rect: QRectF, colour: QColor, _on: bool) -> None:
     """An eyedropper."""
     r = _square(rect, 0.16)

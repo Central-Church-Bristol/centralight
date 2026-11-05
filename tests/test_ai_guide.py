@@ -274,7 +274,7 @@ class CheckTests(unittest.TestCase):
         new = check_input_data(data, self.show, existing_id="warm-white")[0]
         changes = describe_changes(old, new)
         self.assertIn("Name: Warm white → Warm pink", changes)
-        self.assertTrue(any(c.startswith("Paint E1: fill") for c in changes))
+        self.assertTrue(any(c.startswith("Colour E1:") and "fill" in c for c in changes), changes)  # (a fill alone: Colour, M14)
 
 
 class RealisticReplyTests(unittest.TestCase):

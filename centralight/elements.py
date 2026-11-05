@@ -4,8 +4,10 @@ lights' own colours are worked out at their dots by light_elements.py, which a c
 per_light set uses instead.
 
 Kinds:
-- "paint": a fill (none, a colour, or a straight / round gradient) plus shapes
-  (rectangles and ellipses with position, size, rotation, softness and colour)
+- "colour": a solid colour, or a straight / round gradient, across the screen (M14)
+- "paint": brush painting and shapes (rectangles and ellipses with position, size, rotation,
+  softness and colour), see-through until something is painted. (An older Paint element can
+  also have a fill underneath, its "Background": a Colour element's settings.)
 - "image": a picture from the show's media folder, filling or fitting the screen
 - "ndi":   a live NDI feed (default "Media Background Pane"), filling or fitting
 - "video": arrives in M5 (draws nothing until then)
@@ -187,13 +189,23 @@ def _fit_of(element: Mapping[str, Any]) -> str:
 # ---------------------------------------------------------------- paint
 
 
-def render_paint(element: Mapping[str, Any], ctx: RenderContext, strokes_layer: np.ndarray | None = None) -> np.ndarray | None:
-    """Fill, then brush strokes, then shapes. strokes_layer: strokes being painted right now (the Editor's live
-    preview), instead of the element's strokes file."""
+def fill_kind(element: Mapping[str, Any]) -> str:
+    """A Colour element's fill (an older Paint element's background): "colour", "linear", "radial" or "none". A Colour
+    element always shows something; a Paint element without a fill is see-through."""
+    fill = element.get("fill")
+    if _is_map(fill):
+        kind = str(fill.get("type", "colour"))
+        if element.get("kind") == "colour" and kind not in ("colour", "linear", "radial"):
+            return "colour"
+        return kind
+    return "colour" if element.get("kind") == "colour" else "none"
+
+
+def fill_layer(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray:
+    """A Colour element's picture (or an older Paint element's background): a colour, a gradient, or nothing."""
     t = ctx.time
     width, height = ctx.width, ctx.height
-    fill = element.get("fill")
-    kind = fill.get("type", "colour") if _is_map(fill) else "none"
+    kind = fill_kind(element)
     if kind == "colour":
         layer = solid_layer(height, width, param(element, "fill.colour", t, (0.53, 0.84, 1.0), "colour"))
     elif kind in ("linear", "radial"):
@@ -211,6 +223,18 @@ def render_paint(element: Mapping[str, Any], ctx: RenderContext, strokes_layer: 
         layer[3].fill(1.0)
     else:
         layer = transparent(height, width)
+    return layer
+
+
+def render_colour(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | None:
+    """A Colour element: a solid colour or a gradient (what a Paint element's fill was before M14)."""
+    return fill_layer(element, ctx)
+
+
+def render_paint(element: Mapping[str, Any], ctx: RenderContext, strokes_layer: np.ndarray | None = None) -> np.ndarray | None:
+    """An older Paint element's background (if it has one), then brush strokes, then shapes. strokes_layer: strokes
+    being painted right now (the Editor's live preview), instead of the element's strokes file."""
+    layer = fill_layer(element, ctx)
     strokes = element.get("strokes")  # brush strokes, bucket fills and gradients painted in the Editor
     if strokes_layer is not None:
         layer = over(layer, strokes_layer)
@@ -415,7 +439,7 @@ def render_ndi(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | N
     return cached
 
 
-RENDERERS = {"ndi": render_ndi, "paint": render_paint, "image": render_image, "video": render_video}
+RENDERERS = {"ndi": render_ndi, "colour": render_colour, "paint": render_paint, "image": render_image, "video": render_video}
 
 
 # ---------------------------------------------------------------- one element, start to finish

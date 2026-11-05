@@ -73,16 +73,19 @@ class NewInputTests(EditorTestCase):
         self.assertTrue(new_id.startswith("new-input"))
         self.assertIn(new_id, window.dashboard.grid.tiles)
         page.palette.items["paint"].activated.emit("paint")  # same as clicking it
+        self.assertEqual(self.element(window, new_id, "E1"), {"id": "E1", "kind": "paint"})  # (M14: no fill, see-through)
+        self.assertNotIn("element:fill.colour", page.details._fields)
+        page.palette.items["colour"].activated.emit("colour")  # (the colour goes on a Colour element now)
         element_id = page.element_id
-        self.assertEqual(element_id, "E1")
-        self.assertEqual(self.element(window, new_id, "E1").get("kind"), "paint")
-        self.assertEqual(engine.show.inputs[new_id].tracks[0][0]["id"], "E1")  # the engine has it too
+        self.assertEqual(element_id, "E2")
+        self.assertEqual(self.element(window, new_id, "E2").get("kind"), "colour")
+        self.assertEqual(engine.show.inputs[new_id].tracks[1][0]["id"], "E2")  # the engine has it too
         colour = page.details._fields["element:fill.colour"]
         colour.text.setText("#FF8800")
         colour._typed()
-        self.assertEqual(self.element(window, new_id, "E1")["fill"]["colour"], "#FF8800")
+        self.assertEqual(self.element(window, new_id, "E2")["fill"]["colour"], "#FF8800")
         window.undo()
-        self.assertEqual(self.element(window, new_id, "E1")["fill"]["colour"], "#86D6FF")
+        self.assertEqual(self.element(window, new_id, "E2")["fill"]["colour"], "#86D6FF")
 
     def test_rename_and_tile_colour_from_the_input_tab(self) -> None:
         window, _engine = self.make()
@@ -226,12 +229,17 @@ class EditorControlsTests(EditorTestCase):
             page.select_element("")
             process(self.app)
         # a choice that changes which rows show rebuilds the panel from inside its own signal
-        page.select_element("E2")
-        for kind in ("colour", "radial", "linear", "none", "radial"):
+        page.select_element("E2")  # (an older Paint element: its fill is its Background)
+        for kind in ("colour", "radial", "linear", "radial"):
             fill = page.details._fields["element:fill.type"]  # a new box after each rebuild
             fill.setCurrentIndex(fill.findData(kind))
             process(self.app)
         self.assertEqual(self.element(window, "stage-shapes", "E2")["fill"]["type"], "radial")
+        fill = page.details._fields["element:fill.type"]
+        fill.setCurrentIndex(fill.findData("none"))  # (M14: no Background now, so it's an ordinary Paint element)
+        process(self.app)
+        self.assertEqual(self.element(window, "stage-shapes", "E2")["fill"]["type"], "none")
+        self.assertNotIn("element:fill.type", page.details._fields)
 
     def test_solo_live_banner_and_send(self) -> None:
         window, engine = self.make()

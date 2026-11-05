@@ -240,7 +240,7 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
         if any("blur" in element for element in track):  # (from before 4 Nov: each picture element's Area replaces it)
             track = [{k: v for k, v in element.items() if k != "blur"} for element in track]
             warnings.append(f'unknown field "blur" on track {index} was ignored (Area does that job now)')
-        track = [_checked_link(element, index, warnings) for element in track]
+        track = [_colour_from_paint(_checked_link(element, index, warnings)) for element in track]
         tracks.append(freeze(track))
     while len(tracks) < TRACK_COUNT:
         tracks.append(())
@@ -268,6 +268,19 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
         tracks=tuple(tracks),
     )
     return inp, warnings
+
+
+def _colour_from_paint(element: dict) -> dict:
+    """A Paint element from before M14 that's only a fill (no shapes, no brush painting) is a Colour element now: the
+    same settings, so it looks exactly the same. One with painting or shapes keeps its fill, as its Background."""
+    if element.get("kind") != "paint":
+        return element
+    fill = element.get("fill")
+    if not isinstance(fill, dict) or fill.get("type", "colour") not in ("colour", "linear", "radial"):
+        return element
+    if element.get("shapes") or element.get("strokes"):
+        return element
+    return {**{k: v for k, v in element.items() if k not in ("shapes", "strokes")}, "kind": "colour"}
 
 
 def _checked_link(element: dict, track: int, warnings: list[str]) -> dict:

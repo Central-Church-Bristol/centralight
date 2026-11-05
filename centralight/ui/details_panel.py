@@ -46,6 +46,7 @@ from ..expressions import Env, ExpressionError, compile_expression, describe_val
 from ..colours import to_hex
 from ..input_edit import (
     add_shape,
+    background_track,
     copy_media,
     find_element,
     get_param,
@@ -63,11 +64,13 @@ from ..input_edit import (
     set_house_param,
     set_shape_value,
     set_transition,
+    split_background,
+    split_changes,
     update_input,
 )
 from ..model import END_BEHAVIOURS, END_HOLD, END_LOOP, END_STOP, Input, Show, element_span
 from ..params import base_value, expression_of, is_keyframed, key_at, neighbour_key, with_base_value, with_expression
-from ..schema import SHAPE, TRANSITION, Spec, element_specs, get_path, visible
+from ..schema import SHAPE, TRANSITION, Spec, element_specs, get_path, has_background, visible
 from ..step_names import change_name, describe, element_name, level_name, lights_change_name, lower_first, shape_name
 from ..variables import AUDIO_SILENT, evaluate_locals
 from . import icons, theme
@@ -77,7 +80,7 @@ from .expression_edit import Evaluator, ExprButton, ExpressionDialog
 from .globals_panel import GlobalsPanel, LocalsPanel
 from .widgets import ElidedLabel, FlowLayout, Panel, discard
 
-KIND_TITLES = {"paint": "Paint", "image": "Image", "video": "Video", "ndi": "NDI feed"}
+KIND_TITLES = {"colour": "Colour", "paint": "Paint", "image": "Image", "video": "Video", "ndi": "NDI feed"}
 MIN_WIDTH = 340
 END_CHOICES = ((END_HOLD, "Hold the last moment"), (END_LOOP, "Loop"), (END_STOP, "Stop"))
 _FILLED_KEY = None
@@ -222,11 +225,16 @@ class DetailsPanel(QScrollArea):
             visible_transition = tuple(s.path for s in TRANSITION if self._transition_visible(s, inp))
             house = tuple(h.fixture for h in self.show_data.house)
             return ("input", inp.id, inp.infinite, visible_transition, house, tuple(fx.id for fx in self.show_data.colour_fixtures()))
-        specs = element_specs(str(element.get("kind")))
+        specs = element_specs(str(element.get("kind")), element)
         rows = tuple(s.path for s in specs if visible(s, element, specs))
         shapes = tuple(str(s.get("id")) for s in element.get("shapes", ()) or ())
         lights = tuple((fx.id, fx.name, fx.group) for fx in self.show_data.colour_fixtures())
-        return ("element", inp.id, self.element_id, element.get("kind"), rows, shapes, self.shape_id, lights)
+        split = self._split_state(inp, element) if has_background(element) else None  # (the Split button's note)
+        return ("element", inp.id, self.element_id, element.get("kind"), rows, shapes, self.shape_id, lights, split)
+
+    def _split_state(self, inp: Input, element) -> tuple[bool, tuple[str, ...]]:
+        """Split into Colour + Paint: (is there room, what it would change on the lights)."""
+        return background_track(inp, self.element_id) is not None, tuple(split_changes(element))
 
     # ------------------------------------------------------------ building
 
@@ -447,7 +455,7 @@ class DetailsPanel(QScrollArea):
     def _element_sections(self, layout: QVBoxLayout, inp: Input) -> None:
         element = self.current_element()
         kind = str(element.get("kind"))
-        specs = element_specs(kind)
+        specs = element_specs(kind, element)
         title = Panel(f"{KIND_TITLES.get(kind, kind.title())} element · {self.element_id}")
         form = self._form(title)
         group = ""
@@ -470,6 +478,21 @@ class DetailsPanel(QScrollArea):
             if spec.animatable and spec.type in ("number", "colour"):
                 field = self._with_expr(field, key, lambda k=key: self.edit_expression(k), keyable=True)
             form.addRow(self._label(spec.label), field)
+        if has_background(element):  # (an older Paint element with a fill: it can be split in two)
+            split = QPushButton("Split into Colour + Paint")
+            split.setObjectName("ToolToggle")
+            room, changes = self._split_state(inp, element)
+            split.setEnabled(room and not self.show_data.read_only)
+            split.setToolTip("Move the Background to a Colour element of its own, directly under this one, with the same "
+                             "mask and move / size (the painting and shapes stay here)")
+            split.clicked.connect(self._split_background)
+            title.body.addWidget(split)
+            if not room:
+                title.body.addWidget(hint("Split needs an empty track, or a free one just below this element."))
+            elif changes:
+                title.body.addWidget(hint("It won't look quite the same after a split: " + "; ".join(changes) + "."))
+            else:
+                title.body.addWidget(hint("It looks exactly the same on the lights after a split."))
         remove = QPushButton("Remove this element")
         remove.setProperty("danger", True)
         remove.clicked.connect(self._remove_element)
@@ -618,7 +641,7 @@ class DetailsPanel(QScrollArea):
                 if self.globals_panel is not None:
                     self.globals_panel.refresh(self.show_data)
                 return
-            specs = element_specs(str(element.get("kind")))
+            specs = element_specs(str(element.get("kind")), element)
             t = self.element_time()
             for spec in specs:
                 key = f"element:{spec.path}"
@@ -693,7 +716,7 @@ class DetailsPanel(QScrollArea):
         if group == "shape" and self.shape_id:
             return param_path(self.shape_id, path), next((s for s in SHAPE if s.path == path), None)
         element = self.current_element()
-        specs = element_specs(str(element.get("kind"))) if element is not None else ()
+        specs = element_specs(str(element.get("kind")), element) if element is not None else ()
         return path, next((s for s in specs if s.path == path), None)
 
     def toggle_key(self, key: str) -> None:
@@ -807,7 +830,7 @@ class DetailsPanel(QScrollArea):
             title, kind, subject, element_key = self.show_data.house_label(path), "number", self.show_data.house_label(path), f"{inp.id}/house"
         else:
             target = self.current_element() if where == "element" else self.current_shape()
-            specs = element_specs(str(self.current_element().get("kind"))) if where == "element" else SHAPE
+            specs = element_specs(str(self.current_element().get("kind")), self.current_element()) if where == "element" else SHAPE
             spec = next((s for s in specs if s.path == path), None)
             if target is None or spec is None:
                 return None
@@ -941,7 +964,7 @@ class DetailsPanel(QScrollArea):
         element = self.current_element()
         if element is None:
             return
-        spec = next((s for s in element_specs(str(element.get("kind"))) if s.path == path), None)
+        spec = next((s for s in element_specs(str(element.get("kind")), element) if s.path == path), None)
         raw = get_path(element, path, None)
         key = f"{self.input_id}/{self.element_id}/{path}"
         if is_keyframed(raw):  # a keyframed setting: the change is a key at the playhead
@@ -1010,6 +1033,14 @@ class DetailsPanel(QScrollArea):
             shape_id, self.shape_id = self.shape_id, None
             self.document.apply(remove_shape(self.show_data, self.input_id, self.element_id, shape_id), f"Remove {shape_name(shape)}")
             self.shape_selected.emit("")
+
+    def _split_background(self) -> None:
+        element = self.current_element()
+        if element is None or self.show_data.read_only:
+            return
+        show, colour_id = split_background(self.show_data, self.input_id, self.element_id)
+        if colour_id:
+            self._apply(show, f"Split {element_name(element)} into Colour + Paint")
 
     def _remove_element(self) -> None:
         from ..input_edit import remove_element

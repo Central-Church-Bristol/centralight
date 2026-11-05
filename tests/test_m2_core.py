@@ -588,11 +588,14 @@ class ParamsAndSchemaTests(unittest.TestCase):
         self.assertEqual(get_path(changed, "transform.x"), 0.25)
         self.assertEqual(get_path(changed, "fill.colour"), "#FFFFFF")
         self.assertIsNone(get_path(set_path(changed, "transform.x", None), "transform.x"))
-        specs = element_specs("paint")
+        specs = element_specs("colour")
         angle = next(s for s in specs if s.path == "fill.angle")
         self.assertFalse(visible(angle, changed, specs))
         self.assertTrue(visible(angle, set_path(changed, "fill.type", "linear"), specs))
-        for kind in ("paint", "image", "ndi", "video"):
+        self.assertIn("fill.angle", [s.path for s in element_specs("paint", changed)])  # an older Paint's Background...
+        self.assertNotIn("fill.type", [s.path for s in element_specs("paint")])  # ...a new Paint element has none
+        self.assertNotIn("fill.type", [s.path for s in element_specs("paint", set_path(changed, "fill.type", "none"))])
+        for kind in ("colour", "paint", "image", "ndi", "video"):
             paths = [s.path for s in element_specs(kind)]
             self.assertEqual(len(paths), len(set(paths)), kind)
 

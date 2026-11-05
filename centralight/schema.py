@@ -18,10 +18,11 @@ from .show_io import freeze, thaw
 BLEND_MODES = (("normal", "Normal"), ("add", "Add (brighter)"), ("multiply", "Multiply (darker)"), ("screen", "Screen (lighter)"))
 FIT_MODES = (("fill", "Fill (crop the edges)"), ("fit", "Fit (show it all)"))
 FILL_TYPES = (("none", "None"), ("colour", "Colour"), ("linear", "Straight gradient"), ("radial", "Round gradient"))
+COLOUR_TYPES = FILL_TYPES[1:]  # a Colour element always shows something
 SHAPE_TYPES = (("rect", "Rectangle"), ("ellipse", "Ellipse"))
 SNAP_CHOICES = ((True, "Snap"), (False, "Glide"))
 TRANSITION_CHOICES = (("cut", "Cut"), ("fade", "Fade"), ("dip", "Dip to black"), ("wipe", "Wipe"), ("iris", "Iris"), ("random", "Random by light"))
-ELEMENT_KINDS = (("paint", "Paint"), ("image", "Image"), ("video", "Video"), ("ndi", "NDI"))
+ELEMENT_KINDS = (("colour", "Colour"), ("paint", "Paint"), ("image", "Image"), ("video", "Video"), ("ndi", "NDI"))
 
 
 @dataclass(frozen=True)
@@ -59,16 +60,28 @@ COMMON = (
 )
 MEDIA_FIT = Spec("transform.fit", "Fit", "choice", "fill", choices=FIT_MODES, animatable=False, help="Fill crops the edges; Fit shows the whole picture")
 
-PAINT = (
-    Spec("fill.type", "Fill", "choice", "colour", choices=FILL_TYPES, animatable=False),
-    Spec("fill.colour", "Colour", "colour", "#86D6FF", show_if=("fill.type", ("colour",))),
-    Spec("fill.from", "From", "colour", "#FF6F59", show_if=("fill.type", ("linear", "radial"))),
-    Spec("fill.to", "To", "colour", "#00B7FF", show_if=("fill.type", ("linear", "radial"))),
-    Spec("fill.angle", "Direction", "number", 0.0, -360.0, 360.0, 1.0, unit="°", help="0° = left to right, 90° = top to bottom", show_if=("fill.type", ("linear",))),
-    Spec("fill.x", "Centre across", "number", 0.5, 0.0, 1.0, unit="%", show_if=("fill.type", ("radial",))),
-    Spec("fill.y", "Centre down", "number", 0.5, 0.0, 1.0, unit="%", show_if=("fill.type", ("radial",))),
-    Spec("fill.radius", "Radius", "number", 0.5, 0.01, 2.0, unit="%", help="In screen widths", show_if=("fill.type", ("radial",))),
-)
+def _fill(choices: tuple[tuple[str, str], ...], group: str = "", label: str = "Fill",
+          help_text: str = "") -> tuple[Spec, ...]:
+    return (
+        Spec("fill.type", label, "choice", "colour", choices=choices, animatable=False, group=group, help=help_text),
+        Spec("fill.colour", "Colour", "colour", "#86D6FF", show_if=("fill.type", ("colour",)), group=group),
+        Spec("fill.from", "From", "colour", "#FF6F59", show_if=("fill.type", ("linear", "radial")), group=group),
+        Spec("fill.to", "To", "colour", "#00B7FF", show_if=("fill.type", ("linear", "radial")), group=group),
+        Spec("fill.angle", "Direction", "number", 0.0, -360.0, 360.0, 1.0, unit="°", help="0° = left to right, 90° = top to bottom",
+             show_if=("fill.type", ("linear",)), group=group),
+        Spec("fill.x", "Centre across", "number", 0.5, 0.0, 1.0, unit="%", show_if=("fill.type", ("radial",)), group=group),
+        Spec("fill.y", "Centre down", "number", 0.5, 0.0, 1.0, unit="%", show_if=("fill.type", ("radial",)), group=group),
+        Spec("fill.radius", "Radius", "number", 0.5, 0.01, 2.0, unit="%", help="In screen widths", show_if=("fill.type", ("radial",)),
+             group=group),
+    )
+
+
+# A Colour element (M14): a solid colour or a gradient across the screen (what a Paint element's fill was)
+COLOUR = _fill(COLOUR_TYPES, label="Colour", help_text="A solid colour, or a straight or round gradient across the screen")
+# An older Paint element that has a fill under its painting: its "Background" (setting it to None makes it an ordinary
+# Paint element; Split into Colour + Paint moves it to a Colour element of its own)
+BACKGROUND = _fill(FILL_TYPES, group="Background", label="Fill",
+                   help_text="From before Colour elements: the colour under this element's painting and shapes")
 
 SHAPE = (
     Spec("type", "Shape", "choice", "rect", choices=SHAPE_TYPES, animatable=False),
@@ -112,10 +125,22 @@ TRANSITION = (
 )
 
 
-def element_specs(kind: str) -> tuple[Spec, ...]:
-    """Every setting of an element of this kind, in the order the details panel shows them."""
+def has_background(element: Mapping[str, Any] | None) -> bool:
+    """An older Paint element with a fill under its painting (a new Paint element has none)."""
+    if element is None or element.get("kind") != "paint":
+        return False
+    fill = element.get("fill")
+    return isinstance(fill, Mapping) and fill.get("type", "colour") != "none"
+
+
+def element_specs(kind: str, element: Mapping[str, Any] | None = None, background: bool | None = None) -> tuple[Spec, ...]:
+    """Every setting of an element of this kind, in the order the details panel shows them. A Paint element's
+    Background settings are there only when it has one (background: say so instead of looking at element)."""
+    if kind == "colour":
+        return COLOUR + COMMON
     if kind == "paint":
-        return PAINT + COMMON
+        with_background = has_background(element) if background is None else background
+        return (BACKGROUND if with_background else ()) + COMMON
     if kind == "image":
         return IMAGE + (AREA, BOOST) + COMMON + (MEDIA_FIT,)
     if kind == "video":

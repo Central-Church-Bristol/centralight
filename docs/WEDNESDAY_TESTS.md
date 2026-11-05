@@ -415,6 +415,14 @@ Close the app first (it's holding the dongle), then:
         **Clear all** empties it.
   - [ ] A Stream Deck key made before (e.g. `/api/input/pillars-purple/overlay/1`) still turns it on and off.
   - [ ] Drag a tile to another place: a pale-blue line shows where it'll go. Ctrl+Z puts it back.
+- [ ] **Colour element**: tonight's single-colour input looks the same as before (it's a Colour element now: open
+      it in the Editor). New input → **Colour** (first in the list): the lights take its colour; try a gradient.
+      Then **Paint** on the track above: nothing changes until you draw a rectangle on it.
+- [ ] Your inputs with brush painting over a colour on track 1 (`new-input` in Central Church, `default` in
+      Evening): open one and select that Paint element. It shows a **Background** group, and under **Split into
+      Colour + Paint** a line saying whether it'll look exactly the same, or what would change. Split it: the new
+      Colour element is on track 1 and the other elements have each moved up a track; the lights look the same
+      (or change only as that line said). Ctrl+Z undoes it.
 
 ## 21. Afterwards: the commits
 

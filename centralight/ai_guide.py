@@ -32,8 +32,8 @@ from .links import original_problem
 from .model import ROLE_COLOUR, TRACK_COUNT, TRANSITION_KINDS, Input, Show, is_device_name, slugify
 from .schema import (
     BLEND_MODES,
+    COLOUR_TYPES,
     ELEMENT_KINDS,
-    FILL_TYPES,
     SHAPE,
     SHAPE_TYPES,
     TRANSITION,
@@ -72,14 +72,14 @@ def examples(show: Show) -> list[tuple[str, dict]]:
     return [
         ("Only the pillar lights, purple (every other light is left alone, so this works over another input when it's sent to the Overlay)", {
             "format": FORMAT_INPUT, "version": INPUT_VERSION, "id": "pillars-purple", "name": "Pillars purple", "colour": "#7A3CFF",
-            "tracks": [[{"id": "E1", "kind": "paint", "fill": {"type": "colour", "colour": "#7A3CFF"}, "mask": {"exclude": others}}], [], [], []],
+            "tracks": [[{"id": "E1", "kind": "colour", "fill": {"type": "colour", "colour": "#7A3CFF"}, "mask": {"exclude": others}}], [], [], []],
         }),
         ("A soft white bar sweeping left to right every 5 seconds, over deep blue", {
             "format": FORMAT_INPUT, "version": INPUT_VERSION, "id": "bar-sweep", "name": "Bar sweep", "colour": "#2050FF",
             "transition": {"kind": "fade", "duration": 2},
             "tracks": [
-                [{"id": "E1", "kind": "paint", "fill": {"type": "colour", "colour": "#0A1A66"}}],
-                [{"id": "E2", "kind": "paint", "fill": {"type": "none"},
+                [{"id": "E1", "kind": "colour", "fill": {"type": "colour", "colour": "#0A1A66"}}],
+                [{"id": "E2", "kind": "paint",
                   "shapes": [{"id": "S1", "type": "rect", "x": {"expr": "saw(time, 0.2) * 1.4 - 0.2"}, "y": 0.5, "w": 0.18, "h": 1.2,
                               "softness": 0.5, "colour": "#FFFFFF"}]}],
                 [], [],
@@ -87,20 +87,20 @@ def examples(show: Show) -> list[tuple[str, dict]]:
         }),
         ("Every light pulsing with the bass of the music (audio.bass is 0 to 1)", {
             "format": FORMAT_INPUT, "version": INPUT_VERSION, "id": "bass-pulse", "name": "Bass pulse", "colour": "#FF6F59",
-            "tracks": [[{"id": "E1", "kind": "paint", "fill": {"type": "colour", "colour": "#FF6F59"},
+            "tracks": [[{"id": "E1", "kind": "colour", "fill": {"type": "colour", "colour": "#FF6F59"},
                          "opacity": {"expr": "0.15 + 0.85 * audio.bass"}}], [], [], []],
         }),
         ("Follow the screen (Media Background Pane), but warmer", {
             "format": FORMAT_INPUT, "version": INPUT_VERSION, "id": "warm-screen", "name": "Follow screen, warm", "colour": "#FFB46B",
             "tracks": [
                 [{"id": "E1", "kind": "ndi", "source": "Media Background Pane"}],
-                [{"id": "E2", "kind": "paint", "fill": {"type": "colour", "colour": "#FFD9A0"}, "blend": "multiply"}],
+                [{"id": "E2", "kind": "colour", "fill": {"type": "colour", "colour": "#FFD9A0"}, "blend": "multiply"}],
                 [], [],
             ],
         }),
         ("A warm glow drifting slowly from side to side and back, over deep pink (a round gradient whose centre moves)", {
             "format": FORMAT_INPUT, "version": INPUT_VERSION, "id": "drifting-glow", "name": "Drifting glow", "colour": "#FF8A3D",
-            "tracks": [[{"id": "E1", "kind": "paint", "fill": {
+            "tracks": [[{"id": "E1", "kind": "colour", "fill": {
                 "type": "radial", "from": "#FFB347", "to": "#B0306A",
                 "x": {"expr": "0.15 + 0.7 * wave(time, 1/20)"}, "y": 0.4, "radius": 0.55}}], [], [], []],
         }),
@@ -109,11 +109,11 @@ def examples(show: Show) -> list[tuple[str, dict]]:
             "format": FORMAT_INPUT, "version": INPUT_VERSION, "id": "welcome-sequence", "name": "Welcome sequence",
             "colour": "#FFB46B", "infinite": False, "length": 12, "end": "hold",
             "tracks": [
-                [{"id": "E1", "kind": "paint", "fill": {"type": "colour", "colour": "#FFD9A0"}, "start": 0, "end": 9,
+                [{"id": "E1", "kind": "colour", "fill": {"type": "colour", "colour": "#FFD9A0"}, "start": 0, "end": 9,
                   "in": {"kind": "fade", "duration": 2}},
-                 {"id": "E3", "kind": "paint", "fill": {"type": "colour", "colour": "#0A1A66"}, "start": 8, "end": 12,
+                 {"id": "E3", "kind": "colour", "fill": {"type": "colour", "colour": "#0A1A66"}, "start": 8, "end": 12,
                   "in": {"kind": "fade", "duration": 1}}],
-                [{"id": "E2", "kind": "paint", "fill": {"type": "colour", "colour": "#7A3CFF"}, "start": 3, "end": 9,
+                [{"id": "E2", "kind": "colour", "fill": {"type": "colour", "colour": "#7A3CFF"}, "start": 3, "end": 9,
                   "opacity": {"keys": [[0, 0], [1, 1], [5, 1], [6, 0]]}, "mask": {"exclude": others},
                   "out": {"kind": "fade", "duration": 1}}],
                 [], [],
@@ -123,7 +123,7 @@ def examples(show: Show) -> list[tuple[str, dict]]:
             "format": FORMAT_INPUT, "version": INPUT_VERSION, "id": "slow-rainbow", "name": "Slow rainbow", "colour": "#16E1C9",
             "house": {show.house[-1].fixture: 0.4} if show.house else {},
             "locals": [{"name": "turn", "type": "number", "value": {"expr": "time / 30"}}],
-            "tracks": [[{"id": "E1", "kind": "paint", "fill": {"type": "linear", "from": {"expr": "hsv(turn)"},
+            "tracks": [[{"id": "E1", "kind": "colour", "fill": {"type": "linear", "from": {"expr": "hsv(turn)"},
                                                                  "to": {"expr": "hsv(turn + 0.3)"}, "angle": 0}}], [], [], []],
         }),
     ]
@@ -179,7 +179,7 @@ def input_schema(show: Show) -> dict[str, Any]:
             "end": {"type": "number", "minimum": 0, "description": "Timed inputs: when it ends"},
             "in": {"$ref": "#/$defs/element_transition", "description": "Timed inputs: how it appears"},
             "out": {"$ref": "#/$defs/element_transition", "description": "Timed inputs: how it goes"},
-            **_nested(element_specs(kind)),
+            **_nested(element_specs(kind, background=True)),  # (an older Paint element's fill: its Background)
         }
         if kind in ("image", "video"):
             properties["original"] = {
@@ -191,7 +191,7 @@ def input_schema(show: Show) -> dict[str, Any]:
             properties["shapes"] = {"type": "array", "items": {"type": "object", "required": ["id", "type"],
                                                                "properties": {"id": {"type": "string"}, **_nested(SHAPE)}}}
             properties["strokes"] = {"type": "string", "pattern": "^paint/[0-9a-f]{12}\\.png$",
-                                     "description": "Brush painting made in the Editor (between the fill and the shapes)"}
+                                     "description": "Brush painting made in the Editor (under the shapes)"}
         element_kinds.append({"type": "object", "required": ["id", "kind"], "properties": properties})
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -335,15 +335,21 @@ def guide_text(show: Show, full: bool = True) -> str:
         "Every element has an `id` (unique in the input, e.g. `E1`), a `kind`, and these shared settings:",
         _table(_spec_rows(element_specs("")))
         + "\n\n`blend`: " + ", ".join(f'"{v}" ({label})' for v, label in BLEND_MODES) + ".\n\n"
-        "`transform` moves, scales and turns the element's whole picture (a paint fill too); whatever moves in from "
+        "`transform` moves, scales and turns the element's whole picture (a Colour element too); whatever moves in from "
         "outside is transparent. So to slide a gradient across the room, move a round gradient's centre (`fill.x`), "
         "or scale the element up first (e.g. `transform.scale` 3) and then move it.",
-        "### Paint (`\"kind\": \"paint\"`)",
-        "A fill (`fill.type`: " + ", ".join(f'"{v}"' for v, _ in FILL_TYPES) + ") and editable shapes on top.",
-        _table(_spec_rows(element_specs("paint")[:8]))
-        + "\n\nWhich settings each fill uses: `colour` uses `fill.colour`. `linear` goes from `fill.from` to "
+        "### Colour (`\"kind\": \"colour\"`): a block of colour or a gradient",
+        "A solid colour or a gradient across the whole screen (`fill.type`: "
+        + ", ".join(f'"{v}"' for v, _ in COLOUR_TYPES) + "). For a plain colour, use this.",
+        _table(_spec_rows(element_specs("colour")[:8]))
+        + "\n\nWhich settings each kind uses: `colour` uses `fill.colour`. `linear` goes from `fill.from` to "
         "`fill.to` across the whole picture, in the direction `fill.angle`. `radial` is `fill.from` at its centre "
-        "(`fill.x`, `fill.y`), turning into `fill.to` at `fill.radius` and beyond. `none` draws only the shapes.",
+        "(`fill.x`, `fill.y`), turning into `fill.to` at `fill.radius` and beyond.",
+        "### Paint (`\"kind\": \"paint\"`): shapes and painting",
+        "Editable shapes (and brush painting made in the Editor). It's see-through wherever nothing is drawn, so the "
+        "tracks below show through: for shapes over a colour, put a Colour element on a track below. (Paint elements "
+        "made before Colour elements can have a `fill` under their shapes, as a Colour element's; leave it out of new "
+        "ones.)",
         "Shapes (`shapes`, drawn in order, each with an `id` like `S1` and `type` "
         + " or ".join(f'"{v}"' for v, _ in SHAPE_TYPES) + "):",
         _table(_spec_rows(SHAPE[1:])),
@@ -370,15 +376,15 @@ def guide_text(show: Show, full: bool = True) -> str:
         "`smooth.snap` (on unless it's `false`) a slide change or a cut still lands at once. These only change this "
         "element, so a sharp Paint shape on another track stays sharp.",
         "### Painting (made in the Editor)",
-        "A Paint element can have `strokes`: `paint/<code>.png`, brush painting made in the Editor, drawn between its "
-        "fill and its shapes. Any element can have a painted mask, `\"mask\": {\"paint\": \"masks/<code>.png\"}` (white "
+        "A Paint element can have `strokes`: `paint/<code>.png`, brush painting made in the Editor, drawn under its "
+        "shapes. Any element can have a painted mask, `\"mask\": {\"paint\": \"masks/<code>.png\"}` (white "
         "shows the element, black hides it), as well as `exclude`. These files are made by CentraLight: keep them as "
         "they are when you edit an input, and don't make up new names.",
         "### Leaving lights alone (masks)",
         "`\"mask\": {\"exclude\": [\"light-id\", ...]}` on any element: those lights ignore that element (they show the "
         "tracks below, or whatever is underneath on the Overlay). This is how \"only the pillars\" works.",
         "## The lights",
-        lights + "\n\nEach light is a point (its dot). Paint is read exactly at the dot, so a shape's `softness` decides "
+        lights + "\n\nEach light is a point (its dot). Colour and Paint are read exactly at the dot, so a shape's `softness` decides "
         "whether a light fades or switches as an edge passes it; pictures are averaged around the dot (`area`).",
         "## Settings that change: keyframes and expressions",
         "Any number or colour setting can be:\n"

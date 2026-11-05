@@ -68,8 +68,8 @@ from . import icons, theme
 from .document import ShowDocument
 from .element_palette import ELEMENT_MIME, TRANSITION_MIME
 
-KIND_COLOURS = {"paint": theme.ACCENT, "image": theme.OVERLAY, "video": theme.WARN, "ndi": theme.OK}
-KIND_TITLES = {"paint": "Paint", "image": "Image", "video": "Video", "ndi": "NDI"}
+KIND_COLOURS = {"colour": theme.LOGO_SKY, "paint": theme.ACCENT, "image": theme.OVERLAY, "video": theme.WARN, "ndi": theme.OK}
+KIND_TITLES = {"colour": "Colour", "paint": "Paint", "image": "Image", "video": "Video", "ndi": "NDI"}
 RULER_H = 22
 EDGE_PX = 6  # how close to a bar's end counts as grabbing that end
 SNAP_PX = 7
@@ -83,9 +83,9 @@ def summary(element) -> str:
     """A short description of an element for its bar."""
     kind = str(element.get("kind"))
     title = KIND_TITLES.get(kind, kind.title())
-    if kind == "paint":
+    if kind in ("paint", "colour"):
         fill = element.get("fill") or {}
-        fill_type = fill.get("type", "colour") if hasattr(fill, "get") else "none"
+        fill_type = fill.get("type", "colour") if hasattr(fill, "get") else ("colour" if kind == "colour" else "none")
         parts = []
         if fill_type == "colour":
             colour = fill.get("colour")
@@ -95,6 +95,8 @@ def summary(element) -> str:
         shapes = element.get("shapes") or ()
         if shapes:
             parts.append(f"{len(shapes)} shape{'s' if len(shapes) != 1 else ''}")
+        if element.get("strokes"):
+            parts.append("painting")
         detail = ", ".join(parts) or "empty"
     elif kind == "ndi":
         detail = str(element.get("source") or "Media Background Pane")

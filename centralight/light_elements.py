@@ -1,9 +1,10 @@
 """Each element's colour at each light: the lights' own maths, used by the engine and for
 the colours shown in the Editor and on the Dashboard's tiles.
 
-- Paint is worked out exactly at each light's dot: its fill (a colour or a gradient), its
-  brush strokes (read at the dot) and its shapes (a distance field, so a shape's Softness
-  decides whether a light fades or switches as an edge passes).
+- Colour and Paint are worked out exactly at each light's dot: a Colour element's fill (a colour
+  or a gradient; an older Paint element's background is the same), Paint's brush strokes (read
+  at the dot) and its shapes (a distance field, so a shape's Softness decides whether a light
+  fades or switches as an edge passes).
 - Image, Video and NDI average a square patch of the element's own picture around each dot,
   as big as the element's Area (lights.area_half_size). A summed-area table of the picture
   (cv2.integral) makes that a few lookups per light, whatever the size: 0 % is the colour
@@ -36,6 +37,7 @@ from .elements import (
     _is_map,
     _painted,
     element_is_dynamic,
+    fill_kind,
     load_image,
     media_path,
     ndi_source_name,
@@ -131,13 +133,12 @@ def shape_cover(shape: Mapping[str, Any], t: float, u: np.ndarray, v: np.ndarray
     return cover * opacity, colour
 
 
-def light_paint(element: Mapping[str, Any], ctx: RenderContext, u: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """A Paint element at points of its own picture: fill, then brush strokes, then shapes."""
+def light_fill(element: Mapping[str, Any], ctx: RenderContext, u: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """A Colour element (or an older Paint element's background) at points of its own picture."""
     t = ctx.time
     n = len(u)
     layer = np.zeros((4, n), dtype=np.float64)
-    fill = element.get("fill")
-    kind = fill.get("type", "colour") if _is_map(fill) else "none"
+    kind = fill_kind(element)
     if kind == "colour":
         r, g, b = param(element, "fill.colour", t, (0.53, 0.84, 1.0), "colour")
         layer[:3] = np.array([[r], [g], [b]])
@@ -152,6 +153,13 @@ def light_paint(element: Mapping[str, Any], ctx: RenderContext, u: np.ndarray, v
                                  param(element, "fill.radius", t, 0.5))
         layer[:3] = a[:, None] + (b - a)[:, None] * ramp[None, :]
         layer[3] = 1.0
+    return layer
+
+
+def light_paint(element: Mapping[str, Any], ctx: RenderContext, u: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """A Paint element at points of its own picture: an older one's background, then brush strokes, then shapes."""
+    t = ctx.time
+    layer = light_fill(element, ctx, u, v)
     strokes = element.get("strokes")
     if isinstance(strokes, str) and strokes:
         painted = strokes_picture(media_path(ctx.folder, strokes))
@@ -489,9 +497,10 @@ def light_content(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray 
     """The element at each light before its opacity and mask: (4, lights), or None if it shows nothing."""
     kind = element.get("kind")
     lights = ctx.lights
-    if kind == "paint":
+    if kind in ("paint", "colour"):
         u, v = unmove(lights.x, lights.y, _transform(element, ctx.time))
-        return light_paint(element, ctx, u, v) * _inside(u, v)[None, :]
+        drawn = light_paint(element, ctx, u, v) if kind == "paint" else light_fill(element, ctx, u, v)
+        return drawn * _inside(u, v)[None, :]
     if kind in PICTURE_KINDS:
         table = _frame_table(element, ctx)
         if table is None:

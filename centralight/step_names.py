@@ -10,7 +10,7 @@ from .colours import is_colour_text, parse_colour, to_hex
 from .params import base_value
 from .schema import Spec
 
-KIND_NAMES = {"paint": "Paint", "image": "Image", "video": "Video", "ndi": "NDI"}
+KIND_NAMES = {"colour": "Colour", "paint": "Paint", "image": "Image", "video": "Video", "ndi": "NDI"}
 SHAPE_NAMES = {"rect": "Rectangle", "ellipse": "Ellipse"}
 TEXT_MAX = 28
 

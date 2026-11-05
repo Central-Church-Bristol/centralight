@@ -37,6 +37,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M14, your nine changes after the rig test (4 Nov), in a separate copy of the code: | |
 | — 3 tick boxes, 1 rename, 2 Editor opens paused, 7 Delete removes a shape | **done** (4 Nov, 22:15) |
 | — 4 one Overlay (copies, red boxes, hold for a flash, drag tiles to move them) | **done** (4 Nov, 23:30) |
+| — 9 a Colour element, and Paint without a fill | **done** (5 Nov, 01:05; a test-suite crash found on the way was fixed first; 853 tests pass twice) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -105,6 +106,39 @@ The small ones first (3, 1, 2, 7):
   (see the decisions). The phone page has Overlay and Clear on each tile, and On / off and Clear all for the
   Overlay.
 - A live.json from before (Overlays 1–4) comes back as copies on the one Overlay.
+
+**9. A Colour element, and Paint without a fill.**
+- **Colour** is first in the Editor's element list (with a swatch icon): a solid colour, or a straight or round
+  gradient, across the screen. It's exactly what a Paint element's fill was, so it looks the same on the lights, and
+  it has the shared opacity, blend, move / size / rotation and mask; its settings can have keyframes or formulas.
+- **Paint** is now shapes and brush painting only: a new Paint element is see-through until something is painted on
+  it, so the tracks below show through. For shapes over a colour, put a Colour element on a track below.
+- **Older inputs** look exactly as before (checked by tests, on the lights' colours):
+  - a Paint element that's only a fill becomes a Colour element when the input is read (tonight's single-colour
+    input is one of these), and is saved as one from then on;
+  - a Paint element with a fill **and** shapes or painting keeps its fill, shown as a **Background** group in its
+    settings (only on those older elements). **Split into Colour + Paint** moves the fill to a Colour element of its
+    own directly under it, with the same mask and move / size (one undo step). If the track below isn't free, the
+    painting and the tracks above it move up a track into an empty one (as in your two shows' inputs, whose painting
+    is on track 1). A line under the button says whether it'll look exactly the same on the lights, or what would
+    change; it's greyed out if there's no empty track. Setting the Background to None makes it an ordinary Paint
+    element.
+- The AI guide (and so the AI prompts) teaches Colour, its examples use it, and the input schema has it.
+
+**A crash the tests found (fixed).** With item 9's tests added, the whole test suite crashed part-way through. The
+cause was older than M14's changes (tests had just never lined up to show it):
+- A closed show document still had its once-a-second "did the save work?" check running. Its undo history points
+  back at it, so Python frees it later, while tidying up, on whichever thread happens to be running then. Qt can't
+  stop a timer from another thread, so the timer stayed, and fired at memory that had been freed.
+- Only the tests close documents and carry on. CentraLight keeps its two for as long as it runs and closes them as
+  it quits, so the app you ran on Wednesday wasn't affected.
+- **Fixed:** closing a document stops all its timers (a new test checks it).
+- How it was found: a short run of 75 tests that crashed every time; a small crash locator (a Windows exception hook
+  for the test process only) showed a timer firing for an object that had gone; and Qt's own warning, "Timers cannot
+  be stopped from another thread", which only shows once Qt's messages are sent to the console.
+- **Found on the way, not reachable today:** if Qt ever copied one of CentraLight's drawn icons in order to change
+  it, the copy's drawing code would be freed straight away (a PySide quirk), and the app would crash. Nothing in
+  CentraLight changes an icon after making it, so it can't happen now. It's noted as a follow-up.
 
 ## The overnight soaks (4 Nov, early morning)
 
@@ -1235,6 +1269,19 @@ Problems the tests found and that are fixed:
     button down (rather than after a timed hold), so a click stays a click.
   - **Tiles are a little wider at their smallest** (228 pixels instead of 200) so both Send buttons fit, so a row
     may hold one tile fewer.
+  - **Proposed (Colour):** a Paint element that's only a fill becomes a Colour element; one with a fill and shapes or
+    painting keeps it as its Background, with Split into Colour + Paint.
+  - **Split into Colour + Paint** puts the Colour element directly under the painting: on the free track just
+    below, or else the painting and the tracks above it move up into an empty track (or the tracks below it move
+    down into one), so everything keeps its order. The Colour element gets the same mask, move / size, opacity,
+    blend and timing.
+  - **Split is offered even when it wouldn't look exactly the same,** with a line under the button saying what would
+    change (the plan allowed either). The colour and the painting are then worked out one after the other, so they
+    match exactly only at full opacity, with Normal blend, without a fade in or out, and with a mask that's either
+    on or off at each light. Your two shows' painted inputs have their own opacity setting, so check the line on
+    those. When nothing would change, the line says it looks exactly the same.
+  - **An input saved with a Colour element shows nothing for that element in the version before M14** (it doesn't
+    know Colour), in case you ever go back to it.
 - **M13 choices** (all easy to change):
   - **The week schedule is a tab beside the automation's editor** (Automation | Week schedule) rather than squeezed
     in beside the Coming up list: at 1280×720 that panel is too short for a week, and the left column too narrow.
