@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..automations import DAY_NAMES
-from ..model import Automation, Show
+from ..model import NO_DEFAULT_SHOW, Automation, Show
 from ..schedule import Block, Unplaced, describe_block, monday_of, week_schedule
 from . import theme
 from .widgets import ElidedLabel
@@ -484,7 +484,10 @@ class ScheduleView(QWidget):
         self._recompute()
 
     def colour_of(self, item: Block | Unplaced) -> str:
-        """The colour of a block's (or a list line's) show: grey for a show there isn't."""
+        """The colour of a block's (or a list line's) show: grey for a show there isn't, or for no show (the default
+        None, M14)."""
+        if item.show == NO_DEFAULT_SHOW:
+            return NO_SHOW_COLOUR
         return NO_SHOW_COLOUR if item.missing else self._colours.get(_show_key(item), NO_SHOW_COLOUR)
 
     def block_rects(self) -> list[tuple[Block, QRectF]]:

@@ -182,6 +182,11 @@ def _on_off(word: str) -> bool | None:
     raise BadRequest(404, "use on, off or toggle")
 
 
+# what needs a show loaded (M14): with none, these answer 404 "No show loaded"; loading a show, the global automations,
+# pausing them, the countdown, the shows and the state still work
+NEEDS_A_SHOW = ("input", "overlay", "var", "master", "house", "black", "identify", "automation", "layout")
+
+
 def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any = None, black_fade: float = BLACK_FADE,
                 shows: list[ShowInfo] | None = None, global_automations: Show | None = None) -> Any:
     """The engine command for an API path (split into parts, after /api/). Raises BadRequest. show: the loaded
@@ -189,6 +194,8 @@ def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any
     if not parts:
         raise BadRequest(404, "see / for the list of URLs")
     head, rest = parts[0], parts[1:]
+    if getattr(show, "no_show", False) and head in NEEDS_A_SHOW:
+        raise BadRequest(404, "No show loaded")  # (M14: load one first, /api/show/<id or name>)
     if head == "show" and len(rest) == 1:
         info = find_show(Path("."), rest[0], shows or [])
         if info is None:
@@ -365,6 +372,7 @@ def state_of(engine: Any, shows: list[ShowInfo] | None = None) -> dict[str, Any]
     data: dict[str, Any] = {
         "show": show.name,
         "show_id": show_id(show.folder) if show.folder else "",
+        "no_show": show.no_show,
         "notes": show.notes,
         "shows": shows_of(shows or [], show.folder),
         "inputs": [{"id": inp.id, "name": inp.name} for inp in show.ordered_inputs()],
@@ -662,8 +670,8 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
     show_options = "".join(
         f'<option value="{esc(s.id)}"{" selected" if same_folder(s.folder, show.folder) else ""}>{esc(s.name)}</option>'
         for s in shows)
-    if not any(same_folder(s.folder, show.folder) for s in shows):
-        show_options = f'<option value="" selected>{esc(show.name)}</option>' + show_options
+    if show.no_show or not any(same_folder(s.folder, show.folder) for s in shows):
+        show_options = f'<option value="" selected>{esc("None (lights off)" if show.no_show else show.name)}</option>' + show_options
     examples = [
         ("Send an input to Base", "/api/input/<id>"),
         ("…with another transition", "/api/input/<id>?transition=fade&duration=2"),
@@ -701,21 +709,51 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
     def script_value(value: Any) -> str:  # (safe inside <script>)
         return json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
+    if show.no_show:  # (M14: no show loaded, the lights off: the show switcher, and the URLs to load one)
+        return PAGE.format(
+            show="No show loaded", notes="", show_options=show_options, black="",
+            body=NO_SHOW_BODY.format(url_rows=url_rows, show_urls=show_urls),
+            key=script_value(key), show_id=script_value(""),
+        )
     return PAGE.format(
         show=esc(show.name),
         notes=esc(show.notes),
         show_options=show_options,
-        tiles="".join(rows) or "<p>No inputs yet: make one in CentraLight's Editor.</p>",
-        variables="".join(variables) or "<p>No show variables yet (Editor → Show variables tab).</p>",
-        house=house,
-        url_rows=url_rows,
-        ids=ids,
-        show_urls=show_urls,
-        lights=lights,
+        black=BLACK_BUTTONS,
+        body=SHOW_BODY.format(tiles="".join(rows) or "<p>No inputs yet: make one in CentraLight's Editor.</p>",
+                              variables="".join(variables) or "<p>No show variables yet (Editor → Show variables tab).</p>",
+                              house=house, url_rows=url_rows, ids=ids, show_urls=show_urls, lights=lights),
         key=script_value(key),
         show_id=script_value(show_id(show.folder) if show.folder else ""),
     )
 
+
+BLACK_BUTTONS = """<button class="black" data-black="/api/black/cut" title="Tap: the colour lights. Hold: everything, Festoon and Key lights too">Cut to black</button>
+<button class="black" data-black="/api/black/fade" title="Tap: the colour lights. Hold: everything, Festoon and Key lights too">Fade to black</button>
+"""
+
+SHOW_BODY = """<h2>Inputs: tap to send to Base</h2>
+<div class="grid">{tiles}</div>
+<div class="row" style="padding: 0 16px"><span class="label">The Overlay</span>
+<button class="small" data-path="/api/overlay/toggle" title="On / off: off hides it without emptying it">On / off</button>
+<button class="small clear" data-path="/api/overlay/clear">Clear all</button></div>
+<h2>Variables</h2><div class="vars">{variables}</div>
+<h2>House lights</h2><div class="vars">{house}</div>
+<h2>Stream Deck URLs</h2>
+<p>Elgato Stream Deck app: add a <b>Website</b> action, paste a URL and tick <b>GET request in background</b>.
+Companion: use <b>Generic HTTP → GET</b>. House lights are called {lights}.</p>
+<table>{url_rows}</table>
+<table>{ids}</table>
+<table>{show_urls}</table>"""
+
+# no show loaded (M14): the lights are off until a show is loaded (the switcher at the top, or a URL below)
+NO_SHOW_BODY = """<p class="noshow">The lights are off. Load a show to bring them up: pick one at the top.</p>
+<h2>Stream Deck URLs</h2>
+<p>Elgato Stream Deck app: add a <b>Website</b> action, paste a URL and tick <b>GET request in background</b>.
+Companion: use <b>Generic HTTP → GET</b>. While no show is loaded, only loading a show, the global automations and
+the countdown work (the others answer “No show loaded”).</p>
+<table>{show_urls}</table>
+<table>{url_rows}</table>"""
 
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -763,31 +801,18 @@ p {{ margin: 8px 16px; color: var(--dim); }}
   display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
 .countdown[hidden] {{ display: none; }}
 #countdown-text {{ flex: 1; font-weight: 600; color: #FFB547; }}
+p.noshow {{ margin: 24px 16px; font-size: 17px; color: var(--text); }}
 </style></head>
 <body>
 <header><h1>{show}</h1>
 <select id="shows" title="Load another show (the lights hold what they show until one of its inputs is sent)">{show_options}</select>
 <span id="status">Connecting…</span>
-<button class="black" data-black="/api/black/cut" title="Tap: the colour lights. Hold: everything, Festoon and Key lights too">Cut to black</button>
-<button class="black" data-black="/api/black/fade" title="Tap: the colour lights. Hold: everything, Festoon and Key lights too">Fade to black</button>
-<div id="countdown" class="countdown" hidden><span id="countdown-text"></span>
+{black}<div id="countdown" class="countdown" hidden><span id="countdown-text"></span>
 <button class="small" data-countdown="now" id="countdown-now">Do it now</button>
 <button class="small" data-countdown="wait">Wait 10 min</button>
 <button class="small" data-countdown="skip">Skip</button></div></header>
 <div id="notes" class="notes">{notes}</div>
-<h2>Inputs: tap to send to Base</h2>
-<div class="grid">{tiles}</div>
-<div class="row" style="padding: 0 16px"><span class="label">The Overlay</span>
-<button class="small" data-path="/api/overlay/toggle" title="On / off: off hides it without emptying it">On / off</button>
-<button class="small clear" data-path="/api/overlay/clear">Clear all</button></div>
-<h2>Variables</h2><div class="vars">{variables}</div>
-<h2>House lights</h2><div class="vars">{house}</div>
-<h2>Stream Deck URLs</h2>
-<p>Elgato Stream Deck app: add a <b>Website</b> action, paste a URL and tick <b>GET request in background</b>.
-Companion: use <b>Generic HTTP → GET</b>. House lights are called {lights}.</p>
-<table>{url_rows}</table>
-<table>{ids}</table>
-<table>{show_urls}</table>
+{body}
 <script>
 const key = {key};
 const pageShow = {show_id};
@@ -852,7 +877,7 @@ async function refresh() {{
     }}
     const notes = document.getElementById("notes");
     if (notes.textContent !== (state.notes || "")) notes.textContent = state.notes || "";  // (changed in CentraLight)
-    document.getElementById("status").textContent = "Base: " + state.base.name;
+    document.getElementById("status").textContent = state.no_show ? "The lights are off" : "Base: " + state.base.name;
     document.querySelectorAll(".tile").forEach(t => t.classList.toggle("base", t.dataset.id === state.base.id));
     document.querySelectorAll(".tile").forEach(t => {{  // (the Overlay button lights up while it has copies there)
       const copies = state.overlay.copies.filter(c => c.id === t.dataset.id).length;

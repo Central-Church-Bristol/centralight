@@ -49,6 +49,7 @@ from ..commands import (
     SetMaster,
     SetCountdownLength,
     SetDefaultShow,
+    CloseShow,
     SetOverlayOn,
     SetOverlayOpacity,
     SetVariable,
@@ -56,15 +57,16 @@ from ..commands import (
 from .. import startup
 from ..automations import update_automation, upcoming
 from ..links import original_problem
+from ..files import read_json
 from ..global_automations import GLOBAL_DIR, GLOBAL_NAME, global_folder
 from ..layouts import switch_layout
 from ..engine import EngineFrame
 from ..input_edit import delete_input, duplicate_input, move_input, new_input, update_input
 from ..live_state import LiveState
 from ..log import log_exception, log_info
-from ..model import Show, clean_notes
+from ..model import NO_SHOW, Show, clean_notes, safe_text
 from ..ndi_source import CONNECTED, NO_SIGNAL, SEARCHING
-from ..output import device_spec, universe_size
+from ..output import device_spec, show_channels
 from ..paths import documents_dir, settings_path
 from ..paths import shows_root as default_shows_root
 from ..settings import QUIT_ASK, QUIT_LEAVE, QUIT_OFF, Settings
@@ -83,7 +85,7 @@ from ..clshow import (
     size_text,
 )
 from ..show_import import apply_import, copy_files, imported_automation_ids
-from ..show_io import ShowError, backup_show
+from ..show_io import SHOW_FILE, ShowError, backup_show
 from ..show_io import load_show as read_show
 from ..shows import (
     ShowInfo,
@@ -111,6 +113,7 @@ from .document import KIND_GLOBAL, SCOPE_AUTOMATIONS, SCOPE_LAYOUT, SCOPE_SHOW, 
 from .editor_page import EditorPage
 from .header import PAGES, Header
 from .layout_page import LayoutPage
+from .no_show import NoShowPage, automations_line
 from .countdown_banner import CountdownBanner
 from .package_dialogs import GLOBALS_ROW, SETTINGS_ROW, ExportDialog, ImportPackageDialog, Stopped, run_with_progress
 from .import_dialog import AUTOMATIONS, INPUTS, ImportItemsDialog, NotesDialog
@@ -120,6 +123,7 @@ from .quit_dialog import QuitDialog
 from .settings_dialog import SettingsDialog
 from .widgets import STATE_ERROR, STATE_INFO, STATE_OK, STATE_WARN, install_wheel_guard
 
+CARD_CHECK = 20.0  # seconds: how often the No show loaded card checks which global automation loads a show next (M14)
 LOAD_HOLD = 30.0  # seconds a show asked for by an automation or the Stream Deck waits for an open dialog to close
 QUIT_WORDS = {QUIT_OFF: "turn the lights off", QUIT_LEAVE: "leave the lights as they are"}  # (for the session log)
 LIVE_HEARTBEAT_MS = 60_000  # live.json is saved at least this often, so a restart knows when CentraLight last ran
@@ -232,7 +236,7 @@ class MainWindow(QWidget):
         self.countdown_banner = CountdownBanner()
         self.countdown_banner.pressed.connect(lambda what, cid: self.engine.submit(CountdownAction(what, cid)))
         self.engine.submit(SetCountdownLength(settings.countdown))
-        self.engine.submit(SetDefaultShow(settings.default_show))  # (it comes back after a schedule, M14)
+        self.engine.submit(SetDefaultShow(settings.default_show, settings.black_fade))  # (it comes back after a schedule, M14)
 
         sources = getattr(engine, "sources", None)
         self.dashboard = DashboardPage(show, sources=sources)
@@ -288,6 +292,14 @@ class MainWindow(QWidget):
         for page in self.pages.values():
             self.stack.addWidget(page)
         self._page = ""
+        # no show loaded (M14): every tab but Automation shows this card instead (the lights are off)
+        self.no_show_page = NoShowPage()
+        self.no_show_page.load_requested.connect(lambda folder: self.load_show(folder))
+        self.no_show_page.new_requested.connect(self.ask_new_show)
+        self.no_show_page.import_requested.connect(lambda: self.ask_import_package(""))
+        self.stack.addWidget(self.no_show_page)
+        self._card_checked = 0.0  # when the card's global automations line was last worked out
+        self._card_paused: bool | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -309,6 +321,7 @@ class MainWindow(QWidget):
         picker.notes_requested.connect(self.edit_notes)
         picker.export_requested.connect(lambda everything: self.export_package(everything))
         picker.import_requested.connect(lambda: self.ask_import_package(""))
+        picker.close_requested.connect(self.close_show)
         picker.notes = show.notes
         self.header.settings_requested.connect(self.open_settings)
         self.header.house_changed.connect(self._house_changed)
@@ -376,6 +389,7 @@ class MainWindow(QWidget):
         self._update_title(show)
         self._update_hotkeys(show)
         self._update_remote_chip()
+        self._follow_no_show(show)
         self.show_page(settings.page if settings.page in self.pages else "dashboard")
         self._restore_geometry()
         self.bridge.poll()
@@ -395,14 +409,15 @@ class MainWindow(QWidget):
         if self._page == "editor" and key != "editor":
             self.editor_page.on_leave()
         self._page = key
-        self.stack.setCurrentWidget(page)
+        card = self.document.show.no_show and key != "automation"  # (no show loaded, M14: the card instead)
+        self.stack.setCurrentWidget(self.no_show_page if card else page)
         self._update_preview_wanted()
         self.header.set_page(key)
         self.settings.page = key
-        if key == "layout" and self.last_frame is not None:
+        if key == "layout" and self.last_frame is not None and not card:
             self.layout_page.set_frame(self.last_frame)
         self._update_undo_scope()
-        if key == "editor":
+        if key == "editor" and not card:
             self.editor_page.on_enter()
 
     def _update_undo_scope(self) -> None:
@@ -516,6 +531,13 @@ class MainWindow(QWidget):
                 backup_show(Path(folder))
             except OSError as exc:
                 log_exception("show backup", exc)
+        self._leave_show()
+        self.document.load(show, automation)
+        log_info(f"{who + ': ' if who else ''}show “{show.name}” loaded")
+        return True
+
+    def _leave_show(self) -> None:
+        """Before another show loads (or none): what belonged to this one ends."""
         self._leave_live_modes()  # (Identify, test colours, the Editor's and the AI window's "on the lights" end)
         dialog = getattr(self, "ai_dialog", None)
         if dialog is not None:
@@ -524,9 +546,39 @@ class MainWindow(QWidget):
             except RuntimeError:
                 pass
             self.ai_dialog = None
-        self.document.load(show, automation)
-        log_info(f"{who + ': ' if who else ''}show “{show.name}” loaded")
+
+    def close_show(self) -> None:
+        """Show ▾ → None (lights off) (M14): the lights fade off over Fade to black's time (the Festoon and Key lights
+        too), then the show closes and the tabs say "No show loaded" (the engine asks for that once they're off)."""
+        if self._locked or self.document.show.no_show:
+            return
+        self.engine.submit(CloseShow(self.settings.black_fade, "Show menu"))
+
+    def _close_now(self, who: str, automation: bool = False) -> bool:
+        """No show from now on (M14): every DMX channel at 0, the global automations carry on. automation: a global
+        automation's (the default show None, after a schedule ended), not a person's. True if it closed."""
+        if self.document.show.no_show:
+            return False
+        self._leave_show()
+        self.document.load(NO_SHOW, automation)
+        log_info(f"{who or 'Show menu'}: the show closed (no show loaded, the lights are off)")
         return True
+
+    def _new_show_template(self) -> Show:
+        """What a new show takes its lights and layouts from: the loaded show, or with none loaded (M14) the last one
+        that was (failing that, the church's standard lights)."""
+        show = self.document.show
+        if not show.no_show:
+            return show
+        folder = self.settings.show_folder
+        if folder and Path(folder).is_dir():
+            try:
+                return read_show(Path(folder))
+            except (ShowError, OSError) as exc:
+                log_info(f"New show: the last show ({folder}) couldn't be read for its lights ({exc})")
+        from ..new_show import show_from_patch
+
+        return show_from_patch()
 
     def _show_loaded(self, show: Show) -> None:
         """Another show is loaded: the window follows (its files watched, its problems shown, it opens next time)."""
@@ -550,6 +602,55 @@ class MainWindow(QWidget):
             self._guide_timer.start()
             if show.folder and not show.read_only:
                 self._backup_timer.start()
+        self._follow_no_show(show)
+        wanted = self.no_show_page if show.no_show and self._page != "automation" else self.pages.get(self._page)
+        if wanted is not None and self.stack.currentWidget() is not wanted:
+            self.show_page(self._page)  # (the card, or the tab itself again)
+
+    def _follow_no_show(self, show: Show) -> None:
+        """No show loaded, or a show loaded (M14): the header's controls that need one, and the card's lists."""
+        self.header.set_no_show(show.no_show)
+        if show.no_show:
+            if not self.header.house_controls:  # (opened with no show: the show loaded last's house lights, greyed out)
+                house = self._last_house_lights()
+                if house:
+                    self.header.set_house(house)
+            self._refresh_card(force=True)
+
+    def _last_house_lights(self) -> list[tuple[str, str]]:
+        """No show loaded when CentraLight opens (M14): the Festoon and Key lights of the show loaded last, (fixture id,
+        name), from its show.json, so the header shows them greyed out at the levels they come back at. [] if there's
+        none, or it can't be read."""
+        folder = self.settings.show_folder
+        if not folder:
+            return []
+        try:
+            data = read_json(Path(folder) / SHOW_FILE)
+        except (OSError, ValueError):
+            return []
+        items = data.get("house") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return []
+        return [(item["fixture"], safe_text(str(item.get("label") or item["fixture"])))
+                for item in items if isinstance(item, dict) and isinstance(item.get("fixture"), str) and item["fixture"]]
+
+    def _refresh_card(self, frame: EngineFrame | None = None, force: bool = False) -> None:
+        """No show loaded (M14): the card's shows, and whether the global automations will load one (every
+        CARD_CHECK seconds, and at once when they're paused or resumed)."""
+        frame = frame if frame is not None else self.last_frame
+        paused = bool(frame.automations.paused) if frame is not None else False
+        now = time.monotonic()
+        if not force and paused == self._card_paused and now - self._card_checked < CARD_CHECK:
+            return
+        self._card_checked, self._card_paused = now, paused
+        try:
+            shows = self.list_shows()
+        except OSError as exc:
+            log_info(f"No show loaded: the shows couldn't be listed ({exc})", key="no-show-list")
+            shows = []
+        self.no_show_page.set_shows(shows)
+        state, text = automations_line(self.global_document.show, shows, paused, datetime.now())
+        self.no_show_page.set_automations(state, text)
 
     def _dialog_open(self) -> bool:
         """A dialog is waiting for an answer: a question, a name to type, a file to pick, or Windows' own (deleting a
@@ -581,7 +682,11 @@ class MainWindow(QWidget):
                 self.engine.submit(ShowLoadFailed(str(action.get("show", "")).strip()))
 
     def _load_requested(self, who: str, action: Mapping[str, Any]) -> None:
-        """A global automation (a show id or name) or the Stream Deck (a folder) asks for a show."""
+        """A global automation (a show id or name) or the Stream Deck (a folder) asks for a show (or, M14, for none: the
+        lights have faded off, so the show closes)."""
+        if action.get("do") == "close_show":
+            self._close_now(who, automation=action.get("_scope") == "global")
+            return
         wanted = str(action.get("folder") or action.get("show") or "").strip()
         is_global = action.get("_scope") == "global"
         # (the engine waits for a global automation's show: it's told if it can't load, by the name it asked for)
@@ -608,15 +713,19 @@ class MainWindow(QWidget):
     def ask_new_show(self) -> None:
         if self._locked:
             return
-        name, ok = QInputDialog.getText(
-            self, "New show", "Name for the new show:\n\n(It has this show's lights and layouts, and “Follow screen”. It "
-            "opens straight away; the lights hold what they show until you send one of its inputs.)",
-            text=unique_name(self.shows_root(), "New show"))
+        if self.document.show.no_show:
+            about = ("(It has the lights and layouts of the show loaded last, and “Follow screen”. It opens straight away; "
+                     "the lights stay off until you send one of its inputs.)")
+        else:
+            about = ("(It has this show's lights and layouts, and “Follow screen”. It opens straight away; the lights hold "
+                     "what they show until you send one of its inputs.)")
+        name, ok = QInputDialog.getText(self, "New show", f"Name for the new show:\n\n{about}",
+                                        text=unique_name(self.shows_root(), "New show"))
         if not ok or not name.strip():
             return
         self.document.flush()
         try:
-            folder = new_show(self.document.show, self.shows_root(), name)
+            folder = new_show(self._new_show_template(), self.shows_root(), name)
         except (ShowError, OSError) as exc:
             log_exception("making a new show", exc)
             QMessageBox.warning(self, "New show", f"CentraLight couldn't make the show:\n{exc}")
@@ -687,9 +796,13 @@ class MainWindow(QWidget):
         self.engine.submit(ForgetShow(folder))  # (and its variables)
         if self._save_files:
             self._guide_timer.start()  # (the global automations' guide lists the shows)
+        if self.document.show.no_show:
+            self._refresh_card(force=True)  # (no show loaded: the card's shows)
 
     def current_page(self) -> str:
         current = self.stack.currentWidget()
+        if current is self.no_show_page:
+            return self._page or "dashboard"
         return next((k for k, w in self.pages.items() if w is current), "dashboard")
 
     def set_locked(self, locked: bool) -> None:
@@ -699,6 +812,7 @@ class MainWindow(QWidget):
         self.layout_page.setEnabled(not locked)
         self.editor_page.setEnabled(not locked)
         self.automation_page.setEnabled(not locked)
+        self.no_show_page.setEnabled(not locked)
         self.header.show_picker.setEnabled(not locked)
         self.lock_banner.setVisible(locked)
         self.countdown_banner.set_locked(locked)
@@ -756,17 +870,21 @@ class MainWindow(QWidget):
     def _show_changed(self, show: Show) -> None:
         set_trim = getattr(self.output, "set_trim", None)
         if set_trim is not None:  # a light added or moved past the last channel sent so far gets DMX at once
-            set_trim(universe_size(show.fixtures))
+            set_trim(show_channels(show))  # (no show, M14: all 512 channels, at 0)
         self._update_hotkeys(show)
         if self._save_files and self._guide_inputs(show) != self._guide_key:
             self._guide_timer.start()  # the lights or globals changed: rewrite the AI guide soon
         self.dashboard.set_show(show)
-        self.header.set_house([(h.fixture, h.label) for h in show.house])
+        if not show.no_show:  # (no show, M14: the last show's house lights stay on the header, greyed out)
+            self.header.set_house([(h.fixture, h.label) for h in show.house])
         self.header.set_show_name(show.name, show.folder)
         self.header.show_picker.notes = show.notes
         self._update_title(show)
 
     def _update_title(self, show: Show) -> None:
+        if show.no_show:
+            self.setWindowTitle("CentraLight — No show loaded")
+            return
         suffix = " (read-only)" if show.read_only else ""
         self.setWindowTitle(f"CentraLight — {show.name}{suffix}")
 
@@ -788,7 +906,8 @@ class MainWindow(QWidget):
         self.countdown_banner.set_view(frame.countdown, self._show_name_for)
         if self.tray is not None:
             self.tray.set_paused(frame.automations.paused)
-            self.tray.set_status(f"Base: {frame.base}" + (" · automations paused" if frame.automations.paused else ""))
+            status = "No show loaded (the lights are off)" if self.document.show.no_show else f"Base: {frame.base}"
+            self.tray.set_status(status + (" · automations paused" if frame.automations.paused else ""))
         if not self.isVisible():
             return  # hidden in the tray: nothing to draw
         self.header.set_frame(frame)
@@ -798,6 +917,8 @@ class MainWindow(QWidget):
         self.editor_page.set_frame(frame)
         self.automation_page.set_frame(frame)
         self._update_automations_chip(frame)
+        if self.document.show.no_show:
+            self._refresh_card(frame)
         if self._page == "layout":
             self.layout_page.set_frame(frame)
 
@@ -901,7 +1022,7 @@ class MainWindow(QWidget):
         audio_before = (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release)
         dialog.apply_to(self.settings)
         self.engine.submit(SetCountdownLength(self.settings.countdown))
-        self.engine.submit(SetDefaultShow(self.settings.default_show))
+        self.engine.submit(SetDefaultShow(self.settings.default_show, self.settings.black_fade))
         self.automation_page.set_default_show(self.settings.default_show)
         if (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release) != audio_before:
             log_info(f"Audio source: {self.settings.audio_source or 'off'}")
@@ -909,7 +1030,7 @@ class MainWindow(QWidget):
         self.editor_page.timeline.ndi_default = self.settings.ndi_default
         if self._output_key() != before:
             log_info(f"Output changed to {self.settings.output}")
-            self.output.set_spec(device_spec(self.settings, universe_size(self.show_data.fixtures)))
+            self.output.set_spec(device_spec(self.settings, show_channels(self.show_data)))
         if self.settings.start_with_windows != startup_before and startup.managed():
             trouble = startup.sync(self.settings.start_with_windows)
             if trouble:
@@ -981,7 +1102,9 @@ class MainWindow(QWidget):
         try:
             written = write_guide_files(show)
             folder = self.global_document.show.folder
-            if folder and not self.global_document.read_only:  # (and the global automations' own, with the shows' ids)
+            # (and the global automations' own, with the shows' ids; not with no show loaded, M14: its house lights
+            # are the ones the guide names, and it keeps the last show's)
+            if folder and not self.global_document.read_only and not show.no_show:
                 written += write_global_guide(Path(folder), [(s.id, s.name) for s in self.list_shows()],
                                               [h.label for h in show.house])
         except Exception as exc:
@@ -1125,6 +1248,8 @@ class MainWindow(QWidget):
                 failed.append(f"{what}: {exc}")
         if done:
             log_info(f"Imported from {package.path.name}: {', '.join(done)}")
+            if self.document.show.no_show:
+                self._refresh_card(force=True)  # (no show loaded: the card lists an imported show at once)
         text = ("Imported " + ", ".join(done) + ". An imported show isn't loaded: Show ▾ loads it.") if done else "Nothing was imported."
         if failed:
             text += "\n\nNot imported:\n" + "\n".join(f"• {line}" for line in failed)
@@ -1174,7 +1299,7 @@ class MainWindow(QWidget):
             if item.name not in KEEP_ON_THIS_PC:
                 setattr(self.settings, item.name, getattr(imported, item.name))
         self.engine.submit(SetCountdownLength(self.settings.countdown))
-        self.engine.submit(SetDefaultShow(self.settings.default_show))
+        self.engine.submit(SetDefaultShow(self.settings.default_show, self.settings.black_fade))
         self.automation_page.set_default_show(self.settings.default_show)
         self.editor_page.timeline.ndi_default = self.settings.ndi_default
         if (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release) != audio_before:
@@ -1348,11 +1473,12 @@ class MainWindow(QWidget):
                 who, action = requests.get_nowait()
             except queue.Empty:
                 return
-            if action.get("do") == "load_show":
-                if action.get("_scope") == "global":  # (the engine waits for this show: it's here, and may be held)
+            if action.get("do") in ("load_show", "close_show"):  # (closing it too, for no show: M14)
+                if action.get("do") == "load_show" and action.get("_scope") == "global":  # (the engine waits for this show: it's here, and may be held)
                     self.engine.submit(ShowLoadWaiting(str(action.get("show", "")).strip(), LOAD_HOLD + 10.0))
                 if dialog_open:
-                    log_info(f"{who}: the show loads when the dialog that's open is closed", key="load-waits-for-dialog")
+                    happens = "closes" if action.get("do") == "close_show" else "loads"
+                    log_info(f"{who}: the show {happens} when the dialog that's open is closed", key="load-waits-for-dialog")
                     since = self._waiting_load[2] if self._waiting_load is not None else time.monotonic()
                     self._waiting_load = (who, action, since)  # (the newest request is the one that counts)
                 else:

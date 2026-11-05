@@ -60,6 +60,8 @@ from .bus import (
     render_input,
 )
 from .commands import (
+    BLACK_FADE,
+    CloseShow,
     HOUSE_SLEW,
     HOUSE_SWITCH_FADE,
     QUIT_FADE,
@@ -421,6 +423,10 @@ class Engine:
         self._quiet_until = now + STARTUP_QUIET
         self._show_events: set[str] = {"show_loads"} if self._pc_start else set()  # for the show's automations' next check
         self._pending_load: tuple[str, float] | None = None  # (show, until when) a global automation is loading
+        # (when, who, a global automation): the show closes once the lights have faded (M14); black_fade: how long that
+        # takes when a schedule ends and the default show is None (Settings' Fade to black)
+        self._closing: tuple[float, str, bool] | None = None
+        self.black_fade = BLACK_FADE
         self._woke = False
         self._last_wake: float | None = None
         self._prev_mono: float | None = None
@@ -535,6 +541,7 @@ class Engine:
                                                          for i, light_id in enumerate(self._lights.ids)}}
         return LiveState(
             show=self.show.folder,
+            no_show=self.show.no_show,
             master=self._master.target,
             quit_dark=self._quit_dark,
             quit_at=(self._quit_at or 0.0) if self._quit_dark else 0.0,
@@ -857,6 +864,9 @@ class Engine:
                 runner.cap_countdowns(now, self.countdown_seconds)
         elif isinstance(command, SetDefaultShow):
             self._global_runner.default_show = str(command.show or "").strip()
+            self.black_fade = max(0.0, float(command.fade))
+        elif isinstance(command, CloseShow):
+            self._start_close(command.seconds, command.who, False, now)
         elif isinstance(command, CountdownAction):
             self._countdown_pressed(command.what, command.countdown_id, now)
         elif isinstance(command, QuietAutomations):
@@ -902,6 +912,10 @@ class Engine:
     def _automations(self, now: float) -> bool:
         """Check the automations (every second, and at once when what they look at changes) and
         do what they say. Also notices waking from sleep by the clocks jumping. True if anything ran."""
+        if self._closing is not None and now >= self._closing[0]:  # (the lights have faded off: the show closes, M14)
+            _when, who, automatic = self._closing
+            self._closing = None
+            self.gui_requests.put((who, {"do": "close_show", **({"_scope": "global"} if automatic else {})}))
         wall = self._wall()
         if self._prev_mono is not None:
             gap = now - self._prev_mono  # the engine's clock: stops while the PC sleeps on some PCs
@@ -984,8 +998,10 @@ class Engine:
             runner.needless = lambda action: self._needless(action, now)
 
     def _needless(self, action: Mapping[str, Any], now: float) -> bool:
-        """A change that wouldn't change anything gets no countdown: a show that's loaded already, or the colour lights
-        to black when they are (and nothing else is asked for)."""
+        """A change that wouldn't change anything gets no countdown: a show that's loaded already (or none, to close),
+        or the colour lights to black when they are (and nothing else is asked for)."""
+        if action.get("do") == "close_show":
+            return self.show.no_show or self._closing is not None
         if action.get("do") == "load_show":
             wanted = str(action.get("show", "")).strip()
             return not wanted or self._is_loaded(wanted)
@@ -1057,6 +1073,18 @@ class Engine:
                 for who, action in runner.run_early(automation, early[1], now, self._wall()):
                     do(who, action, now)
 
+    def _start_close(self, seconds: float, who: str, automatic: bool, now: float) -> None:
+        """No show from now on (M14): the lights fade off (the Festoon and Key lights too), then the window is asked to
+        close the show (at once if they're off already). A show loaded meanwhile stops it. automatic: a global
+        automation's (the default show None, after a schedule), not a person's."""
+        if self.show.no_show or self._closing is not None:
+            return
+        lit = not self._black_now(now) or any(house.on for house in self._house.values())
+        seconds = max(0.0, float(seconds)) if lit else 0.0
+        self._to_black(seconds, True, now)
+        self._closing = (now + seconds, who, automatic)
+        log_info(f"{who}: the show closes" + (f" once the lights have faded off ({seconds:g} s)" if seconds else ""))
+
     def _global_action(self, who: str, action: dict, now: float) -> None:
         """A global automation's action. While a show it asked for is loading, its other actions wait for it, so they
         happen in that show (its Festoon and Key lights, say), in their order."""
@@ -1074,6 +1102,8 @@ class Engine:
 
     def _show_names(self) -> frozenset[str]:
         """What else a global automation can call the loaded show, besides its id: its folder's name and its name."""
+        if self.show.no_show:
+            return frozenset()  # (no show: none is loaded, whatever it's called)
         folder = str(self.show.folder or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
         return frozenset(name for name in (folder.casefold(), self.show.name.casefold()) if name)
 
@@ -1090,6 +1120,10 @@ class Engine:
 
     def _do_action_now(self, who: str, action: dict, now: float, lifts: bool = False, scope: str = "show") -> None:
         container = self.global_automations if scope == "global" else self.show
+        if action.get("do") == "close_show":  # (the default show is None, M14: the lights fade off, then the show closes)
+            name = container.automations[who].name if who in container.automations else who
+            self._start_close(self.black_fade, name, scope == "global", now)
+            return
         if action.get("do") in GUI_ACTIONS:
             name = container.automations[who].name if who in container.automations else who
             if action.get("do") == "load_show":
@@ -1242,7 +1276,16 @@ class Engine:
         base = self._base
         fading_to_black = (solo is None and base.current is None and base.held is None and base.transitioning(now)
                            and not self._overlay.lit(now, including_fades=False))
-        if fading_to_black:  # (a Fade to black, say: frozen now, the lights would stay as they are this moment)
+        if show.no_show:  # (no show, M14: every light off and nothing held, so the next show comes up from black)
+            held = None
+            base.current = None
+            base.outgoing = None
+            base.transition = Transition("cut", 0.0)
+            for house in self._house.values():
+                if house.on:
+                    house.on = False
+                    house.switch.set(0.0, 0.0, now)
+        elif fading_to_black:  # (a Fade to black, say: frozen now, the lights would stay as they are this moment)
             held = None
             if isinstance(base.outgoing, Instance):  # (Stop: the old show's input fading out, held still as it fades)
                 outgoing, contexts = base.outgoing, self._contexts()
@@ -1271,8 +1314,12 @@ class Engine:
         self._runner.paused, self._runner.paused_since = paused, since
         self._show_events = {"show_loads"}
         self._pending_load = None
+        self._closing = None  # (a show closing to make way for no show doesn't: this one's loaded)
         self._auto_key = None
         self._feeds_until = now + FEED_WAIT  # (its feeds are still connecting)
+        if show.no_show:
+            log_info("No show loaded: every light is off (all 512 channels at 0); the global automations carry on")
+            return
         log_info(f"Show “{show.name}” loaded ({show.folder}); the lights hold what they showed until one of its inputs is sent"
                  if held is not None else f"Show “{show.name}” loaded ({show.folder})")
 
@@ -1345,7 +1392,13 @@ class Engine:
         return names
 
     def _sync_house(self, settings: Mapping[str, HouseSetting]) -> None:
-        """Match the house-light list to the show (new ones start off, at full)."""
+        """Match the house-light list to the show (new ones start off, at full). With no show loaded (M14), the last
+        show's stay, switched off, so their levels come back with the next show (and the header shows them)."""
+        if self.show.no_show:
+            for fid, setting in settings.items():
+                if fid not in self._house:
+                    self._house[fid] = _House(HouseSetting(setting.level, False))
+            return
         wanted = [fx.id for fx in self.show.house_fixtures()]
         for fid in wanted:
             if fid not in self._house:

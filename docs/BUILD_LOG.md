@@ -53,6 +53,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | A 3-hour soak of M14 (show loads, video copies on the Overlay, countdowns, a linked video) | **done** (5 Nov, 07:16; no errors; memory level after the first hour, threads flat) |
 | — your rule of 5 Nov: a schedule that ends by going black keeps the default show away | **done** (5 Nov, 09:05) |
 | — your change of 5 Nov: masks as black-and-white pictures (Paint's tools in greys, White, Black, Invert) | **done** (5 Nov, 09:50) |
+| — your change of 5 Nov: the Default show's **Last loaded** and **None (lights off)** (no show loaded) | **done** (5 Nov, 11:07) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -175,7 +176,9 @@ essentially just look like black and white images")*.
 - The AI guides explain `"weeks"`. Automations from before stay "Every week" (the setting is left out of the file).
 
 **5. A default show.**
-- **Settings → Starting and quitting → Default show:** "None: open the last show" (as before), or one of the shows.
+- **Settings → Starting and quitting → Default show:** **Last loaded** (as before: a PC start opens the last show, and
+  nothing loads when a schedule ends), **None (lights off)** (below), or one of the shows. Settings saved before read
+  as Last loaded.
 - **When the PC starts,** the default show opens instead of the last one. Global automations then run as before, with
   catch-up, and win: one that's under way (Sunday 10:00, say) loads its show.
 - **After a schedule ends:** when the global automation that loaded the show stops matching, the default show loads
@@ -191,6 +194,29 @@ essentially just look like black and white images")*.
   to open).
 - **Two shows asked for in the same second** (your "When CentraLight starts → Load a show" at the top, and a schedule
   that's under way): a test checks both load, in the automations' order, and the second stays.
+- **None (lights off)** *(your change of 5 Nov, as the mock-up you agreed)*: no show at all.
+  - **A PC start opens no show,** and when a schedule ends the show closes: its countdown ("Closing the show (lights
+    off)", with Do it now / Wait 10 min / Skip), then the lights fade off over Fade to black's time (the Festoon and
+    Key lights too), then the show closes. The same rules as a default show: a show loaded by hand since wins, the
+    schedule's own "When it stops matching" wins, and a longer schedule that still matches gets its show back (the show
+    closes when that one ends).
+  - **With no show loaded,** CentraLight keeps sending, all 512 channels at 0, so no light keeps a colour an earlier
+    show sent it. The global automations carry on: one that loads a show brings it in as any load does (the lights
+    from black, its "When this show loads" automations run). There are no show automations, inputs, house lights or
+    show variables meanwhile.
+  - **The header** reads "Show: None"; the Festoon, Key lights, Master and Cut / Fade to black are greyed out, saying
+    "Load a show first". Lock, Settings and the status chips work as usual.
+  - **Every tab but Automation** shows the card: the logo dimmed, "No show loaded", "The lights are off. Load a show
+    to bring them up.", a **Load** button for each show, **New show…** and **Import a show…**, and a line saying
+    whether the global automations will load one ("Global automations are still on. Next: Sunday Morning Service,
+    Sun 07:00 → Central Church"), or that they're paused, or that none will in the next 7 days.
+  - **The Automation tab** still edits the global automations; "This show" says no show is loaded.
+  - **The phone page** says "No show loaded", with the show switcher (and the Stream Deck URLs that load a show).
+    URLs for inputs, the Overlay, show variables, Master, the house lights, Cut / Fade to black, Identify, the show's
+    automations and layouts answer 404 "No show loaded"; loading a show, the global automations, pausing them, the
+    countdown, the shows and the state still work.
+  - **The week schedule** draws the gaps as "No show (lights off)", in grey.
+  - **Reopening** after a quit or a crash carries on with no show.
 
 **10. Remember or reset each show variable.**
 - **Each show variable's card** (Editor → Show variables) has **When the show loads: Keep its last value / Go back to
@@ -1612,6 +1638,24 @@ Problems the tests found and that are fixed:
     either runs its "When this show loads" automations, and both your shows' "Start Up" would light the church again,
     at midnight for "Dioscesioan Event"). Nothing comes back over it later either: the next show to load is the next
     schedule's, or one you choose. The week schedule draws no default show after such a schedule's block.
+  - **None (lights off)** (your change of 5 Nov), the choices I made:
+    - **Proposed: the Show menu lists None (lights off)** under the shows, so you can close the show by hand (handy
+      for checking this at the rig). It does what a schedule's end does, without the countdown: the lights fade off,
+      then the show closes. It's a person's choice, so a schedule ending later brings nothing back over it.
+    - **The fade before the close** takes Fade to black's time (Settings; 2 s to start with), the Festoon and Key
+      lights too. If the lights are off already, the show closes at once. A show loaded during the fade stops it.
+    - **Last loaded, when no show was loaded last:** a PC start carries on with no show (Last loaded is whatever was
+      loaded last, none included).
+    - **The header keeps the last show's Festoon and Key lights,** greyed out at their levels, and those levels come
+      back with the next show. When CentraLight opens with no show (a PC start, say), they're those of the show loaded
+      last.
+    - **New show… with no show loaded** takes its lights and layouts from the show loaded last (failing that, the
+      church's standard lights).
+    - **On the card** the shows sit two to a row, as in the mock-up. "Next" is the next global automation that loads
+      a show by the clock in the next 7 days ("if its other conditions are true then" when it has other conditions);
+      the line is worked out again every 20 seconds, and at once when the automations are paused or resumed.
+    - **The phone page with no show** has no Cut / Fade to black buttons (they'd only answer "No show loaded"), and
+      says "The lights are off" where it usually says what's on Base.
 - **M13 choices** (all easy to change):
   - **The week schedule is a tab beside the automation's editor** (Automation | Week schedule) rather than squeezed
     in beside the Coming up list: at 1280×720 that panel is too short for a week, and the left column too narrow.

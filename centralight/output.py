@@ -67,6 +67,12 @@ def universe_size(fixtures: Iterable[Fixture]) -> int:
     return max(MIN_CHANNELS, min(DMX_CHANNELS, last))
 
 
+def show_channels(show) -> int:
+    """How many channels a show needs sent: up to its last light's (universe_size), or all 512 when no show is loaded
+    (M14: every channel at 0, so no light keeps a colour it was sent before, by this show or an earlier one)."""
+    return DMX_CHANNELS if getattr(show, "no_show", False) else universe_size(show.fixtures)
+
+
 def encode_dmx(
     fixtures: Iterable[Fixture],
     colours: Mapping[str, RGB],

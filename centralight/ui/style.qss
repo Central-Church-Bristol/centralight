@@ -166,6 +166,39 @@ QFrame#Row {
     border: none;
     border-bottom: 1px solid @border;
 }
+QFrame#NoShowRow {  /* No show loaded (M14): a show on the card, with its Load button */
+    background: @card;
+    border: 1px solid @border;
+    border-radius: 10px;
+}
+QFrame#NoShowLine {
+    background: @border;
+    border: none;
+}
+QLabel#NoShowTitle {
+    font-family: @uifont;
+    font-size: 32px;
+    font-weight: 500;
+    color: @text;
+}
+QLabel#NoShowText {
+    color: @text_2;
+    font-size: 15px;
+}
+QLabel#NoShowName {
+    font-family: @uifont;
+    font-size: 18px;
+    font-weight: 500;
+    color: @text;
+}
+QPushButton#NoShowLoad {
+    border-radius: 15px;
+    padding: 6px 18px;
+}
+QPushButton#NoShowButton {
+    min-width: 140px;
+    padding: 8px 18px;
+}
 
 QLabel#EditorTitle {
     color: @text;

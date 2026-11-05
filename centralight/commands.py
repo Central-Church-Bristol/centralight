@@ -261,10 +261,22 @@ class SetCountdownLength:
 
 @dataclass(frozen=True)
 class SetDefaultShow:
-    """The default show (Settings, M14): its id, or "" for none. It loads when the global automation that loaded a show
-    stops matching, unless a person has loaded another since, or that automation's "when it stops matching" loads one."""
+    """The default show (Settings, M14): its id, "" for Last loaded (nothing comes back), or "_none" for None (lights
+    off: the show closes). It loads when the global automation that loaded a show stops matching, unless a person has
+    loaded another since, or that automation's "when it stops matching" loads one. fade: with None, how long the lights
+    take to fade off before the show closes (Settings' Fade to black)."""
 
     show: str = ""
+    fade: float = BLACK_FADE
+
+
+@dataclass(frozen=True)
+class CloseShow:
+    """No show from now on (M14, the show picker's None (lights off)): the lights fade off over `seconds` (the Festoon
+    and Key lights too), then the window closes the show. A show loaded meanwhile stops it."""
+
+    seconds: float = BLACK_FADE
+    who: str = "Show menu"
 
 
 @dataclass(frozen=True)
@@ -316,4 +328,5 @@ Command = (
     | SetCountdownLength
     | CountdownAction
     | QuietAutomations
+    | CloseShow
 )

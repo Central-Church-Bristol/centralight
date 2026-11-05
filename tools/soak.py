@@ -29,6 +29,11 @@ waits for its 15 s countdown, then fades), and 40 s later back to 0.1 (Follow sc
 with --linked-video, so each copy has a video reader of its own; else Follow screen), and Clear all clears them
 20 s later. Each sample also counts the app's threads, which should level off too (a reader that's never
 closed would show as a climbing count).
+
+--no-show M (M14): the default show is None (lights off), and global schedules load Central Church for M minutes,
+then none for M minutes, over and over: each schedule's end counts down, fades the lights off and closes the show,
+and the next one loads it again from no show ("When this show loads" sends Follow screen). Each sample asks the
+remote whether a show is loaded; the summary counts the closes and loads.
 """
 
 from __future__ import annotations
@@ -45,6 +50,7 @@ import tempfile
 import threading
 import time
 from ctypes import wintypes
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -232,6 +238,45 @@ def add_countdown_automation(show_folder: Path) -> None:
     (show_folder / "automations" / "mood-fade.json").write_text(json.dumps(automation, indent=2), encoding="utf-8")
 
 
+def add_no_show_schedules(shows: Path, minutes: float, total_minutes: float) -> int:
+    """--no-show: global schedules ("Soak 000", ...) that load Central Church for `minutes`, then leave `minutes` with
+    none, from two minutes from now until the soak ends; and the show's "Start up" (When this show loads → Follow
+    screen), so each load lights things again. Returns how many schedules there are."""
+    step = max(1, int(round(minutes)))
+    folder = shows / "_Global automations"  # (each global automation is <id>.json, right in it)
+    folder.mkdir(parents=True, exist_ok=True)
+    at = (datetime.now() + timedelta(minutes=2)).replace(second=0, microsecond=0)
+    until = datetime.now() + timedelta(minutes=total_minutes + 1)
+    count = 0
+    while at < until:
+        end = at + timedelta(minutes=step)
+        data = {"format": "centralight-automation", "version": 1, "id": f"soak-{count:03d}", "name": f"Soak {count:03d}",
+                "logic": "all", "conditions": [{"type": "time", "from": f"{at:%H:%M}", "to": f"{end:%H:%M}"}],
+                "actions": [{"do": "load_show", "show": "central-church"}]}
+        (folder / f"soak-{count:03d}.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
+        at = end + timedelta(minutes=step)
+        count += 1
+    show_folder = shows / "Central Church"
+    start_up = {"format": "centralight-automation", "version": 1, "id": "start-up", "name": "Start up", "logic": "all",
+                "conditions": [{"type": "show_loads"}],
+                "actions": [{"do": "base", "input": "follow-screen", "transition": "cut"}]}
+    (show_folder / "automations").mkdir(exist_ok=True)
+    (show_folder / "automations" / "start-up.json").write_text(json.dumps(start_up, indent=2), encoding="utf-8")
+    return count
+
+
+def remote_state(port: int) -> dict:
+    """The app's /api/state ({} if it didn't answer)."""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=5) as reply:
+            data = json.loads(reply.read().decode("utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def add_linked_video(shows: Path, original: Path, appdata: Path) -> None:
     """Each show gets "Linked video" (a Video element linked to the original); the original is allowed, as if someone
     at the PC had chosen it."""
@@ -295,6 +340,8 @@ def main() -> int:
                    help="an automation counts down and fades every this many minutes (0: never)")
     p.add_argument("--overlay", type=float, default=0.0,
                    help="two copies of an input go on the Overlay every this many seconds, cleared 20 s later (0: never)")
+    p.add_argument("--no-show", type=float, default=0.0,
+                   help="the default show is None; schedules load the show for this many minutes, then none (0: never)")
     args = p.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -304,9 +351,11 @@ def main() -> int:
     make_show(home / "shows")
     if args.countdown > 0:
         add_countdown_automation(home / "shows" / "Central Church")  # (before the second show is copied from it)
+    schedules = add_no_show_schedules(home / "shows", args.no_show, args.minutes) if args.no_show > 0 else 0
     port = free_port()  # (its own remote port)
     (home / "appdata").mkdir(parents=True, exist_ok=True)
-    (home / "appdata" / "settings.json").write_text(json.dumps({"output": "simulated", "remote_port": port}), encoding="utf-8")
+    settings = {"output": "simulated", "remote_port": port, **({"default_show": "_none"} if args.no_show > 0 else {})}
+    (home / "appdata" / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
     if args.switch_shows > 0:
         make_second_show(home / "shows")
     original = home / "originals" / "Linked clip.mp4"
@@ -340,6 +389,7 @@ def main() -> int:
         last_mood, mood_high, cycles = started, False, 0
         last_overlay, clear_at, overlay_sends, overlay_clears = started, 0.0, 0, 0
         threads_seen: list[int] = []
+        no_show_samples, show_samples, last_no_show, changes = 0, 0, None, 0
         if args.linked_video > 0:
             time.sleep(3.0)
             remote_get(port, "/api/input/linked-video")  # (on the lights: its updates wait until it isn't)
@@ -381,6 +431,14 @@ def main() -> int:
                 hue += 0.37
                 make_clip(original, hue)  # a new version of the original, while CentraLight may be playing its copy
                 replaced += 1
+            if args.no_show > 0:
+                state = remote_state(port)
+                if state:
+                    now_no_show = bool(state.get("no_show"))
+                    no_show_samples += now_no_show
+                    show_samples += not now_no_show
+                    changes += last_no_show is not None and now_no_show != last_no_show
+                    last_no_show = now_no_show
             cpu, private, working = sample(pid)
             threads = thread_count(pid)
             threads_seen.append(threads)
@@ -417,6 +475,12 @@ def main() -> int:
             text = log.read_text(encoding="utf-8")
             print(f"Countdown: mood set high {cycles} times; {text.count('for its countdown')} runs waited for their "
                   f"countdown, {text.count('Countdowns dropped')} drops")
+        if log.exists() and args.no_show > 0:
+            text = log.read_text(encoding="utf-8")
+            print(f"No show: {schedules} schedules; the show closed {text.count('the show closed (no show loaded')} times, "
+                  f"loaded again {text.count(': show “Central Church” loaded')} times; {text.count('No show loaded: every light is off')} "
+                  f"no-show loads in the engine; samples {no_show_samples} with no show, {show_samples} with one, "
+                  f"{changes} changes seen")
         if log.exists() and args.linked_video > 0:
             text = log.read_text(encoding="utf-8")
             print(f"Linked video: the original was replaced {replaced} times; {text.count('copied in as')} copies made, "

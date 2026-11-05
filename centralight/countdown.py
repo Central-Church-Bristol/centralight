@@ -56,9 +56,10 @@ class CountdownView:
 
 
 def counts_down(action: Mapping[str, Any], scope: str) -> bool:
-    """Does this automation action get a countdown? A global "Load a show", and Cut / Fade to black from any."""
+    """Does this automation action get a countdown? A global "Load a show" (and the show closing, when the default show
+    is None: M14), and Cut / Fade to black from any."""
     do = action.get("do")
-    return (do == "load_show" and scope == "global") or do in COUNTED
+    return (do in ("load_show", "close_show") and scope == "global") or do in COUNTED
 
 
 def describe(action: Mapping[str, Any], show_label: str = "") -> str:
@@ -66,6 +67,8 @@ def describe(action: Mapping[str, Any], show_label: str = "") -> str:
     do = action.get("do")
     if do == "load_show":
         return f"Loading {show_label or str(action.get('show', '')).strip() or 'another show'}"
+    if do == "close_show":
+        return "Closing the show (lights off)"
     everything = " everything" if action.get("all") is True else ""
     return f"Cutting{everything} to black" if do == "cut_black" else f"Fading{everything} to black"
 

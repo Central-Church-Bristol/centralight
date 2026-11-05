@@ -38,11 +38,12 @@ from .automations import (
     change_moments,
     describe_condition,
 )
-from .model import Automation, Show
+from .model import NO_DEFAULT_SHOW, Automation, Show
 from .shows import ShowInfo, find_show
 
 LOAD_SHOW = "load_show"
 MINUTE = timedelta(minutes=1)
+NO_SHOW_LABEL = "No show (lights off)"  # the gaps when the default show is None (M14)
 MAX_WAIT = 86400.0  # seconds: the longest an action can wait first (see check_action)
 
 
@@ -164,6 +165,10 @@ def _default_blocks(blocks: list[Block], default_show: str, names: Mapping[str, 
     stops = sorted([b.start for b in blocks if b.moment and b.on_end and not b.missing]
                    + [b.end for b in blocks if b.automation_id in dark and not b.moment])
     gaps = [(start, min([s for s in stops if start <= s < end], default=end)) for start, end in gaps]
+    if default_show == NO_DEFAULT_SHOW:  # (None, M14: no show is loaded then, so the lights are off)
+        return [Block("", "The default show", default_show, NO_SHOW_LABEL, start, end, continues_before=start <= first,
+                      continues_after=end >= last, default=True)
+                for start, end in gaps if end - start >= MINUTE]
     known = default_show in names
     return [Block("", "The default show", default_show, names.get(default_show, default_show), start, end,
                   continues_before=start <= first, continues_after=end >= last, show_id=default_show if known else "",
@@ -173,6 +178,9 @@ def _default_blocks(blocks: list[Block], default_show: str, names: Mapping[str, 
 
 def describe_block(block: Block) -> str:
     """A block's tooltip: which show loads when, from which automation, and anything else it needs."""
+    if block.default and block.show == NO_DEFAULT_SHOW:
+        return (f"{block.show_label}: the default (Settings) is None, so when no automation loads a show, none is "
+                f"loaded and the lights are off\n{block.start:%a %d %b %H:%M} – {block.end:%a %d %b %H:%M}")
     if block.default:
         return (f"{block.show_label}: the default show (Settings), when no automation loads another\n"
                 f"{block.start:%a %d %b %H:%M} – {block.end:%a %d %b %H:%M}"

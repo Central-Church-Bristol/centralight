@@ -50,6 +50,8 @@ from .widgets import (
 
 PAGES = (("dashboard", "Dashboard"), ("editor", "Editor"), ("layout", "Layout"), ("automation", "Automation"))
 BLACK_TIP = "Click: colour lights. Hold: everything, including Festoon and Key lights (Shift-click too)."
+MASTER_TIP = "Master: brightness of the colour lights (not the festoon or key lights)"
+NO_SHOW_TIP = "Load a show first"  # (M14: no show loaded, so the controls that need one are greyed out)
 SHOW_NAME_MAX_PX = 190  # longer show names are shortened with "…" on the picker
 SHOW_NAME_MIN_PX = 60  # ...and more, down to this, when the header is short of room
 
@@ -66,6 +68,7 @@ class ShowPicker(QToolButton):
     notes_requested = Signal()  # Notes… (the loaded show's)
     export_requested = Signal(bool)  # Export… (False) or Export everything… (True)
     import_requested = Signal()  # Import… (a .clshow file)
+    close_requested = Signal()  # None (lights off): no show from now on (M14)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -82,6 +85,7 @@ class ShowPicker(QToolButton):
         self._name = ""
         self._folder = ""
         self.notes = ""  # the loaded show's notes (newer than its file while a change waits to be saved)
+        self.no_show = False  # no show loaded (M14): "Show: None"
         self._limit = SHOW_NAME_MAX_PX
         self._same: Callable[[str, str], bool] = lambda a, b: a == b
         self.set_show("", "")
@@ -111,7 +115,10 @@ class ShowPicker(QToolButton):
             text = metrics.elidedText(self._name or "—", Qt.TextElideMode.ElideRight, self._limit)
         if self.text() != f"{text}  ▾":
             self.setText(f"{text}  ▾")
-        self.setToolTip(f"{full}\nLoad another show, or make, copy, rename or delete one. Changes save by themselves.")
+        if self.no_show:
+            self.setToolTip(f"{full}\nNo show is loaded, so the lights are off: load one from this menu.")
+        else:
+            self.setToolTip(f"{full}\nLoad another show, or make, copy, rename or delete one. Changes save by themselves.")
 
     def fill_menu(self) -> None:
         """The shows (the loaded one ticked), then New / Duplicate / Rename / Delete."""
@@ -127,7 +134,7 @@ class ShowPicker(QToolButton):
         group = QActionGroup(menu)
         group.setExclusive(True)
         for info in shows:
-            loaded = self._same(info.folder, self._folder)
+            loaded = not self.no_show and self._same(info.folder, self._folder)
             action = menu.addAction(info.name)
             action.setCheckable(True)
             action.setChecked(loaded)
@@ -145,18 +152,28 @@ class ShowPicker(QToolButton):
         if not shows:
             none = menu.addAction("(no shows found)")
             none.setEnabled(False)
+        # no show at all (M14): the lights fade off, then the show closes, as when a schedule ends with the default None
+        off = menu.addAction("None (lights off)")
+        off.setCheckable(True)
+        off.setChecked(self.no_show)
+        off.setToolTip("No show: the lights fade off (Fade to black's time, the Festoon and Key lights too), then the "
+                       "show closes. The global automations carry on.")
+        off.triggered.connect(lambda _checked=False: None if self.no_show else self.close_requested.emit())
+        group.addAction(off)
         menu.addSeparator()
         menu.addAction("New show…", self.new_requested.emit)
-        menu.addAction(f"Duplicate “{self._name}”…", self.duplicate_requested.emit)
-        menu.addAction(f"Rename “{self._name}”…", self.rename_requested.emit)
-        menu.addAction(f"Notes about “{self._name}”…", self.notes_requested.emit)
+        if not self.no_show:
+            menu.addAction(f"Duplicate “{self._name}”…", self.duplicate_requested.emit)
+            menu.addAction(f"Rename “{self._name}”…", self.rename_requested.emit)
+            menu.addAction(f"Notes about “{self._name}”…", self.notes_requested.emit)
         menu.addSeparator()
-        menu.addAction(f"Export “{self._name}”…", lambda: self.export_requested.emit(False))
+        if not self.no_show:
+            menu.addAction(f"Export “{self._name}”…", lambda: self.export_requested.emit(False))
         menu.addAction("Export everything…", lambda: self.export_requested.emit(True))
         menu.addAction("Import…", self.import_requested.emit)
         menu.addSeparator()
         delete = menu.addMenu("Delete a show")
-        others = [info for info in shows if not self._same(info.folder, self._folder)]
+        others = [info for info in shows if self.no_show or not self._same(info.folder, self._folder)]
         for info in others:
             delete.addAction(f"{info.name}…", lambda folder=info.folder: self.delete_requested.emit(folder))
         if not others:
@@ -337,10 +354,13 @@ class Header(QFrame):
         levels_layout.setContentsMargins(0, 0, 0, 0)
         levels_layout.setSpacing(22)
         self.house_controls: dict[str, LevelControl] = {}
+        self._house_labels: dict[str, str] = {}  # each house light's name (for its tooltip)
+        self._locked = False
+        self._no_show = False  # (M14: see set_no_show)
         for fixture_id, label in house:
             levels_layout.addWidget(self._make_house_control(fixture_id, label))
         self.master = LevelControl("Master", with_switch=False)
-        self.master.setToolTip("Master: brightness of the colour lights (not the festoon or key lights)")
+        self.master.setToolTip(MASTER_TIP)
         self.master.level_moved.connect(self.master_changed.emit)
         levels_layout.addWidget(self.master)
 
@@ -459,19 +479,24 @@ class Header(QFrame):
                 control = self.house_controls[fixture_id]
                 control.caption.setText(label.upper())
                 control.fader.setAccessibleName(f"{label} level")
+                self._house_labels[fixture_id] = label
+            self._update_enabled()  # (the tooltips say the new names)
             return
         levels_layout = self.levels.layout()
         for control in self.house_controls.values():
             levels_layout.removeWidget(control)
             discard(control)
         self.house_controls.clear()
+        self._house_labels.clear()
         for index, (fixture_id, label) in enumerate(house):
             control = self._make_house_control(fixture_id, label)
             levels_layout.insertWidget(index, control)
+        self._update_enabled()
         self._arrange(force=True)
 
     def _make_house_control(self, fixture_id: str, label: str) -> LevelControl:
         control = LevelControl(label, with_switch=True)
+        self._house_labels[fixture_id] = label
         control.level_moved.connect(lambda level, f=fixture_id: self.house_changed.emit(f, level, True))
         control.switched.connect(lambda on, f=fixture_id: self.house_changed.emit(f, None, on))
         control.setToolTip(f"{label}: drag to set the level (moving it turns the light on)")
@@ -482,10 +507,35 @@ class Header(QFrame):
     def set_locked(self, locked: bool) -> None:
         if self.lock_button.isChecked() != locked:
             self.lock_button.setChecked(locked)
-        for control in [*self.house_controls.values(), self.master]:
-            control.setEnabled(not locked)
-        self.cut_black.setEnabled(not locked)
-        self.fade_black.setEnabled(not locked)
+        self._locked = locked
+        self._update_enabled()
+
+    def set_no_show(self, no_show: bool) -> None:
+        """No show loaded (M14): the house lights, Master and Cut / Fade to black are greyed out ("Load a show first";
+        the last show's house lights stay, at their levels); the picker reads "Show: None". Lock, Settings and the
+        status chips work as usual."""
+        self._no_show = no_show
+        if self.show_picker.no_show != no_show:
+            self.show_picker.no_show = no_show
+            self.show_picker._update_text()
+        self._update_enabled()
+
+    @property
+    def no_show(self) -> bool:
+        return self._no_show
+
+    def _update_enabled(self) -> None:
+        """The level controls and Cut / Fade to black: off while locked, or with no show loaded (saying why)."""
+        usable = not self._locked and not self._no_show
+        tips: list[tuple[QWidget, str]] = [(self.master, MASTER_TIP), (self.cut_black, BLACK_TIP), (self.fade_black, BLACK_TIP)]
+        for fixture_id, control in self.house_controls.items():
+            label = self._house_labels.get(fixture_id, fixture_id)
+            tips.append((control, f"{label}: drag to set the level (moving it turns the light on)"))
+            if control.switch is not None:
+                tips.append((control.switch, f"{label} on / off (fades over half a second)"))
+        for widget, tip in tips:
+            widget.setEnabled(usable)
+            widget.setToolTip(NO_SHOW_TIP if self._no_show else tip)
 
     # ------------------------------------------------------------ layout
 

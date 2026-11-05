@@ -265,6 +265,7 @@ class Show:
     # Not saved: where the show was loaded from and what was wrong with it
     folder: str = ""
     read_only: bool = False
+    no_show: bool = False  # the stand-in while no show is loaded (M14): see NO_SHOW
     warnings: tuple[str, ...] = ()
     input_errors: Mapping[str, str] = EMPTY  # input id -> why its file couldn't be read
 
@@ -320,3 +321,9 @@ class Show:
 
     def with_inputs(self, inputs: Mapping[str, Input], order: tuple[str, ...] | None = None) -> Show:
         return replace(self, inputs=frozen_map(inputs), input_order=order if order is not None else self.input_order)
+
+
+# No show loaded (M14, the Default show "None (lights off)"): the engine sends every channel at 0, the global automations
+# carry on, and the window shows "No show loaded". A stand-in show, read-only, with nothing in it.
+NO_SHOW = Show(name="None", no_show=True, read_only=True)
+NO_DEFAULT_SHOW = "_none"  # Settings → Default show: None (lights off) ("" is Last loaded; a show id, that show)

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..model import NO_DEFAULT_SHOW
 from ..paths import app_data_dir
 from ..remote import new_key
 from ..settings import (
@@ -266,7 +267,12 @@ class SettingsDialog(QDialog):
         self.quit_action.setCurrentIndex(max(0, self.quit_action.findData(settings.quit_action)))
         # the default show (M14): opens when the PC starts, and comes back after a schedule
         self.default_show = QComboBox()
-        self.default_show.addItem("None: open the last show", "")
+        self.default_show.addItem("Last loaded", "")
+        self.default_show.setItemData(0, "The PC's start opens the show that was loaded last, and nothing loads when a "
+                                         "schedule ends", Qt.ItemDataRole.ToolTipRole)
+        self.default_show.addItem("None (lights off)", NO_DEFAULT_SHOW)
+        self.default_show.setItemData(1, "The PC's start opens no show (every light off), and when a schedule ends the "
+                                         "show closes (after the countdown, the lights fade off)", Qt.ItemDataRole.ToolTipRole)
         for info in shows or ():
             self.default_show.addItem(info.name, info.id)
         if settings.default_show and self.default_show.findData(settings.default_show) < 0:
@@ -279,8 +285,10 @@ class SettingsDialog(QDialog):
         quit_layout.addLayout(default_row)
         quit_layout.addWidget(hint("It opens when the PC starts (instead of the last show), and loads again when a global "
                                    "automation that loaded another show stops matching (with the countdown), unless "
-                                   "someone has loaded a show by hand since. Global automations still win: one that's under "
-                                   "way loads its show. Reopening CentraLight after a quit or a crash carries on as it was."))
+                                   "someone has loaded a show by hand since. None (lights off) is no show at all: every "
+                                   "light off, the global automations still on. Global automations still win: one that's "
+                                   "under way loads its show. Reopening CentraLight after a quit or a crash carries on as it "
+                                   "was."))
         quit_layout.addWidget(self.start_with_windows)
         quit_layout.addWidget(self.clshow_files)
         quit_layout.addWidget(hint("Closing the window keeps CentraLight running in the tray; Quit is in the tray icon's menu."))

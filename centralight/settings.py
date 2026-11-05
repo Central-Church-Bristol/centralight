@@ -49,7 +49,9 @@ class Settings:
     audio_release: float = 0.3  # ... and to fall
     black_fade: float = 2.0  # seconds Fade to black takes (the header's button, and the API's default)
     countdown: int = 15  # seconds of countdown before an automation loads a show or goes to black (0 = none)
-    default_show: str = ""  # M14: the show that opens when the PC starts, and comes back after a schedule ("" = none)
+    # M14: the show that opens when the PC starts and comes back after a schedule: "" Last loaded (open the last show,
+    # and nothing comes back), "_none" None (lights off: no show), or a show's id
+    default_show: str = ""
     geometry: list[int] | None = None
     maximized: bool = False
     splitters: dict[str, list[int]] = field(default_factory=dict)

@@ -55,7 +55,9 @@ def main() -> int:
     from tests.fakes import FakeEngine
     from tests.gui_fixtures import ai_edit_reply, ai_problem_reply, busy_show_engine, long_names_show, sample_global_automations, with_inputs
 
+    from centralight.model import NO_SHOW
     from centralight.new_show import show_from_patch
+    from centralight.shows import ShowInfo
     from centralight.settings import Settings
     from centralight.ui.diagnostics import DiagnosticsDialog
     from centralight.ui.main_window import MainWindow
@@ -148,6 +150,30 @@ def main() -> int:
                     shots += 1
             # header modes at this width are part of the check too
             problems += layout_rules.check_header(window, f"{fonts_tag} {args.scale:g}x {width}x{height} {variant} header")
+            # no show loaded (M14): a window whose show has just closed (the header keeps its house lights, greyed out),
+            # with the card on the Dashboard (every tab but Automation shows it), and the Automation tab
+            closed_engine = FakeEngine(show)
+            closed = MainWindow(Settings(), show, closed_engine, closed_engine.fake_output, save_files=False,
+                                global_automations=sample_global_automations(long=variant == "long"))
+            layout_rules.show_all_chips(closed)
+            names = (LONG_SHOW_NAME, "Evening") if variant == "long" else ("Central Church", "Evening")
+            closed.list_shows = lambda names=names: [ShowInfo(f"show-{i}", n, f"C:/Shows/{i}") for i, n in enumerate(names)]
+            closed.resize(width, height)
+            closed.show()
+            process(app, 2)
+            closed.document.load(NO_SHOW)
+            process(app, 2)
+            for key, state in (("dashboard", "no-show"), ("automation", "no-show-automation")):
+                closed.show_page(key)
+                process(app, 3)
+                where = f"{fonts_tag} {args.scale:g}x {width}x{height} {variant} {state}"
+                problems += layout_rules.check(closed, where)
+                closed.grab().save(str(out / f"{width}x{height}-{variant}-{state}.png"))
+                shots += 1
+            closed.editor_page.shutdown()
+            closed.document.close()
+            closed.hide()
+            closed.deleteLater()
         window.set_locked(True)
         process(app, 2)
         problems += layout_rules.check(window, f"{fonts_tag} {args.scale:g}x locked {variant}")

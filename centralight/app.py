@@ -14,9 +14,9 @@ from .engine import Engine
 from .global_automations import GLOBAL_NAME, global_folder, load_global_automations
 from .live_state import LiveState
 from .log import install_crash_logging, log_exception, log_info
-from .model import Show
+from .model import NO_DEFAULT_SHOW, NO_SHOW, Show
 from .new_show import FOLLOW_SCREEN_ID, open_or_create_show, show_from_patch
-from .output import DmxOutputThread, device_spec, universe_size
+from .output import DmxOutputThread, device_spec, show_channels
 from .sources import SourceManager
 from .paths import default_show_dir, shows_root
 from .priority import prefer_livestream_apps
@@ -56,13 +56,21 @@ def forget_after_pc_start(settings: Settings) -> None:
     settings.ui.pop("colour_preview", None)
 
 
-def show_to_open(settings: Settings, live: LiveState | None, root: Path | None = None, pc_start: bool = False) -> Path:
+def show_to_open(settings: Settings, live: LiveState | None, root: Path | None = None, pc_start: bool = False) -> Path | None:
     """The show that was loaded last (live.json says which), else the one Settings names, else Central Church; if
     none of those is there any more (deleted, say), the first show there is; only with no show at all is Central
     Church made afresh. When the PC has just started, the default show (Settings, M14) opens instead, if there is one
-    (reopening after a quit or a crash carries on with the last show, so it doesn't change the lights)."""
+    (reopening after a quit or a crash carries on with the last show, so it doesn't change the lights). None: no show
+    (M14): the default is None (lights off) and the PC has just started, or no show was loaded when CentraLight
+    stopped (and the PC start doesn't bring the default show)."""
     from .shows import find_show, list_shows
 
+    if pc_start and settings.default_show == NO_DEFAULT_SHOW:
+        log_info("The PC has just started and the default show is None: no show opens, so the lights stay off")
+        return None
+    if live is not None and live.no_show and not (pc_start and settings.default_show):
+        log_info("No show was loaded when CentraLight stopped: it carries on with none, the lights off")
+        return None
     if pc_start and settings.default_show:
         info = find_show(root if root is not None else shows_root(), settings.default_show)
         if info is not None and (Path(info.folder) / SHOW_FILE).is_file():
@@ -149,7 +157,8 @@ def main(argv: list[str] | None = None) -> int:
     pc_start = pc_just_started(live, "--minimized" in argv)  # (worked out once: the engine is told, so both agree)
     if pc_start:
         forget_after_pc_start(settings)
-    show, problem = open_show(settings, show_to_open(settings, live, pc_start=pc_start))
+    folder = show_to_open(settings, live, pc_start=pc_start)
+    show, problem = open_show(settings, folder) if folder is not None else (NO_SHOW, "")
     # the default show opened instead of the last one (M14): schedules under way run again, so their show comes back
     default_opened = (pc_start and bool(settings.default_show) and live is not None and bool(live.show)
                       and not same_folder(live.show, show.folder))
@@ -166,7 +175,8 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError:
         pass
     sources = SourceManager()
-    output = DmxOutputThread(device_spec(settings, universe_size(show.fixtures)))
+    # (with no show, all 512 channels go out at 0, so every light is off rather than holding its last colour)
+    output = DmxOutputThread(device_spec(settings, show_channels(show)))
     output.start()
     from .audio import AudioCapture
 
@@ -176,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
                     started_by_windows="--minimized" in argv, global_automations=global_automations,
                     pc_start=pc_start, default_show=settings.default_show, default_opened=default_opened)
     engine.start()
-    log_info(f"CentraLight started: show {show.folder}, output {settings.output}")
+    log_info(f"CentraLight started: {'no show (lights off)' if show.no_show else 'show ' + show.folder}, output {settings.output}")
 
     from PySide6.QtWidgets import QSystemTrayIcon
 

@@ -801,8 +801,12 @@ class AutomationPage(QWidget):
         if key == self._shown_key:
             return  # nothing this tab shows has changed (e.g. an edit in the Editor)
         self._shown_key = key
-        self.show_title.setText(f"THIS SHOW ({show.name.upper()})")
-        self.show_title.setToolTip(f"The automations of the loaded show, {show.name}")
+        if show.no_show:  # (M14: the global automations above still run, and stay editable)
+            self.show_title.setText("THIS SHOW (NO SHOW LOADED)")
+            self.show_title.setToolTip("No show is loaded, so there are no show automations (the global ones still run)")
+        else:
+            self.show_title.setText(f"THIS SHOW ({show.name.upper()})")
+            self.show_title.setToolTip(f"The automations of the loaded show, {show.name}")
         self._fill_lists()
         self._build_editor()
         self._fill_upcoming(force=True)
@@ -855,7 +859,8 @@ class AutomationPage(QWidget):
                 view.setCurrentItem(item)
         if not rows:
             empty = ("No global automations yet.\nThey can load a show at a set time, for example."
-                     if scope == GLOBAL else "No automations in this show yet.\nClick + New automation to make one.")
+                     if scope == GLOBAL else "No show is loaded.\nLoad one from the Show menu to see its automations."
+                     if self.show_data.no_show else "No automations in this show yet.\nClick + New automation to make one.")
             item = QListWidgetItem(empty)
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             view.addItem(item)

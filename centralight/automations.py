@@ -48,7 +48,7 @@ from .commands import (
     SetVariable,
 )
 from .log import log_info
-from .model import TRANSITION_KINDS, Automation, Show, Transition
+from .model import NO_DEFAULT_SHOW, TRANSITION_KINDS, Automation, Show, Transition
 from .sun import sun_minutes
 
 # ---------------------------------------------------------------- what there is
@@ -356,6 +356,8 @@ def describe_action(action: Mapping[str, Any], show: Show | None = None, scope: 
     if kind == "load_show":
         wanted = str(action.get("show", "?"))
         text = f"load the show {(shows or {}).get(wanted, wanted)}"
+    elif kind == "close_show":
+        text = "close the show (lights off)"
     elif kind == "house" and scope == GLOBAL:
         parts = []
         if action.get("level") is not None:
@@ -1088,6 +1090,9 @@ class AutomationRunner:
         self._before = []
         if not self.default_show:
             return []
+        if self.default_show == NO_DEFAULT_SHOW:  # (None: the lights fade off and the show closes, M14)
+            return self._run(ended, [{"do": "close_show", "_default": True}], mono_now, wall_now,
+                             "stopped matching: the show closes (the default is no show)", count=False)
         return self._run(ended, [{"do": "load_show", "show": self.default_show, "_default": True}], mono_now, wall_now,
                          "stopped matching: the default show loads", count=False)
 

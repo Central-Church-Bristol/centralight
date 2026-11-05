@@ -487,7 +487,7 @@ class WindowTests(WindowCase):
         window, engine = self.make(central)
         dialog = SettingsDialog(window.settings, central.folder, window, shows=window.list_shows())  # (the window's)
         names = [dialog.default_show.itemText(i) for i in range(dialog.default_show.count())]
-        self.assertEqual(names, ["None: open the last show", "Central Church", "Evening"])
+        self.assertEqual(names, ["Last loaded", "None (lights off)", "Central Church", "Evening"])  # (M14, 5 Nov)
         dialog.default_show.setCurrentIndex(dialog.default_show.findData("evening"))
         dialog.apply_to(window.settings)
         self.assertEqual(window.settings.default_show, "evening")

@@ -28,6 +28,7 @@ class HouseSetting:
 @dataclass
 class LiveState:
     show: str = ""  # the loaded show's folder (the one to open next time)
+    no_show: bool = False  # no show was loaded (M14): it carries on with none, the lights off
     master: float = 1.0
     quit_dark: bool = False  # quit with "Turn lights off": automations leave the lights off until a time range begins
     quit_at: float = 0.0  # when that quit was (kept through later saves, restarts and quits), or 0
@@ -45,6 +46,7 @@ class LiveState:
     def to_dict(self) -> dict[str, Any]:
         return {
             "show": self.show,
+            **({"no_show": True} if self.no_show else {}),
             "master": self.master,
             "quit_dark": self.quit_dark,
             "quit_at": self.quit_at,
@@ -79,6 +81,7 @@ class LiveState:
     def from_dict(cls, data: dict[str, Any]) -> LiveState:
         state = cls()
         state.show = str(data.get("show") or "")
+        state.no_show = data.get("no_show") is True
         state.master = _unit(data.get("master"), 1.0)
         state.quit_dark = bool(data.get("quit_dark", False))
         quit_at = data.get("quit_at", 0.0)

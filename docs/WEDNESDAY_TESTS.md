@@ -457,6 +457,23 @@ Close the app first (it's holding the dongle), then:
   - [ ] Restart the PC: Central Church opens. (Quitting and reopening CentraLight carries on with the show that was on.)
   - [ ] Restart the PC while a global automation that loads another show is under way (one for the next hour, say):
         Central Church opens, then that automation's show loads straight after.
+- [ ] **No show (None (lights off))**: Settings → Starting and quitting → **Default show**: it lists **Last loaded**,
+      **None (lights off)** and your shows. Choose **None (lights off)** → OK.
+  - [ ] Show ▾ → **None (lights off)**: the lights fade off (the Festoon and Key lights too), then every tab but
+        Automation says **No show loaded**, with a Load button for each show, New show… and Import a show…, and a line
+        about the global automations. Every light is off (nothing glows at all).
+  - [ ] The header says **Show: None**; the Festoon, Key lights, Master and Cut / Fade to black are greyed out, and
+        hovering one says "Load a show first". The padlock and Settings still work.
+  - [ ] Automation tab: the global automations are there to edit; "This show" says no show is loaded. Week schedule:
+        the gaps say "No show (lights off)", in grey.
+  - [ ] The phone page says "No show loaded"; pick Central Church in its switcher: it loads (the lights come up from
+        black, Start Up runs) and the page shows its inputs again.
+  - [ ] Make a global automation "Days: today, from now+1 min to now+3 min → Load a show: Evening". When it starts,
+        Evening loads; when it ends, the countdown says **Closing the show (lights off)**, then the lights fade off
+        and every tab says No show loaded.
+  - [ ] Quit and reopen CentraLight while no show is loaded: it carries on with no show. Restart the PC: no show
+        opens (unless a schedule is under way: then its show loads).
+  - [ ] Set **Default show** back to what you want (Last loaded is how it was before).
 - [ ] **The colour picker updates live**: put Warm white on Base, open it in the Editor, click its Colour element, then
       the colour's swatch. Drag in the colour square: the lights follow as you drag.
   - [ ] **Cancel**: they go back. Again, then **OK**: they keep it, and one Ctrl+Z puts the old colour back.
