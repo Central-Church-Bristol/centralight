@@ -82,10 +82,6 @@ class LiveState:
         state.master = _unit(data.get("master"), 1.0)
         state.quit_dark = bool(data.get("quit_dark", False))
         quit_at = data.get("quit_at", 0.0)
-        blacked_out = bool(data.get("blackout", False))  # (a live.json from before Cut / Fade to black)
-        if blacked_out and bool(data.get("blackout_by_quit", False)):
-            state.quit_dark = True
-            quit_at = data.get("blackout_quit_at", 0.0)
         if state.quit_dark and isinstance(quit_at, (int, float)) and not isinstance(quit_at, bool) and quit_at > 0:
             state.quit_at = float(quit_at)
         house = data.get("house") or {}
@@ -109,11 +105,6 @@ class LiveState:
         state.global_automations = dict(global_automations) if isinstance(global_automations, dict) else {}
         saved = data.get("saved_at", 0.0)
         state.saved_at = float(saved) if isinstance(saved, (int, float)) and not isinstance(saved, bool) else 0.0
-        if blacked_out:  # it was blacked out then: it starts black now (nothing playing, house lights off, levels kept)
-            state.base = None
-            state.overlay = None
-            state.frozen = None
-            state.house = {k: HouseSetting(v.level, False) for k, v in state.house.items()}
         return state
 
     @classmethod
@@ -156,18 +147,10 @@ def _unit(value: Any, default: float) -> float:
 
 
 def _overlay(data: dict[str, Any]) -> dict[str, Any] | None:
-    """The Overlay from live.json; one saved before M14 had Overlays 1-4, which become copies on the one Overlay (in
-    their old order, 1 at the bottom), with Overlay 1's opacity."""
+    """The Overlay from live.json."""
     overlay = data.get("overlay")
-    if isinstance(overlay, dict):
-        copies = overlay.get("copies")
-        return {"on": overlay.get("on", True) is not False, "opacity": _unit(overlay.get("opacity"), 1.0),
-                "copies": [c for c in copies if isinstance(c, dict)] if isinstance(copies, list) else []}
-    old = data.get("overlays")
-    if not isinstance(old, list):
+    if not isinstance(overlay, dict):
         return None
-    slots = [o for o in old[:4] if isinstance(o, dict) and isinstance(o.get("input"), str)]
-    if not slots:
-        return None
-    return {"on": True, "opacity": _unit(slots[0].get("opacity"), 1.0),
-            "copies": [{"input": o["input"], "time": o.get("time", 0.0)} for o in slots]}
+    copies = overlay.get("copies")
+    return {"on": overlay.get("on", True) is not False, "opacity": _unit(overlay.get("opacity"), 1.0),
+            "copies": [c for c in copies if isinstance(c, dict)] if isinstance(copies, list) else []}

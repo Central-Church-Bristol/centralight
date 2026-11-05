@@ -14,9 +14,6 @@ in a browser for a page listing every URL, with big buttons (it doubles as a pho
     /api/overlay/clear                     clear the Overlay (every copy)
     /api/overlay/on, /off, /toggle         the Overlay's switch (off hides it without emptying it)
     /api/overlay/opacity?value=0.5         (&fade=1)
-                                           (URLs from before, with Overlays 1-4, still work: /api/input/<id>/
-                                           overlay/2 sends it, or clears it if it's there; ?state=on / off;
-                                           /api/overlay/2/off clears the Overlay)
     /api/var/<name>?value=0.7              a show variable: numbers; colours as FF6F59;
                                            switches on / off / toggle
     /api/master?level=0.8                  (&fade=2)
@@ -89,7 +86,6 @@ from .variables import coerce_global
 DEFAULT_PORT = 8746
 SHOWS_FRESH = 3.0  # seconds the list of shows is kept before it's read again
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
-OVERLAYS = (1, 2, 3, 4)  # (the old Overlay numbers, still understood in URLs)
 MAX_BODY = 64_000
 
 
@@ -168,12 +164,6 @@ def _automation_id(show: Show, raw: str, what: str = "automation", where: str = 
     raise BadRequest(404, f"there's no {what} called {raw!r}" + (f": {where}" if where else ""))
 
 
-def _overlay(raw: str) -> int:
-    if raw.isascii() and raw.isdigit() and int(raw) in OVERLAYS:
-        return int(raw)
-    raise BadRequest(404, "overlays are numbered 1 to 4")
-
-
 def _opacity(params: dict[str, str]) -> SetOverlayOpacity:
     fade = _fade(params)
     level = _number(params, "value")
@@ -230,14 +220,6 @@ def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any
             return SendToOverlay(input_id)
         if rest[1:] == ["overlay", "clear"]:
             return ClearFromOverlay(input_id=input_id)
-        if len(rest) == 3 and rest[1] == "overlay":  # (a URL from when there were Overlays 1-4)
-            _overlay(rest[2])
-            state = params.get("state")
-            if state not in (None, "on", "off"):
-                raise BadRequest(400, "state must be on or off (or leave it out to toggle)")
-            if state == "off":
-                return ClearFromOverlay(input_id=input_id)
-            return SendToOverlay(input_id, toggle=state is None, once=state == "on")
     elif head == "overlay" and len(rest) == 1:
         if rest[0] == "clear":
             return ClearOverlay()
@@ -246,12 +228,6 @@ def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any
         if rest[0] == "opacity":
             return _opacity(params)
         raise BadRequest(404, "use /api/overlay/clear, /on, /off, /toggle or /opacity?value=0.5")
-    elif head == "overlay" and len(rest) == 2:  # (URLs from when there were Overlays 1-4)
-        _overlay(rest[0])
-        if rest[1] == "off":
-            return ClearOverlay()
-        if rest[1] == "opacity":
-            return _opacity(params)
     elif head == "var" and len(rest) == 1:
         name = rest[0]
         var = next((g for g in show.globals if g.name == name), None)
@@ -320,7 +296,7 @@ def command_from_json(payload: Any, show: Show, frame: Any = None, black_fade: f
     if not isinstance(payload, dict) or not isinstance(payload.get("op"), str):
         raise BadRequest(400, 'send {"op": ...}, e.g. {"op": "input", "id": "warm-white"}')
     op = payload["op"]
-    params = {k: str(v) for k, v in payload.items() if k not in ("op", "id", "slot", "name", "state", "light") and v is not None}
+    params = {k: str(v) for k, v in payload.items() if k not in ("op", "id", "name", "state", "light") and v is not None}
     if "state" in payload and payload["state"] is not None:
         params["state"] = str(payload["state"])
     if op in ("input", "cut", "overlay"):
@@ -329,15 +305,11 @@ def command_from_json(payload: Any, show: Show, frame: Any = None, black_fade: f
             parts.append("cut")
         elif op == "overlay":
             parts.append("overlay")
-            if payload.get("slot") is not None:  # (from when there were Overlays 1-4)
-                parts.append(str(payload["slot"]))
     elif op == "overlay_clear":  # {"op": "overlay_clear", "id": optional: that input's copies, else every copy}
         parts = ["input", str(payload["id"]), "overlay", "clear"] if payload.get("id") else ["overlay", "clear"]
     elif op == "overlay_switch":  # {"op": "overlay_switch", "state": "on" | "off" | "toggle"}
         parts = ["overlay", str(payload.get("state", "toggle"))]
         params.pop("state", None)
-    elif op == "overlay_off":  # (from when there were Overlays 1-4: cleared the overlay)
-        parts = ["overlay", "clear"]
     elif op == "overlay_opacity":
         parts = ["overlay", "opacity"]
     elif op == "var":

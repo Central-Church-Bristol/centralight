@@ -96,13 +96,13 @@ class RouteTests(RemoteTestCase):
         self.assertEqual(self.sent("/api/input/pillars-purple/overlay"), SendToOverlay("pillars-purple"))
         self.assertEqual(self.sent("/api/input/pillars-purple/overlay/clear"), ClearFromOverlay(input_id="pillars-purple"))
 
-    def test_old_overlay_urls_keep_working(self) -> None:
-        """Stream Deck keys made before M14 (Overlays 1-4) still do what they did, on the one Overlay."""
-        self.assertEqual(self.sent("/api/input/pillars-purple/overlay/2"), SendToOverlay("pillars-purple", toggle=True))
-        self.assertEqual(self.sent("/api/input/pillars-purple/overlay/2?state=on"), SendToOverlay("pillars-purple", once=True))
-        self.assertEqual(self.sent("/api/input/pillars-purple/overlay/2?state=off"), ClearFromOverlay(input_id="pillars-purple"))
-        self.assertEqual(self.sent("/api/overlay/3/off"), ClearOverlay())
-        self.assertEqual(self.sent("/api/overlay/1/opacity?value=0.25"), SetOverlayOpacity(0.25))
+    def test_the_old_overlay_urls_are_gone(self) -> None:
+        """(Overlays 1-4 were never set up on a Stream Deck, so their URLs went in M14's clean-up.)"""
+        for path in ("/api/input/pillars-purple/overlay/2", "/api/input/pillars-purple/overlay/2?state=on",
+                     "/api/overlay/3/off", "/api/overlay/1/opacity?value=0.25"):
+            self.assertEqual(self.request(path)[0], 404, path)
+        self.assertEqual(self.request("/api/command", "POST", {"op": "overlay_off"})[0] // 100, 4)
+        self.assertEqual(self.engine.commands, [])
 
     def test_overlays_master_house_black_identify(self) -> None:
         self.assertEqual(self.sent("/api/overlay/clear"), ClearOverlay())
@@ -171,8 +171,6 @@ class RouteTests(RemoteTestCase):
         status, reply = self.request("/api/command", "POST", {"op": "overlay", "id": "warm-white"})
         self.assertEqual((status, reply), (200, {"ok": True}))
         self.assertEqual(self.engine.commands[-1], SendToOverlay("warm-white"))
-        self.request("/api/command", "POST", {"op": "overlay", "id": "warm-white", "slot": 4, "state": "on"})  # (before M14)
-        self.assertEqual(self.engine.commands[-1], SendToOverlay("warm-white", once=True))
         self.request("/api/command", "POST", {"op": "overlay_clear", "id": "warm-white"})
         self.assertEqual(self.engine.commands[-1], ClearFromOverlay(input_id="warm-white"))
         self.request("/api/command", "POST", {"op": "overlay_clear"})

@@ -474,12 +474,14 @@ class GlobalAutomationFileTests(FilesCase):
         self.assertFalse(container.automations["bad"].enabled)  # "An input is live" isn't for global automations
         self.assertTrue(any("left out" in w for w in container.warnings))
 
-    def test_a_shows_old_start_conditions_become_when_this_show_loads(self) -> None:
+    def test_a_shows_automation_with_a_global_start_condition_is_switched_off(self) -> None:
+        """(From before M12, a show's own "The PC starts" was converted to "When this show loads". No show of yours has
+        one, so since M14's clean-up it's the general rule: a condition that isn't for this kind of automation
+        switches it off, with a warning.)"""
         data = automation_to_dict(automation("starts", [{"type": "pc_startup"}], [{"do": "cut_black"}]))
-        converted, notes = automation_from_dict(data)
-        self.assertEqual([dict(c) for c in converted.conditions], [{"type": "show_loads"}])
-        self.assertTrue(converted.enabled)
-        self.assertIn("When this show loads", notes[0])
+        loaded, warnings = automation_from_dict(data)
+        self.assertFalse(loaded.enabled)
+        self.assertTrue(warnings)
 
 
 # ---------------------------------------------------------------- the window

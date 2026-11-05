@@ -45,6 +45,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — the two extras: every quit in the session log; the soak tool's own folders | **done** (5 Nov, 02:20) |
 | — a check where 5 and 10 meet: the default show at PC start and the last show's variables | **done** (5 Nov, 02:45; it can't happen in the app, and a test checks it) |
 | — 11 the colour picker updates live (Preview, one undo step, Enter / Esc) | **done** (5 Nov, 02:45; 914 tests pass) |
+| — the Clean-up: no compatibility with what you never had (old Overlay links, old file conversions) | **done** (5 Nov, 03:00; 911 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -107,12 +108,10 @@ The small ones first (3, 1, 2, 7):
   (off hides it without emptying it; sending to it turns it on again) and its opacity. The right-click menu has
   Send to Overlay and Clear from Overlay.
 - **Automations:** Send to Overlay, Clear from Overlay (that input's copies) and Clear the Overlay. "An input is
-  live … in the Overlay" replaces "in Overlay 2". Older automation files are brought up to date as they're read.
+  live … in the Overlay" replaces "in Overlay 2".
 - **Stream Deck and the phone page:** `/api/input/<id>/overlay` sends a copy, `/overlay/clear` clears its copies;
-  `/api/overlay/clear`, `/api/overlay/on`, `/off`, `/toggle` and `/opacity`. Every URL from before still works
-  (see the decisions). The phone page has Overlay and Clear on each tile, and On / off and Clear all for the
-  Overlay.
-- A live.json from before (Overlays 1–4) comes back as copies on the one Overlay.
+  `/api/overlay/clear`, `/api/overlay/on`, `/off`, `/toggle` and `/opacity`. The phone page has Overlay and Clear
+  on each tile, and On / off and Clear all for the Overlay. (The Overlay 1–4 URLs went in the clean-up below.)
 
 **9. A Colour element, and Paint without a fill.**
 - **Colour** is first in the Editor's element list (with a swatch icon): a solid colour, or a straight or round
@@ -228,6 +227,25 @@ The small ones first (3, 1, 2, 7):
 - **A test now checks it,** with Keep and Reset variables of the same names in both shows: the default show starts
   from its own values (or its starting value), and loading the last show again brings that show's own back. The
   engine's description says what it must be given.
+
+**Clean-up: no compatibility with what you never had** (your words: "I never set up any stream deck stuff so you can
+remove all the legacy stuff to keep it clean"). A commit of its own, so it's easy to see and undo.
+- **Removed:**
+  - the Overlay 1–4 links: `/api/input/<id>/overlay/<n>` with `?state=on / off`, `/api/overlay/<n>/off` and
+    `/opacity`, and the POST forms with `slot` or `overlay_off` (they get "not found" now). Send to Overlay's toggle
+    and once went with them, as nothing else used them;
+  - the conversions of older automation files: Blackout (condition and action), a show's own "The PC starts",
+    "CentraLight starts" and "The PC wakes" (they became "When this show loads" in M12), and Overlay slots;
+  - the old live.json keys: a Blackout from before Cut / Fade to black, and Overlays 1–4;
+  - the Blur note (an old element's `blur` is just an unknown setting now);
+  - their tests (each replaced by one that checks the general rules still catch such a file), and their mentions in
+    the build log and the rig checklist. The README and the AI guide had none.
+- **Kept:** the general safety handling (an unknown condition switches its automation off and an unknown action is left
+  out, each with a warning; bad files are refused), the empty versioned-migration framework, M13's media with no known
+  original, and item 9's Paint-fill conversion (your inputs need it).
+- **One thing to know:** your live.json is from the version you ran on Wednesday, which had Overlays 1–4. So the first
+  time this version opens (if it carries on rather than the PC having just started), Base carries on as usual but the
+  Overlay starts empty, even if something was in an overlay when you quit.
 
 **A crash the tests found (fixed).** With item 9's tests added, the whole test suite crashed part-way through. The
 cause was older than M14's changes (tests had just never lined up to show it):
@@ -563,7 +581,7 @@ Your change of 3 Nov: two one-off buttons instead of the Blackout toggle.
   time) replace Blackout on / off, and the condition "Blackout is on" is now "The colour lights are black" (nothing
   on Base or in the overlays). Old automation files are brought up to date with a note in the log: "Blackout on"
   becomes "Fade to black", everything, over half a second (what Blackout did); "Blackout off" is left out, since
-  there's nothing to turn off now.
+  there's nothing to turn off now. *(M14's clean-up removed this: no file of yours needed it.)*
 - **Stream Deck and the phone page:** `/api/black/cut` and `/api/black/fade` (`?all=1` for everything; `?seconds=`, or
   else the time set in Settings) replace `/api/blackout/…`. On the phone page a tap is the colour lights and holding
   the button is everything.
@@ -573,6 +591,7 @@ Your change of 3 Nov: two one-off buttons instead of the Blackout toggle.
   light anything ("CentraLight starts", a feed coming back at 03:00, a whole day such as "Sundays"); anything a
   person sends lights things at once. The quit's own time is still kept through restarts.
 - An older live.json that was blacked out starts black (nothing playing, house lights off with their levels kept).
+  *(M14's clean-up removed this too.)*
 
 ## A look at M10 (3 Nov, 11:00)
 
@@ -615,6 +634,7 @@ Your change of 3 Nov: work out each light's colour directly, instead of drawing 
 - Layers, opacity, blend modes, the painted mask (read at each dot), lights left alone and every transition (wipe
   and iris reach each light as their edge passes it; Random goes light by light) work per light. The sampler, its
   owner map, weights and fixed patch are gone, and so is Blur: an old file's `blur` is ignored with a warning.
+  *(Since M14's clean-up, without the warning: no file of yours had one.)*
 - **Pictures are only for people now.** The Dashboard's live picture is drawn 5 times a second, only while the
   Dashboard is on screen, and only after the lights' frame has gone out. The Editor's viewports are drawn as before
   (without Blur); their light strip and dots come from the lights' own maths. Patches are drawn only in the Editor's
@@ -1353,15 +1373,9 @@ Problems the tests found and that are fixed:
 - **M14, to check** (the plan's "proposed" points, built as written after you said go, and the choices I made):
   - **Proposed:** when a copy's box clears, the boxes to its right move left, and the newest copy is on top.
   - **Proposed:** automations, the Stream Deck and the phone page have Send to Overlay, Clear from Overlay (that
-    input's copies) and Clear the Overlay. Older automations are converted as they're read: "in Overlay n" (on, or
-    on / off) becomes Send to Overlay, "out of Overlay n" becomes Clear from Overlay, "Clear Overlay n" becomes
-    Clear the Overlay, and "is live in Overlay n" becomes "in the Overlay".
+    input's copies) and Clear the Overlay.
   - **Proposed:** the 1–4 buttons and Shift-click are gone; each input's hotkey still sends it to Base. Cut to Base
     is on the tile's right-click menu.
-  - **Stream Deck keys from before keep working:** `/api/input/<id>/overlay/2` sends a copy, or clears that input's
-    copies if it has any there (the old on / off); `?state=on` sends one only if there isn't one already;
-    `?state=off` clears its copies; `/api/overlay/2/off` clears the Overlay; `/api/overlay/2/opacity` sets the
-    Overlay's opacity.
   - **A timed input on the Overlay plays once** and then leaves, whatever its end (Hold, Loop and Stop are for
     Base), as the plan says it clears itself when it runs out.
   - **A cleared copy's box goes at once**, while the copy itself fades out the way it came in.

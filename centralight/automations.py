@@ -70,7 +70,6 @@ CONDITIONS: dict[str, str] = {
     "pc_woke": "The PC wakes from sleep",
 }
 EVENTS = ("pc_startup", "app_started", "pc_woke", "show_loads")
-MOVED_EVENTS = ("pc_startup", "app_started", "pc_woke")  # global automations' (a show's old ones: "When this show loads")
 ACTIONS: dict[str, str] = {
     "base": "Send an input to Base",
     "overlay": "Send an input to the Overlay",
@@ -101,7 +100,7 @@ DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 WEEKS = ("1st", "2nd", "3rd", "4th", "last")  # Days of the week, which weeks of the month (M14; left out = every week)
 WEEK_NAMES = {"1st": "1st", "2nd": "2nd", "3rd": "3rd", "4th": "4th", "last": "Last"}
-WHERE = ("base", "overlay", "anywhere")  # (an older file's "overlay1"-"overlay4" become "overlay" as it's read)
+WHERE = ("base", "overlay", "anywhere")
 COMPARES = ("=", "!=", "<", ">", "on", "off")
 AUDIO_BANDS = ("level", "bass", "mid", "treble", "beat", "pitch")
 SUN_EVENTS = ("sunset", "sunrise")

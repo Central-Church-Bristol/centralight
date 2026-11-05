@@ -206,16 +206,6 @@ class RestoreTests(EngineTestCase):
         path.write_text("{broken", encoding="utf-8")
         self.assertIsNone(LiveState.load(path))
 
-    def test_a_blacked_out_live_json_from_before_starts_black(self) -> None:
-        old = LiveState.from_dict({"show": "x", "blackout": True, "blackout_by_quit": True, "blackout_quit_at": 99.0,
-                                   "base": {"input": "follow-screen", "time": 3}, "house": {"dimmer-4": {"level": 0.6, "on": True}}})
-        self.assertIsNone(old.base)  # nothing playing (the Blackout hid it)...
-        self.assertEqual(old.house["dimmer-4"], HouseSetting(0.6, False))  # ...the house lights off, levels kept
-        self.assertEqual((old.quit_dark, old.quit_at), (True, 99.0))  # and it was a "Turn lights off" quit
-        clicked = LiveState.from_dict({"show": "x", "blackout": True, "house": {"dimmer-4": {"level": 0.6, "on": True}}})
-        self.assertFalse(clicked.quit_dark)  # (a click: black now, but nothing held back)
-        self.assertFalse(clicked.house["dimmer-4"].on)
-
 
 class ShowSwapTests(EngineTestCase):
     def test_new_house_lights_start_off_and_removed_ones_go(self) -> None:

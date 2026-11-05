@@ -103,16 +103,15 @@ class AutomationBlackTests(unittest.TestCase):
         self.assertEqual(action_command({"do": "fade_black"}, show), ToBlack(2.0, False))
         self.assertEqual(describe_action({"do": "fade_black", "fade": 3, "all": True}), "fade to black (3 s), Festoon and Key lights too")
 
-    def test_old_files_are_brought_up_to_date(self) -> None:
-        data = {"id": "night", "name": "Night", "conditions": [{"type": "blackout", "invert": True}, {"type": "time", "from": "22:00", "to": "23:00"}],
-                "actions": [{"do": "blackout", "on": True, "delay": 5}, {"do": "base", "input": "x"}],
-                "on_end": [{"do": "blackout", "on": False}]}
+    def test_an_old_blackout_file_is_switched_off_not_converted(self) -> None:
+        """(From before Cut / Fade to black: no show of yours has one, so it's no longer converted. The general safety
+        handling still applies: an unknown condition switches the automation off, an unknown action is left out.)"""
+        data = {"id": "night", "name": "Night", "conditions": [{"type": "blackout"}],
+                "actions": [{"do": "blackout", "on": True}, {"do": "base", "input": "x"}]}
         automation, warnings = automation_from_dict(data, expected_id="night")
-        self.assertEqual(automation.conditions[0], {"type": "colour_black", "invert": True})
-        self.assertEqual(automation.actions[0], {"do": "fade_black", "fade": 0.5, "all": True, "delay": 5})  # as Blackout was
-        self.assertEqual(len(automation.on_end), 0)  # Blackout off: nothing to turn off now
-        self.assertTrue(automation.enabled)
-        self.assertEqual(len(warnings), 3)
+        self.assertFalse(automation.enabled)
+        self.assertEqual([dict(a) for a in automation.actions], [{"do": "base", "input": "x"}])
+        self.assertTrue(warnings)
 
 
 class ButtonAndSettingsTests(unittest.TestCase):

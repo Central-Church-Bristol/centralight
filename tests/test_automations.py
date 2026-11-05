@@ -367,7 +367,7 @@ class DataTests(unittest.TestCase):
         self.assertTrue(check_action({"do": "overlay"}))  # (Send to Overlay needs an input)
         self.assertTrue(check_action({"do": "overlay_clear"}))
         self.assertEqual(check_action({"do": "overlay_clear_all"}), [])
-        self.assertTrue(check_action({"do": "overlay_off", "slot": 1}))  # (before M14: converted as a file is read)
+        self.assertTrue(check_action({"do": "overlay_off", "slot": 1}))  # (Overlays 1-4, before M14: not an action now)
         self.assertTrue(check_action({"do": "base"}))
 
     def test_files_round_trip_and_bad_ones(self) -> None:

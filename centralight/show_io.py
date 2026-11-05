@@ -237,9 +237,6 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
         for element in track:
             if not isinstance(element, dict) or not isinstance(element.get("kind"), str):
                 raise InputFileError(f'every element on track {index} must be an object with a "kind"')
-        if any("blur" in element for element in track):  # (from before 4 Nov: each picture element's Area replaces it)
-            track = [{k: v for k, v in element.items() if k != "blur"} for element in track]
-            warnings.append(f'unknown field "blur" on track {index} was ignored (Area does that job now)')
         track = [_colour_from_paint(_checked_link(element, index, warnings)) for element in track]
         tracks.append(freeze(track))
     while len(tracks) < TRACK_COUNT:
@@ -506,58 +503,6 @@ def automation_to_dict(automation: Automation) -> dict[str, Any]:
     return data
 
 
-def _updated_condition(cond: dict, warnings: list[str], scope: str = "show") -> dict:
-    """A condition from an older CentraLight: "Blackout is on" is now "The colour lights are black"; and in a show's
-    automation, The PC starts, CentraLight starts and The PC wakes are now "When this show loads" (they're the global
-    automations' now)."""
-    from .automations import CONDITIONS, MOVED_EVENTS
-
-    if cond.get("type") == "blackout":
-        warnings.append('the condition "Blackout is on" is now "The colour lights are black"')
-        return {**cond, "type": "colour_black"}
-    where = cond.get("where")
-    if cond.get("type") == "input_live" and isinstance(where, str) and where[:7] == "overlay" and where != "overlay":
-        warnings.append(f'"in Overlay {where[7:]}" is now "in the Overlay" (there is one Overlay now)')
-        return {**cond, "where": "overlay"}
-    if scope == "show" and cond.get("type") in MOVED_EVENTS:
-        warnings.append(f'the condition "{CONDITIONS[cond["type"]]}" is now "When this show loads" (the PC starting, '
-                        "CentraLight starting and the PC waking are for global automations now)")
-        return {k: v for k, v in cond.items() if k != "type"} | {"type": "show_loads"}
-    return cond
-
-
-def _updated_action(action: Any, warnings: list[str]) -> Any:
-    """An action from before Cut / Fade to black: Blackout on is now Fade to black (everything, as Blackout did);
-    Blackout off has nothing to turn off now, so it's left out (the next input lights things again). One from before
-    M14's single Overlay: an input in Overlay 1-4 is now Send to Overlay (out of one: Clear from Overlay), and clearing
-    Overlay 1-4 is now Clear the Overlay."""
-    if isinstance(action, dict) and (action.get("do") == "overlay_off" or (action.get("do") == "overlay" and "slot" in action)):
-        return _updated_overlay_action(action, warnings)
-    if not isinstance(action, dict) or action.get("do") != "blackout":
-        return action
-    if action.get("on", True) is True:
-        warnings.append('"Blackout on" is now "Fade to black" (the Festoon and Key lights too)')
-        updated = {"do": "fade_black", "fade": 0.5, "all": True}
-        if "delay" in action:
-            updated["delay"] = action["delay"]
-        return updated
-    warnings.append('"Blackout off" was left out: there\'s no Blackout to turn off now (the next input lights things again)')
-    return None
-
-
-def _updated_overlay_action(action: dict, warnings: list[str]) -> dict:
-    delay = {"delay": action["delay"]} if "delay" in action else {}
-    slot = action.get("slot", "?")
-    if action.get("do") == "overlay_off":
-        warnings.append(f'"Clear Overlay {slot}" is now "Clear the Overlay" (there is one Overlay now)')
-        return {"do": "overlay_clear_all", **delay}
-    if action.get("state", "toggle") == "off":
-        warnings.append(f'"{action.get("input", "?")} out of Overlay {slot}" is now "Clear it from the Overlay"')
-        return {"do": "overlay_clear", "input": action.get("input"), **delay}
-    warnings.append(f'"{action.get("input", "?")} in Overlay {slot}" is now "Send it to the Overlay" (there is one Overlay now)')
-    return {"do": "overlay", "input": action.get("input"), **delay}
-
-
 def automation_from_dict(data: Any, expected_id: str | None = None, scope: str = "show") -> tuple[Automation, list[str]]:
     """Check and convert an automation file's data (scope: a show's automation, or a "global" one). Raises
     InputFileError for a file that can't be used at all. A broken condition switches the automation off (dropping it
@@ -589,8 +534,6 @@ def automation_from_dict(data: Any, expected_id: str | None = None, scope: str =
     conditions = data.get("conditions", [])
     if not isinstance(conditions, list) or not all(isinstance(c, dict) for c in conditions):
         raise InputFileError('"conditions" must be a list of objects')
-    updated: list[str] = []  # notes about bringing an older file up to date (not problems: it stays switched on)
-    conditions = [_updated_condition(cond, updated, scope) for cond in conditions]
     for index, cond in enumerate(conditions, start=1):
         for problem in check_condition(cond, scope):
             warnings.append(f"condition {index}: {problem}")
@@ -603,7 +546,6 @@ def automation_from_dict(data: Any, expected_id: str | None = None, scope: str =
         if not isinstance(actions, list):
             raise InputFileError(f'"{key}" must be a list of objects')
         kept[key] = []
-        actions = [new for action in actions if (new := _updated_action(action, updated)) is not None]
         for index, action in enumerate(actions, start=1):
             problems = check_action(action, scope) if isinstance(action, dict) else ["it must be an object"]
             if problems:
@@ -614,7 +556,7 @@ def automation_from_dict(data: Any, expected_id: str | None = None, scope: str =
         id=automation_id, name=name, enabled=enabled, logic=logic, conditions=freeze(conditions),
         actions=freeze(kept["actions"]), on_end=freeze(kept["on_end"]),
     )
-    return automation, updated + warnings
+    return automation, warnings
 
 
 def automation_file(folder: Path, automation_id: str, subdir: str = AUTOMATIONS_DIR) -> Path:

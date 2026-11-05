@@ -413,7 +413,6 @@ Close the app first (it's holding the dongle), then:
   - [ ] A **timed** input sent to the Overlay: its box fills as it plays, and it leaves by itself at the end.
   - [ ] The **Overlay** row's switch off: the Overlay hides but its boxes stay (dimmed); switch on: it's back.
         **Clear all** empties it.
-  - [ ] A Stream Deck key made before (e.g. `/api/input/pillars-purple/overlay/1`) still turns it on and off.
   - [ ] Drag a tile to another place: a pale-blue line shows where it'll go. Ctrl+Z puts it back.
 - [ ] **Colour element**: tonight's single-colour input looks the same as before (it's a Colour element now: open
       it in the Editor). New input → **Colour** (first in the list): the lights take its colour; try a gradient.

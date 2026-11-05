@@ -782,16 +782,11 @@ class Engine:
             self._house_driven.clear()
         elif isinstance(command, SendToOverlay):
             inp = self._input(command.input_id)
-            if inp is not None:
-                if command.toggle and self._overlay.count(inp.id):
-                    self._overlay.clear_input(inp.id, now)
-                elif command.once and self._overlay.count(inp.id):
-                    self._overlay.set_on(True, now)  # (it's there already: just make sure it shows)
-                elif self._overlay.send(inp, now, command.tag) is None:
-                    log_info(f"{inp.name} wasn't sent to the Overlay: it has {COPIES_PER_INPUT} copies there already"
-                             if self._overlay.count(inp.id) >= COPIES_PER_INPUT
-                             else f"{inp.name} wasn't sent to the Overlay: it's full ({MAX_COPIES} copies)",
-                             key=f"overlay-full-{inp.id}")
+            if inp is not None and self._overlay.send(inp, now, command.tag) is None:
+                log_info(f"{inp.name} wasn't sent to the Overlay: it has {COPIES_PER_INPUT} copies there already"
+                         if self._overlay.count(inp.id) >= COPIES_PER_INPUT
+                         else f"{inp.name} wasn't sent to the Overlay: it's full ({MAX_COPIES} copies)",
+                         key=f"overlay-full-{inp.id}")
         elif isinstance(command, ClearFromOverlay):
             if command.copy:
                 self._overlay.clear_copy(int(command.copy), now, command.cut)

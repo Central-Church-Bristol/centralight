@@ -332,7 +332,7 @@ class AutomationReviewTests(AutomationEngineTestCase):
         self.assertIn("ProPresenter", self.engine._ndi_names())  # kept connected, so it can be seen
 
     def test_a_lights_off_restart_lets_automations_light_the_room(self) -> None:
-        old = LiveState.from_dict({"blackout": True, "blackout_by_quit": True})  # (a live.json from before M11)
+        old = LiveState.from_dict({"quit_dark": True})
         self.make(_dt(2026, 11, 8, 8, 59), [automation("welcome", SUNDAY_MORNING, WELCOME)], live=old)
         self.assertTrue(self.engine._quit_dark)
         self.run_until(_dt(2026, 11, 8, 9, 0, 30))

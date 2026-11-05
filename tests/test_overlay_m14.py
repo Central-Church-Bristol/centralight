@@ -17,7 +17,6 @@ from centralight.automations import action_command, check_action, describe_actio
 from centralight.commands import ClearFromOverlay, ClearOverlay, SendToOverlay
 from centralight.input_edit import move_input
 from centralight.new_show import show_from_patch
-from centralight.show_io import automation_from_dict
 from tests.gui_fixtures import with_inputs
 from tests.qt_support import process
 from tests.test_gui_editor import EditorTestCase
@@ -161,22 +160,6 @@ class DragTests(EditorTestCase):
 
 
 class AutomationTests(unittest.TestCase):
-    def test_old_overlay_actions_and_conditions_are_brought_up_to_date(self) -> None:
-        data = {"id": "a", "name": "A",
-                "conditions": [{"type": "input_live", "input": "x", "where": "overlay3"}],
-                "actions": [{"do": "overlay", "input": "x", "slot": 2, "state": "on", "delay": 5},
-                            {"do": "overlay", "input": "y", "slot": 1, "state": "off"},
-                            {"do": "overlay", "input": "z", "slot": 4},
-                            {"do": "overlay_off", "slot": 3}]}
-        automation, notes = automation_from_dict(data)
-        self.assertTrue(automation.enabled)
-        self.assertEqual(automation.conditions[0]["where"], "overlay")
-        self.assertEqual([dict(a) for a in automation.actions],
-                         [{"do": "overlay", "input": "x", "delay": 5}, {"do": "overlay_clear", "input": "y"},
-                          {"do": "overlay", "input": "z"}, {"do": "overlay_clear_all"}])
-        self.assertEqual(len(notes), 5)
-        self.assertTrue(all("Overlay" in note for note in notes))
-
     def test_the_actions_and_what_they_say(self) -> None:
         show = with_inputs(show_from_patch())
         self.assertEqual(check_action({"do": "overlay", "input": "pillars-purple"}), [])

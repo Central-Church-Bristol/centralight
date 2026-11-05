@@ -150,14 +150,10 @@ class SetTestColour:
 class SendToOverlay:
     """Send an input to the Overlay (M14): a new copy on top of what's there, appearing with the input's transition.
     An input has at most 4 copies there at once (a send beyond that is ignored). tag: names the copy, so
-    ClearFromOverlay(tag=...) clears just that one (a held Send to Overlay button, let go). toggle: if the input has
-    copies there already, clear them instead (what the old Overlay 1-4 URLs did); once: if it has one there already,
-    do nothing (an old URL's ?state=on)."""
+    ClearFromOverlay(tag=...) clears just that one (a held Send to Overlay button, let go)."""
 
     input_id: str
     tag: str = ""
-    toggle: bool = False
-    once: bool = False
 
 
 @dataclass(frozen=True)

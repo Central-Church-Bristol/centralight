@@ -418,11 +418,10 @@ class EngineM2Tests(unittest.TestCase):
         self.assertFalse(frame.overlay.on)
         self.assertEqual(len(frame.overlay.copies), 3)  # (hidden, kept)
         self.assertNotIn("glow", frame.live_inputs)
-        self.engine.submit(SendToOverlay("glow", toggle=True))  # (an old Overlay 1-4 URL: it's there, so it clears)
+        self.engine.submit(ClearFromOverlay(input_id="glow"))
         self.run_for(1.1)
         self.assertEqual(self.engine.frames.get().overlay.copies, ())
-        self.engine.submit(SendToOverlay("glow", once=True))  # (an old ?state=on URL: once only)
-        self.engine.submit(SendToOverlay("glow", once=True))
+        self.engine.submit(SendToOverlay("glow"))
         self.run_for(0.1)
         frame = self.engine.frames.get()
         self.assertEqual(len(frame.overlay.copies), 1)
@@ -505,15 +504,17 @@ class EngineM2Tests(unittest.TestCase):
         self.assertEqual([c.input_id for c in overlay.copies], ["glow", "blue"])  # (in order: the newest on top)
         self.assertEqual(overlay.opacity, 0.5)
 
-    def test_a_live_json_from_before_m14_brings_its_overlays_back_as_copies(self) -> None:
+    def test_a_live_json_from_before_m14_starts_with_an_empty_overlay(self) -> None:
+        """(Its Overlays 1-4 aren't brought back since the clean-up: Base carries on, the Overlay starts empty.)"""
         old = {"show": "", "base": {"input": "red", "time": 1.0},
-               "overlays": [{"input": "glow", "time": 2.0, "opacity": 0.7}, None, {"input": "blue", "time": 1.0, "opacity": 1.0}, None]}
+               "overlays": [{"input": "glow", "time": 2.0, "opacity": 0.7}, None, None, None]}
         state = LiveState.from_dict(old)
-        self.assertEqual(state.overlay, {"on": True, "opacity": 0.7, "copies": [{"input": "glow", "time": 2.0},
-                                                                               {"input": "blue", "time": 1.0}]})
+        self.assertIsNone(state.overlay)
         engine2 = Engine(self.show, FakeOutput(), state, clock=FakeClock())
         engine2.tick()
-        self.assertEqual([c.input_id for c in engine2.frames.get().overlay.copies], ["glow", "blue"])
+        frame = engine2.frames.get()
+        self.assertEqual(frame.overlay.copies, ())
+        self.assertEqual(frame.base_id, "red")
 
     def test_engine_time_per_tick(self) -> None:
         """Typical (one NDI element) and worst case (a transition and four busy copies on the Overlay)."""

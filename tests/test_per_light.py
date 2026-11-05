@@ -17,7 +17,7 @@ from centralight.lights import ASPECT, DEFAULT_AREA, IDENTIFY_PALETTE, area_half
 from centralight.model import Fixture, Input, MapSpot, Transition
 from centralight.new_show import show_from_patch
 from centralight.schema import element_specs
-from centralight.show_io import freeze, input_from_dict, input_to_dict
+from centralight.show_io import freeze
 from centralight.transitions import KINDS, mix
 from tests.fakes import StubSources
 from tests.test_follow_screen import split_picture
@@ -347,18 +347,6 @@ class ColourBoostTests(unittest.TestCase):
         grey = np.array([[0.4], [0.4], [0.4], [1.0]])
         np.testing.assert_array_equal(colour_boost(grey, 1.0), grey)  # grey stays grey
         np.testing.assert_array_equal(colour_boost(layer, 0.0), layer)  # 0 = as it was
-
-
-class OldFilesTests(unittest.TestCase):
-    def test_blur_from_before_is_ignored_with_a_warning(self) -> None:
-        data = {"format": "centralight-input", "version": 1, "id": "old", "name": "Old",
-                "tracks": [[{"id": "E1", "kind": "ndi", "source": "Media Background Pane", "blur": 0.4}], [], [], []]}
-        inp, warnings = input_from_dict(data, expected_id="old")
-        self.assertNotIn("blur", inp.tracks[0][0])
-        self.assertTrue(any('"blur"' in w for w in warnings))
-        self.assertNotIn("blur", str(input_to_dict(inp)))  # and the next save leaves it out
-        for kind in ("ndi", "image", "video", "paint"):
-            self.assertNotIn("blur", [s.path for s in element_specs(kind)], kind)
 
 
 class LightSetTests(unittest.TestCase):
