@@ -24,6 +24,11 @@ lights. The summary counts the copies and swaps in the session log.
 --countdown N (M13): each show has a show variable "mood" and an automation "mood above 0.5 → Fade to
 black; when it stops → Follow screen". Every N minutes the soak sets mood to 0.9 (the automation's run
 waits for its 15 s countdown, then fades), and 40 s later back to 0.1 (Follow screen comes back).
+
+--overlay N (M14): every N seconds two copies of an input go on the Overlay a second apart (the linked video
+with --linked-video, so each copy has a video reader of its own; else Follow screen), and Clear all clears them
+20 s later. Each sample also counts the app's threads, which should level off too (a reader that's never
+closed would show as a climbing count).
 """
 
 from __future__ import annotations
@@ -67,6 +72,37 @@ class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
         ("PeakPagefileUsage", ctypes.c_size_t),
         ("PrivateUsage", ctypes.c_size_t),
     ]
+
+
+class THREADENTRY32(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ThreadID", wintypes.DWORD),
+        ("th32OwnerProcessID", wintypes.DWORD),
+        ("tpBasePri", wintypes.LONG),
+        ("tpDeltaPri", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD),
+    ]
+
+
+def thread_count(pid: int) -> int:
+    """How many threads the process has now (0 if it can't be told)."""
+    snap = kernel32.CreateToolhelp32Snapshot(0x00000004, 0)  # (TH32CS_SNAPTHREAD: every thread on the PC)
+    if snap in (0, -1, ctypes.c_void_p(-1).value):
+        return 0
+    count = 0
+    try:
+        entry = THREADENTRY32()
+        entry.dwSize = ctypes.sizeof(THREADENTRY32)
+        more = kernel32.Thread32First(snap, ctypes.byref(entry))
+        while more:
+            if entry.th32OwnerProcessID == pid:
+                count += 1
+            more = kernel32.Thread32Next(snap, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snap)
+    return count
 
 
 def child_pids(parent: int) -> list[int]:
@@ -257,6 +293,8 @@ def main() -> int:
                    help="a video linked to an original, replaced every this many minutes (0: none)")
     p.add_argument("--countdown", type=float, default=0.0,
                    help="an automation counts down and fades every this many minutes (0: never)")
+    p.add_argument("--overlay", type=float, default=0.0,
+                   help="two copies of an input go on the Overlay every this many seconds, cleared 20 s later (0: never)")
     args = p.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -300,6 +338,8 @@ def main() -> int:
         last_switch = started
         last_replace = started
         last_mood, mood_high, cycles = started, False, 0
+        last_overlay, clear_at, overlay_sends, overlay_clears = started, 0.0, 0, 0
+        threads_seen: list[int] = []
         if args.linked_video > 0:
             time.sleep(3.0)
             remote_get(port, "/api/input/linked-video")  # (on the lights: its updates wait until it isn't)
@@ -325,23 +365,38 @@ def main() -> int:
                 elif mood_high and time.monotonic() - last_mood >= 40.0:
                     remote_get(port, "/api/var/mood?value=0.1")
                     mood_high, last_mood = False, time.monotonic()
+            if clear_at and time.monotonic() >= clear_at:  # (first: a send due now mustn't put it off)
+                overlay_clears += remote_get(port, "/api/overlay/clear")
+                clear_at = 0.0
+            if args.overlay > 0 and time.monotonic() - last_overlay >= args.overlay:
+                last_overlay = time.monotonic()
+                target = "linked-video" if args.linked_video > 0 else "follow-screen"
+                for copy in range(2):  # (two copies at different moments of it)
+                    if copy:
+                        time.sleep(1.0)
+                    overlay_sends += remote_get(port, f"/api/input/{target}/overlay")
+                clear_at = time.monotonic() + 20.0
             if args.linked_video > 0 and time.monotonic() - last_replace >= args.linked_video * 60:
                 last_replace = time.monotonic()
                 hue += 0.37
                 make_clip(original, hue)  # a new version of the original, while CentraLight may be playing its copy
                 replaced += 1
             cpu, private, working = sample(pid)
+            threads = thread_count(pid)
+            threads_seen.append(threads)
             now = time.monotonic()
             share = (cpu - last_cpu) / (now - last_t) * 100
-            rows.append((round(now - started), round(share, 2), round(share / cores, 3), private // 1024, working // 1024))
+            rows.append((round(now - started), round(share, 2), round(share / cores, 3), private // 1024, working // 1024,
+                         threads))
             last_cpu, last_t = cpu, now
             print(f"  {rows[-1][0]:>6} s  CPU {share:5.1f} % of one core ({share / cores:.2f} % of the PC)  "
-                  f"private {private / 1048576:6.1f} MB  working set {working / 1048576:6.1f} MB", flush=True)  # (as Task Manager counts MB)
+                  f"private {private / 1048576:6.1f} MB  working set {working / 1048576:6.1f} MB  "
+                  f"threads {threads}", flush=True)  # (as Task Manager counts MB)
         log = (home / "appdata" / "session.log")
         if args.csv:
             with args.csv.open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.writer(handle)
-                writer.writerow(["seconds", "cpu_one_core_pct", "cpu_pc_pct", "private_kb", "working_set_kb"])
+                writer.writerow(["seconds", "cpu_one_core_pct", "cpu_pc_pct", "private_kb", "working_set_kb", "threads"])
                 writer.writerows(rows)
         if rows:
             shares = [r[1] for r in rows]
@@ -352,8 +407,12 @@ def main() -> int:
                   f"({sum(shares) / len(shares) / cores:.2f} % of the PC), worst {max(shares):.1f} %")
             print(f"Memory: private {private[0] / 1024:.1f} MB at the start, {private[-1] / 1024:.1f} MB at the end, "
                   f"peak {max(private) / 1024:.1f} MB; second half averages {(second - first) / 1024:+.1f} MB vs the first")
+        if threads_seen:
+            print(f"Threads: {threads_seen[0]} at the start, {threads_seen[-1]} at the end, most {max(threads_seen)}")
         if args.switch_shows > 0:
             print(f"Shows loaded: {switches} times ({failed} asks the remote didn't answer)")
+        if args.overlay > 0:
+            print(f"Overlay: {overlay_sends} copies sent, cleared {overlay_clears} times")
         if log.exists() and args.countdown > 0:
             text = log.read_text(encoding="utf-8")
             print(f"Countdown: mood set high {cycles} times; {text.count('for its countdown')} runs waited for their "
