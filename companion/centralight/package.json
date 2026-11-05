@@ -1,0 +1,21 @@
+{
+  "name": "centralight",
+  "version": "1.0.0",
+  "description": "Bitfocus Companion module for CentraLight (live connection: actions, feedbacks, variables, presets)",
+  "main": "main.js",
+  "type": "commonjs",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/lib.test.js test/module.test.js"
+  },
+  "dependencies": {
+    "@companion-module/base": "1.11.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

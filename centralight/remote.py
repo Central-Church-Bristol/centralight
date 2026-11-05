@@ -36,6 +36,9 @@ in a browser for a page listing every URL, with big buttons (it doubles as a pho
     /api/shows                             the shows there are, as JSON
     /api/state                             what's happening now, as JSON
     POST /api/command {"op": "input", "id": "warm-white"}   the same things as JSON
+    /api/ws                                the live connection (M16), a WebSocket for Companion's
+                                           CentraLight module: what's happening, sent the moment it
+                                           changes, and commands back (see live_socket.py)
 
 Each reply is {"ok": true} straight away (or {"ok": false, "error": "..."} with 404 for an
 unknown input, variable or light, 400 for a bad value). Inputs, variables, house lights,
@@ -52,15 +55,19 @@ from __future__ import annotations
 import errno
 import html
 import json
+import math
 import secrets
 import socket
 import threading
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+from . import live_socket
+from .automations import upcoming
 from .commands import (
     BLACK_FADE,
     ClearFromOverlay,
@@ -94,6 +101,8 @@ DEFAULT_PORT = 8746
 SHOWS_FRESH = 3.0  # seconds the list of shows is kept before it's read again
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
 MAX_BODY = 64_000
+MAX_LIVE = 8  # live connections (Companion's) open at once
+NEXT_FRESH = 30.0  # seconds the next timed automation is kept before it's worked out again
 
 
 def new_key() -> str:
@@ -435,12 +444,41 @@ def state_of(engine: Any, shows: list[ShowInfo] | None = None) -> dict[str, Any]
     return data
 
 
+def live_state_of(engine: Any, shows: list[ShowInfo] | None = None, next_text: str = "") -> dict[str, Any]:
+    """What the live connection sends (M16): /api/state's, plus the automations (the show's and the global ones) and
+    whether they're paused, the next timed one, and the colour lights (for the Console's Release). Without what changes
+    every frame (transitions' progress), and with levels to the percent and the countdown to the second, so it's
+    sent only when something a button could show has changed."""
+    data = state_of(engine, shows)
+    if isinstance(data.get("base"), dict):
+        data["base"].pop("progress", None)
+    for copy in (data.get("overlay") or {}).get("copies", []):
+        copy.pop("progress", None)
+    if isinstance(data.get("master"), (int, float)):
+        data["master"] = round(data["master"], 2)
+    for level in (data.get("levels") or {}).values():
+        level["level"] = round(level["level"], 2)
+    if data.get("countdown"):
+        data["countdown"]["seconds"] = math.ceil(data["countdown"]["seconds"])
+    show: Show = engine.show
+    globals_ = getattr(engine, "global_automations", None)
+    frame = engine.frames.get()
+    data["automations"] = [{"id": a.id, "name": a.name, "enabled": a.enabled} for a in show.ordered_automations()]
+    data["global_automations"] = ([{"id": a.id, "name": a.name, "enabled": a.enabled}
+                                   for a in globals_.ordered_automations()] if globals_ is not None else [])
+    data["paused"] = bool(frame.automations.paused) if frame is not None else False
+    data["next"] = next_text
+    data["lights"] = [{"id": fx.id, "name": fx.name} for fx in show.colour_fixtures()]
+    return data
+
+
 # ---------------------------------------------------------------- the server
 
 
 class _Handler(BaseHTTPRequestHandler):
     server_version = "CentraLightRemote/1.0"
     protocol_version = "HTTP/1.1"
+    timeout = 15  # seconds a connection may wait with nothing sent before it's closed (a live one has its own rules)
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -481,7 +519,8 @@ class _Handler(BaseHTTPRequestHandler):
             if not local:  # e.g. a web page that renamed itself to 127.0.0.1 ("DNS rebinding")
                 self._error(403, "this remote only answers to http://127.0.0.1")
                 return False
-        elif not local and not (remote.key and secrets.compare_digest(params.get("key", ""), remote.key)):
+        elif not local and not (remote.key and secrets.compare_digest(params.get("key", "").encode("utf-8"),
+                                                                      remote.key.encode("utf-8"))):
             self._error(403, "add ?key=… (the key is in CentraLight's Settings → Remote)")
             return False
         return True
@@ -536,6 +575,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(200, help_page(remote, key).encode("utf-8"), "text/html; charset=utf-8")
             elif path[0] != "api":
                 raise BadRequest(404, "there's no such page: see /")
+            elif path[1:] == ["ws"]:
+                self._live()
             elif path[1:] == ["state"]:
                 self._json(200, {"ok": True, **state_of(remote.engine, remote.shows())})
             elif path[1:] == ["shows"]:
@@ -551,6 +592,35 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # never let one bad request stop the remote
             log_exception("remote request", exc)
             self._error(500, "something went wrong (see session.log)")
+
+
+    def _live(self) -> None:
+        """GET /api/ws: the live connection (M16). Refused like any other request first (another website, a Host
+        that isn't this PC, a missing key); then it stays open, on this thread, until either end closes it."""
+        remote = self.remote
+        problem = live_socket.handshake_problem(self.headers)
+        if problem is not None:
+            raise BadRequest(*problem)
+        origin = self.headers.get("Origin")
+        if origin is not None and not live_socket.same_origin(origin, self.headers.get("Host") or ""):
+            raise BadRequest(403, "requests from other websites are blocked")  # (a web page's own WebSocket)
+        if not remote.live_opened():
+            raise BadRequest(503, f"there are {MAX_LIVE} live connections already")
+        try:
+            self.send_response(101, "Switching Protocols")
+            for name, value in live_socket.accept_headers(self.headers):
+                self.send_header(name, value)
+            self.end_headers()
+            self.close_connection = True  # (afterwards: no more HTTP on this connection)
+            stopping = getattr(self.server, "stopping", None) or threading.Event()
+            live_socket.serve(live_socket.Connection(self.connection), remote.live_state, remote.run_live,
+                              stopping.is_set)
+        except Exception as exc:  # (never an HTTP answer now: the connection is a WebSocket)
+            if time.monotonic() - remote.live_logged > 60.0:  # (once a minute at most: a client that keeps coming
+                remote.live_logged = time.monotonic()  # back mustn't fill session.log)
+                log_exception("the live connection", exc)
+        finally:
+            remote.live_closed()
 
 
 class _Server(ThreadingHTTPServer):
@@ -583,6 +653,10 @@ class RemoteServer:
         self.shows_root = Path(shows_root) if shows_root is not None else None
         self._shows: tuple[float, list[ShowInfo]] = (-1e9, [])
         self._shows_lock = threading.Lock()
+        self.live = 0  # live connections open now (M16: Companion's)
+        self.live_logged = -1e9  # when a live connection's problem was last logged
+        self._live_lock = threading.Lock()
+        self._next: tuple[Any, float, str] = (None, -1e9, "")  # (which shows, when, the next timed automation)
 
     @classmethod
     def from_settings(cls, engine: Any, settings: Any, shows_root: Path | None = None) -> RemoteServer:
@@ -608,6 +682,70 @@ class RemoteServer:
 
     def global_automations(self) -> Show | None:
         return getattr(self.engine, "global_automations", None)
+
+    # --- the live connection (M16)
+
+    def live_opened(self) -> bool:
+        """One more live connection, if there's room."""
+        with self._live_lock:
+            if self.live >= MAX_LIVE:
+                return False
+            self.live += 1
+            return True
+
+    def live_closed(self) -> None:
+        with self._live_lock:
+            self.live = max(0, self.live - 1)
+
+    def live_state(self) -> dict[str, Any]:
+        return live_state_of(self.engine, self.shows(), self.next_automation())
+
+    def next_automation(self) -> str:
+        """The next timed automation, the show's or a global one: "Sun 09:30 Morning lights" ("" if none in a week).
+        Worked out at most every NEXT_FRESH seconds, and when another show loads."""
+        show, globals_ = self.engine.show, self.global_automations()
+        which = (id(show), id(globals_))
+        now = time.monotonic()
+        with self._live_lock:
+            if self._next[0] == which and now - self._next[1] < NEXT_FRESH:
+                return self._next[2]
+        text = ""
+        try:
+            moment = datetime.now()
+            found = [] if show.no_show else list(upcoming(show, moment, days=7, limit=1))
+            if globals_ is not None:
+                found = found + list(upcoming(globals_, moment, days=7, limit=1))
+            found.sort(key=lambda item: item[0])
+            text = f"{found[0][0]:%a %H:%M} {found[0][1].name}" if found else ""
+        except Exception as exc:  # (never let it stop the live connection)
+            log_exception("the next automation", exc)
+        with self._live_lock:
+            self._next = (which, now, text)
+        return text
+
+    def run_live(self, command: Any) -> dict[str, Any]:
+        """A command from the live connection: {"path": "input/warm-white", "params": {...}} (any of the URLs, after
+        /api/), or {"op": ...} as POST /api/command takes them. {"ok": true}, or the error and its HTTP status."""
+        try:
+            engine = self.engine
+            context = (engine.show, engine.frames.get(), self.black_fade(), self.shows(), self.global_automations())
+            if isinstance(command, dict) and isinstance(command.get("path"), str):
+                parts = [unquote(part) for part in command["path"].split("/") if part]
+                if parts[:1] == ["api"]:
+                    parts = parts[1:]
+                raw = command.get("params")
+                params = {str(k): str(v) for k, v in raw.items() if v is not None} if isinstance(raw, dict) else {}
+                result = command_for(parts, params, *context)
+            else:
+                result = command_from_json(command, *context)
+            engine.submit(result)
+            self.count += 1
+            return {"ok": True}
+        except BadRequest as exc:
+            return {"ok": False, "error": str(exc), "status": exc.status}
+        except Exception as exc:
+            log_exception("a live command", exc)
+            return {"ok": False, "error": "something went wrong (see session.log)", "status": 500}
 
     @property
     def running(self) -> bool:
@@ -636,6 +774,7 @@ class RemoteServer:
             log_info(f"Remote couldn't start on {address}:{self.port}: {exc}")
             return False
         httpd.remote = self  # type: ignore[attr-defined]
+        httpd.stopping = threading.Event()  # type: ignore[attr-defined]  # (set: the live connections close)
         self.port = httpd.server_address[1]  # (port 0 picks a free one, for tests)
         self._httpd = httpd
         self.error = ""
@@ -646,6 +785,7 @@ class RemoteServer:
 
     def stop(self) -> None:
         if self._httpd is not None:
+            self._httpd.stopping.set()  # type: ignore[attr-defined]
             self._httpd.shutdown()
             self._httpd.server_close()
             self._httpd = None
@@ -736,6 +876,7 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
         ("The countdown before an automatic change", "/api/countdown/now  (or /wait: 10 minutes later, /skip)"),
         ("The shows", "/api/shows"),
         ("What's happening now", "/api/state"),
+        ("The live connection (Companion's CentraLight module)", "/api/ws  (a WebSocket: ws:// instead of http://)"),
     ]
     show_urls = "".join(
         f"<tr><td>Load {esc(s.name)}</td><td><code>{esc(base)}/api/show/{esc(quote(s.id))}{esc(suffix)}</code></td></tr>"

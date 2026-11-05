@@ -16,4 +16,5 @@ Desktop.ini
 # CentraLight app
 fonts/
 tests/screens/
+companion/centralight/node_modules/
 /CentraLight.exe

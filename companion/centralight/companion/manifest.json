@@ -1,0 +1,21 @@
+{
+  "id": "centralight",
+  "name": "centralight",
+  "shortname": "centralight",
+  "description": "CentraLight: the church's lighting app (inputs, the Overlay, shows, black, Master, house lights, automations, the Console)",
+  "version": "1.0.0",
+  "license": "MIT",
+  "repository": "",
+  "bugs": "",
+  "maintainers": [{ "name": "Central Church" }],
+  "legacyIds": [],
+  "runtime": {
+    "type": "node22",
+    "api": "nodejs-ipc",
+    "apiVersion": "1.11.3",
+    "entrypoint": "../main.js"
+  },
+  "manufacturer": "Central Church",
+  "products": ["CentraLight"],
+  "keywords": ["Lighting", "DMX"]
+}

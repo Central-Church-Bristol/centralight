@@ -40,7 +40,8 @@ While the app runs, every action has a web address on this PC, so a Stream Deck 
 1. In the **Elgato Stream Deck** app, drag a **Website** action (System) onto a key.
 2. Paste a URL, e.g. `http://127.0.0.1:8746/api/input/warm-white`, and tick **GET request in background**
    (otherwise a browser window opens each time).
-3. Bitfocus **Companion** works too: **Generic HTTP → GET** with the same URL.
+3. Bitfocus **Companion**: the CentraLight module (in the `companion` folder; `companion\README.md` has the steps)
+   lights its keys with what's happening. Companion's **Generic HTTP → GET** with the same URLs works too.
 
 Open <http://127.0.0.1:8746/> in a browser for the full list (with buttons for every input), or click the
 **Remote** chip at the top of the app. The Editor's **Copy Stream Deck URLs** button copies one input's URLs.

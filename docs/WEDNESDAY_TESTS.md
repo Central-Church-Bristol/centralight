@@ -513,6 +513,21 @@ Close the app first (it's holding the dongle), then:
       input…**, send that tile: it plays. Undo (Ctrl+Z) takes a saved input away again.
 - [ ] Lock the padlock: the page can't be changed. Unlock.
 
+## 20d. M16: the Stream Deck through Companion
+
+- [ ] In Companion (Launch GUI): **Modules** → **Import module package** → `companion\centralight-1.0.0.tgz` in the
+      CentraLight folder. **Connections** → add **CentraLight** → leave 127.0.0.1 and 8746 → Save. It goes green
+      within a few seconds.
+- [ ] **Presets** → **Inputs to Base**: drag Warm white and Worship blue onto two keys. Press each: the lights change,
+      and the key of the input on Base turns coral.
+- [ ] **Inputs to the Overlay**: each press adds a copy (lime, "+1", "+2"); **Flash while held**: on while the key is
+      down, gone when you let go.
+- [ ] **Black → Fade to black**: the key turns red while the colour lights are black. Send an input: it goes back.
+- [ ] **Shows**: load another show from its key. That key turns sky blue, and the input keys' dropdowns list the new
+      show's inputs.
+- [ ] Hold some lights on the Console page: **Release all** turns amber with the count; press it: they fade back.
+- [ ] Quit CentraLight: the connection goes red. Start it again: green within about 10 seconds, and the keys light up.
+
 ## 21. Afterwards: the commits
 
 Each finished milestone is already committed on the branch `claude/centralight-gui` (nothing on `main`, nothing

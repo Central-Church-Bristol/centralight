@@ -34,6 +34,11 @@ closed would show as a climbing count).
 then none for M minutes, over and over: each schedule's end counts down, fades the lights off and closes the show,
 and the next one loads it again from no show ("When this show loads" sends Follow screen). Each sample asks the
 remote whether a show is loaded; the summary counts the closes and loads.
+
+--live N (M16): a client of the live connection (/api/ws), as Companion's CentraLight module keeps one, stays connected
+all along: it reads every state CentraLight sends, answers its pings, and every N seconds sends a command over it
+(Release the Console, Master at full, a Tap: things that change nothing else). Every minute a second client opens,
+reads the state and closes, as a Companion restart would. The summary counts them all, and any reconnects.
 """
 
 from __future__ import annotations
@@ -319,6 +324,143 @@ def remote_get(port: int, path: str) -> bool:
         return False
 
 
+class LiveClient(threading.Thread):
+    """--live (M16): a Companion-like client of the live connection for the whole soak (see the top)."""
+
+    COMMANDS = ({"path": "live/release"}, {"path": "master", "params": {"level": "1"}}, {"path": "live/tap"})
+
+    def __init__(self, port: int, every: float) -> None:
+        super().__init__(daemon=True, name="soak-live")
+        self.port, self.every = port, every
+        self.states = self.sent = self.answered = self.refused = self.connects = self.churns = 0
+        self.problems: list[str] = []
+        self._stopping = threading.Event()
+
+    def stop(self) -> None:
+        self._stopping.set()
+        self.join(5.0)
+
+    def _open(self):
+        import base64
+        import socket
+
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        key = base64.b64encode(os.urandom(16)).decode()
+        sock.sendall((f"GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\nUpgrade: websocket\r\n"
+                      f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            data = sock.recv(4096)
+            if not data:
+                raise ConnectionError("closed during the handshake")
+            head += data
+        if b" 101 " not in head.split(b"\r\n", 1)[0]:
+            raise ConnectionError(head.split(b"\r\n", 1)[0].decode("latin-1"))
+        return sock, head.partition(b"\r\n\r\n")[2]
+
+    @staticmethod
+    def _send(sock, opcode: int, payload: bytes) -> None:
+        import struct
+
+        mask = os.urandom(4)
+        size = len(payload)
+        head = bytes([0x80 | opcode]) + (bytes([0x80 | size]) if size < 126 else bytes([0x80 | 126]) + struct.pack("!H", size))
+        sock.sendall(head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+
+    @staticmethod
+    def _frames(buffer: bytes):
+        """The whole frames in buffer: ([(opcode, payload)], what's left)."""
+        import struct
+
+        frames = []
+        while len(buffer) >= 2:
+            size, at = buffer[1] & 0x7F, 2
+            if size == 126:
+                if len(buffer) < 4:
+                    break
+                size, at = struct.unpack("!H", buffer[2:4])[0], 4
+            elif size == 127:
+                if len(buffer) < 10:
+                    break
+                size, at = struct.unpack("!Q", buffer[2:10])[0], 10
+            if len(buffer) < at + size:
+                break
+            frames.append((buffer[0] & 0x0F, buffer[at:at + size]))
+            buffer = buffer[at + size:]
+        return frames, buffer
+
+    def _churn(self) -> None:
+        """A second client: opens, reads the first state, closes."""
+        sock, buffer = self._open()
+        try:
+            sock.settimeout(5)
+            while True:
+                frames, buffer = self._frames(buffer)
+                if any(op == 0x1 and json.loads(data).get("type") == "state" for op, data in frames):
+                    break
+                data = sock.recv(65536)
+                if not data:
+                    raise ConnectionError("closed before the state came")
+                buffer += data
+            self._send(sock, 0x8, (1000).to_bytes(2, "big"))
+            self.churns += 1
+        finally:
+            sock.close()
+
+    def run(self) -> None:
+        import select
+
+        last_command = last_churn = time.monotonic()
+        number = 0
+        while not self._stopping.is_set():
+            try:
+                sock, buffer = self._open()
+            except (OSError, ConnectionError) as exc:
+                self.problems.append(f"connecting: {exc}")
+                self._stopping.wait(2.0)
+                continue
+            self.connects += 1
+            try:
+                while not self._stopping.is_set():
+                    ready, _, _ = select.select([sock], [], [], 0.5)
+                    if ready:
+                        data = sock.recv(65536)
+                        if not data:
+                            raise ConnectionError("CentraLight closed the live connection")
+                        buffer += data
+                    frames, buffer = self._frames(buffer)
+                    for opcode, payload in frames:
+                        if opcode == 0x9:
+                            self._send(sock, 0xA, payload)  # (its ping: pong)
+                        elif opcode == 0x8:
+                            raise ConnectionError(f"CentraLight closed it ({payload[:2].hex()})")
+                        elif opcode == 0x1:
+                            message = json.loads(payload)
+                            if message.get("type") == "state":
+                                self.states += 1
+                            elif message.get("type") == "result":
+                                self.answered += bool(message.get("ok"))
+                                self.refused += not message.get("ok")
+                    now = time.monotonic()
+                    if now - last_command >= self.every:
+                        last_command = now
+                        command = self.COMMANDS[number % len(self.COMMANDS)]
+                        number += 1
+                        self._send(sock, 0x1, json.dumps({"type": "command", "id": number, "command": command}).encode())
+                        self.sent += 1
+                    if now - last_churn >= 60.0:
+                        last_churn = now
+                        try:
+                            self._churn()
+                        except (OSError, ConnectionError, ValueError) as exc:
+                            self.problems.append(f"second client: {exc}")
+            except (OSError, ConnectionError, ValueError) as exc:
+                if not self._stopping.is_set():
+                    self.problems.append(str(exc))
+            finally:
+                sock.close()
+
+
 def use_soak_folders(home: Path) -> None:
     """This process uses the soak's own app data and shows too, not only the app it starts: what it does with
     CentraLight's code here (making the shows, allowing the linked video) logs to the soak's session.log, never the
@@ -342,6 +484,8 @@ def main() -> int:
                    help="two copies of an input go on the Overlay every this many seconds, cleared 20 s later (0: never)")
     p.add_argument("--no-show", type=float, default=0.0,
                    help="the default show is None; schedules load the show for this many minutes, then none (0: never)")
+    p.add_argument("--live", type=float, default=0.0,
+                   help="a live connection (Companion's) all along, sending a command every this many seconds (0: none)")
     args = p.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -393,6 +537,9 @@ def main() -> int:
         if args.linked_video > 0:
             time.sleep(3.0)
             remote_get(port, "/api/input/linked-video")  # (on the lights: its updates wait until it isn't)
+        live = LiveClient(port, args.live) if args.live > 0 else None
+        if live is not None:
+            live.start()
         while time.monotonic() - started < args.minutes * 60:
             time.sleep(args.every)
             if app.poll() is not None:
@@ -451,6 +598,11 @@ def main() -> int:
                   f"private {private / 1048576:6.1f} MB  working set {working / 1048576:6.1f} MB  "
                   f"threads {threads}", flush=True)  # (as Task Manager counts MB)
         log = (home / "appdata" / "session.log")
+        if live is not None:
+            live.stop()
+            print(f"Live connection: connected {live.connects} times, {live.states} states received, {live.sent} commands "
+                  f"sent ({live.answered} answered ok, {live.refused} refused), {live.churns} second clients"
+                  + (f"; problems: {live.problems[:5]}" if live.problems else ""))
         if args.csv:
             with args.csv.open("w", newline="", encoding="utf-8") as handle:
                 writer = csv.writer(handle)

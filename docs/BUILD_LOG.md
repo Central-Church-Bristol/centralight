@@ -61,6 +61,8 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — 3: chases (Add step, Quick, timing, Tap, Play / Pause / Next, step on each beat) | **done** (5 Nov, 16:58) |
 | A look at M15's engine side (a reviewer, 14 findings, all fixed) | **done** (5 Nov, 17:15) |
 | — 4: Save look / Save chase as input (a new Lights element), and Load into Console | **done** (5 Nov, 17:26) |
+| **M16: the Stream Deck through Companion** — CentraLight's live connection (`/api/ws`, pushing what's happening) | **done** (5 Nov, 17:37) |
+| — the CentraLight module for Companion 5.1: actions, feedbacks, variables, presets; built as `companion\centralight-1.0.0.tgz` | **done** (5 Nov, 17:37) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -111,6 +113,64 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
+
+## M16: the Stream Deck through Companion (5 Nov, evening)
+
+**A CentraLight module for Bitfocus Companion** (5.1 or later), in the `companion` folder. Its keys light up with
+what's happening, the moment it happens, and pressing one does what CentraLight's Stream Deck URLs do. Putting it in
+Companion: Modules → **Import module package** → `companion\centralight-1.0.0.tgz`, then add a **CentraLight**
+connection (127.0.0.1, port 8746). `companion\README.md` has the steps. The module is built as `companion\centralight-1.0.0.tgz`.
+
+- **Actions** (with dropdowns of the loaded show's inputs, shows, lights and automations): an input to Base (its own
+  transition, a Cut, or one chosen there), a copy to the Overlay, its copies cleared, Clear the Overlay, the Overlay's
+  switch; load a show; Cut / Fade to black (the colour lights, or everything); Master; the Festoon and Key lights
+  (level, on / off, fade); a show variable; run / turn on / turn off an automation (the show's or a global one), pause
+  or resume them all; the countdown's Do it now / Wait / Skip; the Console's Release all, Release some lights, Tap,
+  Next step, Pause / Play on and speed.
+- **Feedbacks:** an input on Base (coral) or on the Overlay (lime), a show loaded, the colour lights black, a
+  countdown running, automations paused, the Festoon or Key lights on, a show variable's value (equal to, above,
+  below), the Console holding lights, and CentraLight connected.
+- **Variables:** the show, what's on Base, Master %, the countdown's seconds and what it will do, the next timed
+  automation, how many lights the Console holds, each house light's level, each input's copies on the Overlay.
+- **Presets:** each input to Base, to the Overlay (with its copy count) and "flash while held"; each show; the four
+  Cut / Fade to black keys; the Console's Release all (with its count), Tap and Next step; Pause automations.
+- **It looks after itself:** if CentraLight closes, the connection goes red and comes back by itself when CentraLight
+  starts again (after 1, 2, 5, then every 10 seconds). When the show changes, the dropdowns and presets follow.
+
+**CentraLight's side, the live connection:** a WebSocket at `/api/ws` on the remote's own port, with the same rules as
+every other URL: this PC only, unless "Allow other computers" is on, and then with the key; web pages from other
+websites are refused. It sends everything the module shows straight away, then again each time something on it
+changes (looked at ten times a second, sent only on a change), and takes commands as the URLs' paths (or as
+`POST /api/command`'s JSON). The plain URLs are as they were.
+
+**Tests:** the connection's handshake, frames, pings and refusals (the same as the URLs'); the state at once and on
+each change but not every frame; commands both ways; a stopped remote and a silent client closing it; the module's
+own tests (with a pretend CentraLight); every one of the module's actions against a real CentraLight remote on a
+test port, with Companion's own Node 22; and the built package itself, started the way Companion starts a module (a
+stand-in for Companion's module host): it connects, makes its actions from the show, lights the key of the input on
+Base, and a press reaches CentraLight. The soak tool has `--live 30`: a live connection all along, a command every 30
+seconds and a second client every minute.
+
+**Building the package** (only when the module changes): `npm install` in `companion\centralight` (Bitfocus's
+`@companion-module/base` 1.11.3 and `esbuild` 0.28.2 from the npm registry, as you allowed; they stay in
+`node_modules`, which isn't in git), then `.venv\Scripts\python.exe tools\build_companion.py`.
+
+**Checked by a reviewer before it went in** (11 findings, all fixed):
+- a show variable switch's key now lights for "on" and "off" (CentraLight sends switches as 1 or 0);
+- when CentraLight goes away the keys go dark and the variables empty, instead of looking live; a new "CentraLight is
+  connected" feedback makes a warning key (inverted);
+- a host typed with its port or "http://" is understood, and one that isn't an address shows as a bad setting;
+- a refused connection says why: a wrong key, too many connections, or a CentraLight too old to have the live
+  connection;
+- the countdown keys name the countdown showing (as the phone page does), and a renamed connection's presets follow;
+- CentraLight's side shrugs off misbehaving clients: one pinging all the time, a frame trickling in, a connection
+  that sends nothing (now closed after 15 s; that was true of the phone page's URLs too), a key with odd characters.
+Writing their tests also showed the module never tried again after a first failed connection: fixed.
+
+**A slip, caught:** while making the stand-in Companion test, its first version let the module use its default
+address, `127.0.0.1:8746`, the real remote's port, for a few seconds. Nothing was listening there (Windows refused
+each try), so nothing reached your CentraLight. The test now refuses that port and checks it's talking to its own
+test server.
 
 ## M15: the Console page (5 Nov, afternoon on)
 
@@ -1775,6 +1835,20 @@ Problems the tests found and that are fixed:
       the line is worked out again every 20 seconds, and at once when the automations are paused or resumed.
     - **The phone page with no show** has no Cut / Fade to black buttons (they'd only answer "No show loaded"), and
       says "The lights are off" where it usually says what's on Base.
+  - **M16, Companion**, the choices I made:
+    - **The module is JavaScript, not TypeScript** (the plan's guess): nothing to compile, and its tests run on
+      Companion's own Node 22, which has a WebSocket built in, so the module needs no package but Bitfocus's own.
+    - **Commands go as the URLs' paths** (`input/warm-white/cut`), so the module and the Stream Deck URLs can't drift
+      apart, and every URL works over the live connection.
+    - **What's sent:** only what a key can show changes it: not a transition's progress, levels to the percent, the
+      countdown to the second. At most 8 live connections; one silent for 50 seconds (not even answering a ping) is
+      closed.
+    - **"Flash" on the Stream Deck** is the input's "flash while held" preset (a copy on the Overlay while the key is
+      down); the Console has no flash of its own.
+    - **Console from the Stream Deck:** Release all, Release some lights, Tap, Next step, Pause / Play on and speed.
+      There's no "set a colour" yet: the Console page is where lights are set.
+    - **Presets** use the connection's own name in their variables (`$(centralight:copies_warm-white)`), so they work
+      however the connection is named.
   - **M15, the Console page** (parts 1 to 3), the choices I made:
     - **The tab is after Dashboard,** so Ctrl+2 opens the Console, and the Editor, Layout and Automation move to Ctrl+3,
       4 and 5.
