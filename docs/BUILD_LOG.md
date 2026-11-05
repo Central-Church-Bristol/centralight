@@ -59,6 +59,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | **M15: the Console page** (you said go at 13:30 on 5 Nov) — the design check (screenshots with made-up lights): you said yes, and added the chase's "On: …" line | **done** (5 Nov) |
 | — 1 and 2: choosing lights, the Look, fans, Advanced, takeover until Release, everywhere, safety, restarts | **done** (5 Nov, 16:58) |
 | — 3: chases (Add step, Quick, timing, Tap, Play / Pause / Next, step on each beat) | **done** (5 Nov, 16:58) |
+| A look at M15's engine side (a reviewer, 14 findings, all fixed) | **done** (5 Nov, 17:15) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -82,6 +83,33 @@ Run all the tests (about five minutes, including the layout check at every scali
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## A look at M15's engine side (5 Nov, evening)
+
+A reviewer read the Console's engine side and tried it: 14 findings, all fixed, each with a test.
+- **Cut to black now cuts everything at once,** lights still fading back from a Release too (they used to carry on
+  with their own, longer fade). Fade to black (and a later Release all) also ends such fades no later than its own.
+- **A dimmed light never flares any more.** On Release, Fade to black or a faded change, its colour and its dimmer used
+  to fade each in a straight line, and the two multiplied bulge: a light at 20 % brightness went up to about 69 % on
+  its way down. Now what the light gives goes straight: the dimmer stays at the higher end and the colour fades. A
+  chase's crossfade works the same way.
+- **Next step while paused always moves on** (rounding on the PC's big clock numbers made it stick about one press in
+  three).
+- **A change fades from what the light shows now,** not from an old colour after everything had been let go (a pink
+  flash).
+- **After a reopen, Live changes made after the chase still win over it** (the chase used to win).
+- **Step on each beat catches every beat** (it missed about one in seven at 40 ticks a second), on the Console and in
+  a Lights element. Switching it on while the chase plays keeps its place.
+- **Lights a new chase doesn't have fade back** with the release fade, instead of snapping.
+- **Stop** (not on the page yet) keeps what Live changes hold on the chase's lights.
+- **"The colour lights are black" counts the Console:** while it holds a lit light they aren't black, so an automatic
+  Cut / Fade to black gets its countdown, and closing the show fades the Console's lights instead of cutting them. The
+  Automation tab says so.
+- **A broken live.json can't stop CentraLight starting** (the Console then starts empty), and odd numbers in a file
+  are put right.
+- **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
+- Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
+  two lights' colours.
 
 ## M15: the Console page (5 Nov, afternoon on)
 

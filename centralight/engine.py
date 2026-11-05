@@ -279,7 +279,7 @@ class EngineFrame:
     colours: Mapping[str, RGB] = EMPTY  # colour light id -> (r, g, b) 0-1
     house: Mapping[str, HouseView] = EMPTY
     master: float = 1.0
-    colour_black: bool = False  # nothing on Base or the Overlay (after a Cut / Fade to black, say)
+    colour_black: bool = False  # nothing on Base, the Overlay or the Console (after a Cut / Fade to black, say)
     output: OutputStatus = OutputStatus()
     base: str = "Black"  # name of what's on Base
     base_id: str = ""  # its input id ("" = nothing)
@@ -455,7 +455,12 @@ class Engine:
             log_info("The PC has just started: the lights start black, with nothing playing")
         else:
             self._restore_buses(live, initial_base, now)
-            self._console.restore(live.console, now)
+            try:
+                self._console.restore(live.console, now)
+            except Exception as exc:  # (a broken live.json mustn't stop CentraLight starting: the Console starts empty)
+                log_exception("restoring the Console", exc)
+                self._console = ConsoleState()
+                self._console.set_lights(self._light_profiles(show))
         self._last_canvas = self._lights.empty()
         # At startup the lights keep showing what they showed (the dongle repeats it) until the feeds Base and the
         # Overlay use have their first picture, instead of going black for a second or two meanwhile
@@ -684,17 +689,17 @@ class Engine:
                     house.mirror = seconds
 
     def colour_black(self, now: float | None = None) -> bool:
-        """Nothing on Base or the Overlay, and no fade still going: the colour lights are black."""
+        """Nothing on Base, the Overlay or the Console, and no fade still going: the colour lights are black."""
         now = self._clock() if now is None else now
         base = self._base
         return (base.current is None and base.held is None and not base.transitioning(now)
-                and not self._overlay.lit(now))
+                and not self._overlay.lit(now) and not self._console.active)
 
     def _black_now(self, now: float) -> bool:
         """Nothing shows on the colour lights at this moment (a fade to black may still be ending: not black yet)."""
         base = self._base
         return (base.current is None and base.held is None and not base.transitioning(now)
-                and not self._overlay.lit(now, including_fades=False))
+                and not self._overlay.lit(now, including_fades=False) and not self._console.active)
 
     def _still_mix(self, now: float, solo: Instance | None = None) -> Frozen:
         """What the colour lights show now (Base and the Overlay, or the Editor's input), as one still look: for the
@@ -1124,10 +1129,10 @@ class Engine:
         console = self._console
         action = command.action
         if action == "play" and command.chase is not None:
-            if not console.play(command.chase, now):
+            if not console.play(command.chase, now, self.release_fade):
                 log_info("Console: the chase has no steps, or none of its lights are in this show", key="console-chase-empty")
         elif action == "update" and command.chase is not None:
-            console.update_chase(command.chase, now)
+            console.update_chase(command.chase, now, self.release_fade)
         elif action in ("pause", "resume"):
             console.pause_chase(action == "pause", now)
         elif action == "next":
@@ -1136,8 +1141,8 @@ class Engine:
             console.tap(now)
         elif action == "speed" and command.bpm is not None:
             console.set_speed(command.bpm, now)
-        elif action == "stop" and console.chase is not None:
-            console.release(list(console.chase.lights), self.release_fade, now)
+        elif action == "stop":
+            console.stop_chase(self.release_fade, now)
 
     def _console_view(self, now: float) -> ConsoleView:
         """For the window: what the Console holds, and each colour light's channels as sent (0-255)."""

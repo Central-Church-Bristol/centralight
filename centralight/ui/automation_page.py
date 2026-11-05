@@ -83,7 +83,7 @@ EVENT_HINTS = {
     "pc_startup": "When Windows starts CentraLight at sign-in (Start with Windows), or CentraLight starts within 10 minutes of the PC starting.",
     "app_started": "Every time CentraLight starts (restarts too).",
     "pc_woke": "When the PC wakes from sleep.",
-    "colour_black": "While nothing is on Base or the Overlay (after Cut or Fade to black, say).",
+    "colour_black": "While nothing is on Base, the Overlay or the Console (after Cut or Fade to black, say).",
     "show_loads": ("When this show is loaded (by you, the Stream Deck or a global automation), and when the PC starts with "
                    "it. Not when CentraLight reopens after a quit or a crash: then it carries on as it was."),
 }

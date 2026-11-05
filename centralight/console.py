@@ -11,8 +11,10 @@ Qt-free: the engine keeps a ConsoleState and the window shows a ConsoleView.
 from __future__ import annotations
 
 import itertools
+import math
 import random
 from collections.abc import Iterable, Mapping
+from functools import lru_cache
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any
@@ -50,7 +52,29 @@ BPM_RANGE = (10.0, 300.0)
 TAP_GAP = 2.5  # seconds: taps further apart than this start a new count
 TAPS_KEPT = 5
 TAP_BOUNCE = 0.06  # seconds: a tap this soon after the last is the same tap (a double press, or two in one tick)
+# a beat (audio.beat): it jumps to 1 and falls away within a sound block or two, so a tick may only see it on its way
+# down: a reading this high that's this much above the tick before is a new beat
+BEAT_RISE = 0.6
+BEAT_JUMP = 0.2
 _SEQ = itertools.count(1)  # when each change was made: between a Live change and a chase, the later one wins
+TINTED = ("red", "green", "blue", "amber")  # what the light's dimmer scales on the light itself
+_EPS = 1e-6  # a step's millionth: a position worked out as 2.9999999999 is step 3 (clocks are big numbers)
+
+
+def finite(value: Any, default: float) -> float:
+    """A plain number from a file: never a bool, an overflow, NaN or infinity (default then)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
+def whole_steps(position: float) -> int:
+    """The steps gone by at this position (with a hair's allowance for rounding)."""
+    return int(position + _EPS)
 
 
 def channels_of(profile: str) -> tuple[tuple[str, str], ...]:
@@ -159,21 +183,27 @@ def last_index(chase: Chase) -> int:
     return pass_length(chase) if chase.direction == "bounce" and len(chase.steps) > 1 else pass_length(chase) - 1
 
 
-def _shuffled(seed: str, number: int, count: int) -> list[int]:
+@lru_cache(maxsize=512)
+def _shuffled(seed: str, number: int, count: int) -> tuple[int, ...]:
     order = list(range(count))
     random.Random(f"{seed}:{number}").shuffle(order)
-    return order
+    return tuple(order)
+
+
+@lru_cache(maxsize=512)
+def _random_pass(seed: str, number: int, count: int) -> tuple[int, ...]:
+    if count <= 2:
+        return tuple(range(count))
+    order = list(_shuffled(seed, number, count))
+    if number > 0 and order[0] == _shuffled(seed, number - 1, count)[-1]:  # (a pass's last is never swapped: count > 2)
+        order[0], order[1] = order[1], order[0]
+    return tuple(order)
 
 
 def random_pass(seed: str, number: int, count: int) -> list[int]:
     """Random: the number'th pass's order, each step once, and never the step the pass before ended on first (two
-    steps simply take turns). The same seed and pass always give the same order."""
-    if count <= 2:
-        return list(range(count))
-    order = _shuffled(seed, number, count)
-    if number > 0 and order[0] == _shuffled(seed, number - 1, count)[-1]:  # (a pass's last is never swapped: count > 2)
-        order[0], order[1] = order[1], order[0]
-    return order
+    steps simply take turns). The same seed and pass always give the same order (worked out once: it's every tick)."""
+    return list(_random_pass(seed, number, count))
 
 
 def step_index(chase: Chase, index: int, seed: str = "") -> int:
@@ -190,12 +220,12 @@ def step_index(chase: Chase, index: int, seed: str = "") -> int:
         place = index % length
         return place if place < count else length - place
     if chase.direction == "random":
-        return random_pass(seed, index // count, count)[index % count]
+        return _random_pass(seed, index // count, count)[index % count]
     return index % count
 
 
 def finished(chase: Chase, position: float) -> bool:
-    return not chase.loop and position >= last_index(chase) + 1
+    return not chase.loop and position + _EPS >= last_index(chase) + 1
 
 
 def step_look(chase: Chase, step: int, light: str) -> tuple[float, float, float, float] | None:
@@ -214,21 +244,25 @@ def chase_look(chase: Chase, light: str, position: float, seed: str = "",
     before. crossfade: instead of the chase's own (a Lights element's can change over time)."""
     if not chase.steps:
         return None
-    index = int(position)
+    index = whole_steps(position)
     now_look = step_look(chase, step_index(chase, index, seed), light)
     if finished(chase, position) or now_look is None:
         return now_look
     fade = chase.crossfade if crossfade is None else max(0.0, min(1.0, crossfade))
     if fade <= 0.0 or index == 0:
         return now_look
-    into = position - index
+    into = max(0.0, position - index)
     if into >= fade:
         return now_look
     before = step_look(chase, step_index(chase, index - 1, seed), light)
     if before is None:
         return now_look
     mix = into / fade
-    return tuple(a + (b - a) * mix for a, b in zip(before, now_look))  # type: ignore[return-value]
+    level = max(before[3], now_look[3])  # (the brightness stays at the higher of the two, the colour does the fading:
+    if level <= 0.0:  # what the light gives goes straight from one step to the next, never brighter on the way)
+        return (*(a + (b - a) * mix for a, b in zip(before[:3], now_look[:3])), 0.0)  # type: ignore[return-value]
+    given = [a * before[3] + (b * now_look[3] - a * before[3]) * mix for a, b in zip(before[:3], now_look[:3])]
+    return (*(min(1.0, value / level) for value in given), level)  # type: ignore[return-value]
 
 
 class ChaseRun:
@@ -273,7 +307,7 @@ class ChaseRun:
         return finished(self.chase, self.position(now))
 
     def current(self, now: float) -> int:
-        return self.step_of(int(self.position(now)))
+        return self.step_of(whole_steps(self.position(now)))
 
     def look(self, light: str, now: float) -> tuple[float, float, float, float] | None:
         """The light's (r, g, b, brightness) now, crossfading into each step from the one before."""
@@ -287,7 +321,9 @@ class ChaseRun:
         """A change (speed, crossfade, direction, steps) from now on, from the same place."""
         position = self.position(now)
         self.lights = [light for light in chase.lights if light in self.lights or light not in self.chase.lights]
-        self.chase = chase
+        was_on_beat, self.chase = self.chase.on_beat, chase
+        if chase.on_beat and not was_on_beat:  # (from here it waits for beats, on the step it's on)
+            self.beats, self.last_beat_at = whole_steps(position), None
         if not chase.on_beat:
             moment = self.paused_at if self.paused_at is not None else now
             self.anchor = moment - position * chase.step_seconds()
@@ -307,13 +343,13 @@ class ChaseRun:
             self.beats += 1
             self.last_beat_at = now
             return
-        target = float(int(self.position(now)) + 1)
+        target = float(whole_steps(self.position(now)) + 1)
         moment = self.paused_at if self.paused_at is not None else now
         self.anchor = moment - target * self.chase.step_seconds()
 
     def hear(self, beat: float, now: float) -> None:
         """audio.beat this tick: each new beat moves an on-beat chase on a step."""
-        rising = beat >= 0.95 > self._beat_level
+        rising = beat >= BEAT_RISE and beat > self._beat_level + BEAT_JUMP
         self._beat_level = beat
         if not rising or not self.chase.on_beat or self.paused_at is not None:
             return
@@ -341,7 +377,7 @@ class ConsoleState:
         self._last: dict[str, dict[str, float]] = {}  # each light's channels as last worked out (before Master)
         self._taps: list[float] = []
         self._inputs: tuple[Any, Any] | None = None  # (light ids, their colours from the inputs this tick)
-        self._index: tuple[int, dict[str, int]] = (0, {})
+        self._index: tuple[Any, dict[str, int]] = (None, {})  # (the inputs' light list, each light's place in it)
 
     @property
     def active(self) -> bool:
@@ -380,8 +416,8 @@ class ConsoleState:
                 return last[attr]
         if attr in COLOUR and self._inputs is not None:
             ids, colours = self._inputs
-            if self._index[0] != id(ids):
-                self._index = (id(ids), {light_id: index for index, light_id in enumerate(ids)})
+            if self._index[0] is not ids:
+                self._index = (ids, {light_id: index for index, light_id in enumerate(ids)})
             index = self._index[1].get(light)
             if index is not None and index < len(colours):
                 return max(0.0, min(1.0, float(colours[index][COLOUR.index(attr)]))) * 255.0
@@ -404,13 +440,14 @@ class ConsoleState:
             if light not in self.profiles:
                 continue
             known = self.attributes(light)
-            held = self.held.setdefault(light, {})
+            origins = {attr: self.shown(light, attr) for attr in attrs if attr in known}  # (before it's held: from
+            held = self.held.setdefault(light, {})  # what it shows now, the inputs' colour if nothing holds it)
             for attr, value in attrs.items():
                 if attr not in known:
                     continue
                 value = max(0.0, min(255.0, float(value)))
                 fade_in = 0.0 if attr in SNAP_BACK else max(0.0, float(fade))
-                held[attr] = _Held(value, self.shown(light, attr), now, fade_in, seq)
+                held[attr] = _Held(value, origins[attr], now, fade_in, seq)
                 self.releasing.get(light, {}).pop(attr, None)
             if not held:
                 del self.held[light]
@@ -420,12 +457,13 @@ class ConsoleState:
         programs and dimmer speed snap back). A chase lets them go too, and stops when it has none left. only: just
         these attributes (a chase keeps its lights then). Returns the lights released."""
         if lights is None:
-            chosen = set(self.held) | set(self.chase.lights if self.chase is not None else ())
+            chosen = set(self.held) | set(self.releasing) | set(self.chase.lights if self.chase is not None else ())
         else:
             chosen = set(lights)
         wanted = set(only) if only is not None else None
         done = []
         for light in sorted(chosen):
+            hurried = self._hurry(light, fade, now, wanted)
             held = self.held.get(light, {})
             attrs = {attr for attr in held if wanted is None or attr in wanted}
             for attr in attrs:
@@ -436,6 +474,8 @@ class ConsoleState:
                 self.chase.lights.remove(light)
                 attrs |= set(CHASED) & set(self.attributes(light) or COLOUR)  # (a dimmer has no colour to fade)
             if not attrs:
+                if hurried:
+                    done.append(light)
                 continue
             done.append(light)
             fading = self.releasing.setdefault(light, {})
@@ -448,25 +488,80 @@ class ConsoleState:
                 del self.releasing[light]
         if self.chase is not None and wanted is None and (lights is None or not self.chase.lights):
             self.chase = None
+        self._tidy()
         return done
+
+    def _tidy(self) -> None:
+        """Nothing held, fading back or chasing: what was last worked out for each light goes (the engine stops working
+        it out now, so it would go stale)."""
+        if not self.active:
+            self._last.clear()
+
+    def _hurry(self, light: str, fade: float, now: float, wanted: set[str] | None) -> bool:
+        """The light's attributes already fading back take no longer than `fade` from now (a Cut to black ends them at
+        once). True if any changed."""
+        fading = self.releasing.get(light)
+        changed = False
+        for attr, old in list((fading or {}).items()):
+            if wanted is not None and attr not in wanted:
+                continue
+            if fade <= 0.0 or attr in SNAP_BACK:
+                del fading[attr]
+                changed = True
+            elif old.start + old.fade - now > fade:
+                fading[attr] = _Releasing(self.shown(light, attr), now, float(fade))
+                changed = True
+        if fading is not None and not fading:
+            del self.releasing[light]
+        return changed
+
+    def _let_go(self, lights: Iterable[str], fade: float, now: float) -> None:
+        """Lights a chase no longer has fade back to the inputs (what a later Live change holds stays)."""
+        for light in lights:
+            if light not in self.profiles:
+                continue
+            held = self.held.get(light, {})
+            fading = self.releasing.setdefault(light, {})
+            for attr in set(CHASED) & set(self.attributes(light) or COLOUR):
+                if attr in held:
+                    continue
+                if fade > 0.0:
+                    fading[attr] = _Releasing(self.shown(light, attr), now, float(fade))
+                else:
+                    fading.pop(attr, None)
+            if not fading:
+                del self.releasing[light]
 
     # --- the chase
 
-    def play(self, chase: Chase, now: float) -> bool:
-        """Play a chase on its lights (in the show), from its first step. False if it has no steps or lights here."""
+    def play(self, chase: Chase, now: float, fade: float = 0.0) -> bool:
+        """Play a chase on its lights (in the show), from its first step; lights the chase before had that this one
+        hasn't fade back over `fade`. False if it has no steps or lights here."""
         lights = [light for light in chase.lights if light in self.profiles]
         if not lights or not chase.steps:
             return False
+        if self.chase is not None:
+            self._let_go([light for light in self.chase.lights if light not in lights], fade, now)
         self.chase = ChaseRun(replace(chase, lights=tuple(lights)), now)
         for light in lights:
             for attr in CHASED:
                 self.releasing.get(light, {}).pop(attr, None)
         return True
 
-    def update_chase(self, chase: Chase, now: float) -> None:
-        """The chase changed while it plays (speed, crossfade, direction, steps): it carries on from where it is."""
+    def update_chase(self, chase: Chase, now: float, fade: float = 0.0) -> None:
+        """The chase changed while it plays (speed, crossfade, direction, steps): it carries on from where it is. Lights
+        it no longer has fade back over `fade`."""
         if self.chase is not None:
+            before = list(self.chase.lights)
             self.chase.update(replace(chase, lights=tuple(light for light in chase.lights if light in self.profiles)), now)
+            self._let_go([light for light in before if light not in self.chase.lights], fade, now)
+
+    def stop_chase(self, fade: float, now: float) -> None:
+        """The chase stops: its lights fade back over `fade` (what Live changes hold on them stays)."""
+        if self.chase is not None:
+            lights, self.chase = list(self.chase.lights), None
+            self._let_go(lights, fade, now)
+            self._tidy()
 
     def pause_chase(self, paused: bool, now: float) -> None:
         if self.chase is not None:
@@ -505,14 +600,20 @@ class ConsoleState:
         releasing = self.releasing.get(light)
         run = self.chase if self.chase is not None and light in self.chase.lights else None
         look = run.look(light, now) if run is not None else None
-        raw: dict[str, int] = {}
-        for attr in self.attributes(light) or COLOUR:
-            usual = base.get(attr, DEFAULT_VALUES.get(attr, 0.0))
+        attrs = self.attributes(light) or COLOUR
+        level_only = "red" not in attrs  # (a dimmer used as a colour light: its brightness is what its colour gives)
+        spans: dict[str, tuple[float, float, float, float]] = {}  # attr -> (from, to, start, seconds) while it fades
+        for attr in attrs:
+            usual = max(base.values()) if level_only else base.get(attr, DEFAULT_VALUES.get(attr, 0.0))
             value = usual
             hold = held.get(attr) if held else None
-            from_chase = look[CHASED.index(attr)] * 255.0 if look is not None and attr in CHASED else None
+            from_chase = None
+            if look is not None and attr in CHASED:
+                from_chase = look[3] * max(look[:3]) * 255.0 if level_only else look[CHASED.index(attr)] * 255.0
             if hold is not None and (from_chase is None or run is None or hold.seq > run.seq):
                 value = hold.at(now)
+                if hold.fade > 0.0 and now < hold.start + hold.fade:
+                    spans[attr] = (hold.origin, hold.value, hold.start, hold.fade)
             elif from_chase is not None:
                 value = from_chase
             elif releasing and attr in releasing:
@@ -521,13 +622,44 @@ class ConsoleState:
                     del releasing[attr]
                 else:
                     value = usual + (releasing[attr].origin - usual) * weight
+                    spans[attr] = (releasing[attr].origin, usual, releasing[attr].start, releasing[attr].fade)
             values[attr] = value
-            if attr in RAW and round(value) != round(DEFAULT_VALUES.get(attr, 0.0)):
-                raw[attr] = max(0, min(255, round(value)))
         if releasing is not None and not releasing:
             del self.releasing[light]
-        self._last[light] = values
+        if not level_only and BRIGHTNESS in spans:
+            self._straight(values, spans, now)
+        if light in self.held or light in self.releasing or run is not None:
+            self._last[light] = values
+        else:
+            self._last.pop(light, None)  # (nobody holds it: a later change fades from what the inputs show then)
+        if level_only:
+            level = max(0.0, min(255.0, values.get(BRIGHTNESS, 0.0))) / 255.0
+            return (level, level, level), {}  # (the encoder gives a dimmer the brightest of its colour, Master too)
+        raw = {attr: max(0, min(255, round(values[attr]))) for attr in RAW
+               if attr in values and round(values[attr]) != round(DEFAULT_VALUES.get(attr, 0.0))}
         return (values["red"] / 255.0, values["green"] / 255.0, values["blue"] / 255.0), raw
+
+    @staticmethod
+    def _straight(values: dict[str, float], spans: Mapping[str, tuple[float, float, float, float]], now: float) -> None:
+        """While the dimmer fades, what the light gives (colour times dimmer) goes straight from one end to the other:
+        the dimmer stays at the higher end and the colour does the fading (two straight fades multiplied bulge: a
+        dimmed light would flare on Release or Fade to black)."""
+        first, last, start, seconds = spans[BRIGHTNESS]
+        top = max(first, last)
+        if top <= 0.0:
+            return
+        progress = max(0.0, min(1.0, (now - start) / seconds)) if seconds > 0.0 else 1.0
+        dimmer = values[BRIGHTNESS]
+        for attr in TINTED:
+            if attr not in values:
+                continue
+            span = spans.get(attr)
+            if span is not None and span[2] == start and span[3] == seconds:  # (faded together)
+                given = span[0] * first + (span[1] * last - span[0] * first) * progress
+            else:
+                given = values[attr] * dimmer
+            values[attr] = min(255.0, given / top)
+        values[BRIGHTNESS] = top
 
     def view(self, values: Mapping[str, tuple[int, ...]], now: float) -> ConsoleView:
         """For the window: the held attributes (a chase's lights hold colour and brightness) and the channels."""
@@ -553,6 +685,11 @@ class ConsoleState:
             data["held"] = held
         if self.chase is not None:
             data["chase"] = self.chase.to_dict(now)
+            later = {light: sorted(attr for attr, h in attrs.items() if h.seq > self.chase.seq)
+                     for light, attrs in self.held.items() if light in self.chase.lights}
+            later = {light: attrs for light, attrs in later.items() if attrs}
+            if later:
+                data["later"] = later  # (held values set after the chase started: they win over it again on a reopen)
         return data
 
     def restore(self, data: Any, now: float) -> None:
@@ -560,11 +697,23 @@ class ConsoleState:
         if not isinstance(data, Mapping):
             return
         held = data.get("held")
+        raw_later = data.get("later")
+        later = {str(light): {str(attr) for attr in attrs} for light, attrs in raw_later.items()
+                 if isinstance(attrs, list)} if isinstance(raw_later, Mapping) else {}
+        values = {}
         if isinstance(held, Mapping):
-            values = {str(light): {str(a): v for a, v in attrs.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+            values = {str(light): {str(a): finite(v, -1.0) for a, v in attrs.items()}
                       for light, attrs in held.items() if isinstance(attrs, Mapping)}
-            self.set(values, 0.0, now)
-        saved = data.get("chase")
+            values = {light: {a: v for a, v in attrs.items() if v >= 0.0} for light, attrs in values.items()}
+        self.set({light: {a: v for a, v in attrs.items() if a not in later.get(light, ())}
+                  for light, attrs in values.items()}, 0.0, now)
+        try:
+            self._restore_chase(data.get("chase"), now)
+        finally:
+            self.set({light: {a: v for a, v in attrs.items() if a in later.get(light, ())}
+                      for light, attrs in values.items()}, 0.0, now)
+
+    def _restore_chase(self, saved: Any, now: float) -> None:
         if not isinstance(saved, Mapping):
             return
         chase = chase_from_dict(saved.get("chase"))
@@ -574,9 +723,11 @@ class ConsoleState:
         lights = tuple(str(light) for light in kept if str(light) in chase.lights) if isinstance(kept, list) else chase.lights
         if not self.play(replace(chase, lights=lights or chase.lights), now) or self.chase is None:
             return
-        position = saved.get("position", 0.0)
-        if isinstance(position, (int, float)) and not isinstance(position, bool) and not chase.on_beat:
-            self.chase.anchor = now - max(0.0, float(position)) * chase.step_seconds()
+        position = max(0.0, min(1e6, finite(saved.get("position"), 0.0)))  # (a million steps: more than any reopen needs)
+        if chase.on_beat:
+            self.chase.beats = whole_steps(position)
+        else:
+            self.chase.anchor = now - position * chase.step_seconds()
         if saved.get("paused") is True:
             self.chase.set_paused(True, now)
 
@@ -713,18 +864,14 @@ def chase_from_dict(data: Any) -> Chase | None:
             continue
         looks = {}
         for light, look in raw.items():
-            if isinstance(look, (list, tuple)) and len(look) == 4 and all(
-                    isinstance(v, (int, float)) and not isinstance(v, bool) for v in look):
-                looks[str(light)] = tuple(max(0.0, min(1.0, float(v))) for v in look)
+            if isinstance(look, (list, tuple)) and len(look) == 4 and all(finite(v, -1e10) > -1e10 for v in look):
+                looks[str(light)] = tuple(max(0.0, min(1.0, finite(v, 0.0))) for v in look)
         steps.append(ChaseStep(MappingProxyType(looks)))
     if not lights or not steps:
         return None
 
     def number(key: str, default: float, low: float, high: float) -> float:
-        value = data.get(key, default)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return default
-        return max(low, min(high, float(value)))
+        return max(low, min(high, finite(data.get(key, default), default)))
 
     seconds = data.get("seconds")
     direction = data.get("direction", "forward")

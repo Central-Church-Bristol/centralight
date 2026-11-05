@@ -427,7 +427,7 @@ class Situation:
     overlay: frozenset[str] = frozenset()  # inputs with a copy on the Overlay (while its switch is on)
     variables: Mapping[str, Any] = field(default_factory=dict)
     ndi: Mapping[str, bool] = field(default_factory=dict)  # feed name (lower case) -> sending now
-    colour_black: bool = False  # nothing on Base or the Overlay (after a Cut / Fade to black, say)
+    colour_black: bool = False  # nothing on Base, the Overlay or the Console (after a Cut / Fade to black, say)
     audio: Mapping[str, float] = field(default_factory=dict)  # audio.level and friends, now
     events: frozenset[str] = frozenset()  # app_started, pc_startup, pc_woke happening now
     previous_local: datetime | None = None  # local time at the last check (to spot clock changes)

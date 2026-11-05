@@ -11,7 +11,8 @@ import unittest
 from dataclasses import replace
 from types import MappingProxyType
 
-from centralight.commands import ConsoleChase, ConsoleRelease, ConsoleSet, LoadShow, SendToBase, SetIdentify, SetMaster, ToBlack
+from centralight.commands import (ConsoleChase, ConsoleRelease, ConsoleSet, LoadShow, SendToBase, SetIdentify, SetMaster,
+                                  ToBlack)
 from centralight.console import Chase, ChaseRun, ChaseStep, ConsoleState, chase_from_dict, chase_to_dict
 from centralight.live_state import LiveState
 from centralight.new_show import show_from_patch
@@ -78,8 +79,9 @@ class TakeoverTests(unittest.TestCase):
         self.assertEqual(chans(engine)[5], 0)  # (strobe goes at once)
         engine.settle(1.0)
         middle = chans(engine)
-        self.assertAlmostEqual(middle[0], round((255 + self.before_a[0]) / 2), delta=4)
-        self.assertAlmostEqual(middle[7], round((55 + 255) / 2), delta=4)
+        # (what the light gives, colour times dimmer, goes straight: the dimmer stays up and the colour does the fading)
+        self.assertEqual(middle[7], 255)
+        self.assertAlmostEqual(middle[0], (255 * 55 + (self.before_a[0] * 255 - 255 * 55) * 0.5) / 255, delta=3)
         engine.settle(1.1)
         self.assertEqual(chans(engine), self.before_a)
         self.assertFalse(engine._console.active)
@@ -472,6 +474,180 @@ class GrowthTests(unittest.TestCase):
         state.set_lights({"dimmer-1": "dimmer"})  # (and back: it keeps only what a dimmer has)
         state.release(None, 0.5, now)
         self.assertEqual(set(state.releasing.get("dimmer-1", {})), {"dimmer"})
+
+
+class ReviewTests(unittest.TestCase):
+    """The first review of the engine side (5 Nov): each finding, fixed."""
+
+    def given(self, engine, light: str = A) -> float:
+        """What the light gives: its brightest colour channel times its dimmer (0-255)."""
+        c = chans(engine, light)
+        return max(c[:3]) * c[7] / 255
+
+    def test_a_dimmed_light_never_flares(self) -> None:
+        engine = FakeEngine(show())  # (nothing on Base: the inputs are black)
+        engine.submit(ConsoleSet({A: {**RED, "dimmer": 20}}, 2.0))  # (from black, faded in)
+        seen = []
+        for _ in range(90):
+            engine.settle(0.025)
+            seen.append(self.given(engine))
+        self.assertLessEqual(max(seen), 21)
+        self.assertTrue(all(b >= a - 1 for a, b in zip(seen, seen[1:])))  # (only ever brighter)
+        engine.submit(ConsoleRelease((A,), 2.0))
+        seen = []
+        for _ in range(90):
+            engine.settle(0.025)
+            seen.append(self.given(engine))
+        self.assertLessEqual(max(seen), 21)
+        self.assertTrue(all(b <= a + 1 for a, b in zip(seen, seen[1:])))  # (only ever darker)
+        self.assertEqual(seen[-1], 0)
+        engine.submit(ConsoleSet({A: {**RED, "dimmer": 51}}))
+        engine.settle(0.1)
+        engine.submit(ToBlack(2.0))
+        peak = 0.0
+        for _ in range(90):
+            engine.settle(0.025)
+            peak = max(peak, self.given(engine))
+        self.assertLessEqual(peak, 52)
+
+    def test_a_chase_crossfade_never_flares(self) -> None:
+        from centralight.console import chase_look
+
+        chase = Chase((A,), (ChaseStep(MappingProxyType({A: (0.2, 0.0, 0.0, 1.0)})),
+                             ChaseStep(MappingProxyType({A: (1.0, 0.0, 0.0, 0.2)}))), bpm=60, crossfade=1.0)
+        given = [chase_look(chase, A, 1.0 + i / 20)[0] * chase_look(chase, A, 1.0 + i / 20)[3] for i in range(20)]
+        self.assertAlmostEqual(max(given), 0.2, places=6)  # (both steps give 0.2: so does the way between)
+
+    def test_cut_to_black_also_cuts_a_light_fading_back(self) -> None:
+        engine = FakeEngine(show())
+        engine.submit(SendToBase("worship-blue", cut=True))
+        engine.release_fade = 10.0
+        engine.submit(ConsoleSet({A: {"red": 0, "green": 0, "blue": 255}}))
+        engine.settle(0.1)
+        engine.submit(ConsoleRelease((A,)))  # (10 s back to the input)
+        engine.settle(0.5)
+        engine.submit(ToBlack(0.0))
+        engine.settle(0.05)
+        self.assertEqual(chans(engine)[:3], (0, 0, 0))
+        self.assertFalse(engine._console.active)
+        engine.submit(SendToBase("worship-blue", cut=True))
+        engine.submit(ConsoleSet({A: {"red": 255}}))
+        engine.settle(0.1)
+        engine.submit(ConsoleRelease((A,)))
+        engine.settle(0.5)
+        engine.submit(ToBlack(1.0))  # (a fade to black: a 10 s fade back ends with it)
+        engine.settle(1.1)
+        self.assertEqual(chans(engine)[:3], (0, 0, 0))
+
+    def test_next_while_paused_always_moves_on(self) -> None:
+        run = ChaseRun(Chase((A,), steps(10, 20, 30, 40, 50), bpm=97.0), 118_608.13)
+        run.set_paused(True, 118_610.77)
+        seen = [run.current(118_620.0)]
+        for _ in range(8):
+            run.next_step(118_620.0)
+            seen.append(run.current(118_620.0))
+        self.assertEqual(seen, [(seen[0] + n) % 5 for n in range(9)])
+
+    def test_a_fade_starts_from_what_the_light_shows_now(self) -> None:
+        engine = FakeEngine(show())
+        engine.submit(SendToBase("warm-white", cut=True))
+        engine.submit(ConsoleSet({A: RED}))
+        engine.settle(0.1)
+        engine.submit(ConsoleRelease((A,), 0.0))
+        engine.submit(SendToBase("worship-blue", cut=True))
+        engine.settle(0.5)
+        before = chans(engine)[0]
+        engine.submit(ConsoleSet({A: {"red": 0}}, 4.0))
+        engine.settle(0.05)
+        self.assertLessEqual(chans(engine)[0], before + 2)  # (from the blue input's red, not the old warm white)
+
+    def test_a_reopen_keeps_live_changes_over_the_chase(self) -> None:
+        state = ConsoleState()
+        state.set_lights({A: "slimpar9", B: "slimpar9"})
+        state.play(Chase((A, B), (ChaseStep(MappingProxyType({A: (0.0, 1.0, 0.0, 1.0), B: (0.0, 1.0, 0.0, 1.0)})),)), 0.0)
+        state.set({A: RED}, 0.0, 1.0)  # (later than the chase: it wins on A)
+        saved = json.loads(json.dumps(state.to_dict(2.0)))
+        again = ConsoleState()
+        again.set_lights({A: "slimpar9", B: "slimpar9"})
+        again.restore(saved, 50.0)
+        self.assertEqual(again.merge(A, (0.0, 0.0, 0.0), 50.0)[0], (1.0, 0.0, 0.0))
+        self.assertEqual(again.merge(B, (0.0, 0.0, 0.0), 50.0)[0], (0.0, 1.0, 0.0))
+
+    def test_a_beat_counts_however_the_ticks_fall(self) -> None:
+        run = ChaseRun(Chase((A,), steps(1, 2, 3), bpm=120, on_beat=True), 0.0)
+        # (audio.beat as a 40 Hz tick reads it: the 1.0 itself is often missed, only its way down seen)
+        for moment, level in ((0.0, 0.1), (0.025, 0.84), (0.05, 0.69), (0.5, 0.15), (0.525, 1.0), (0.55, 0.81),
+                              (1.0, 0.1), (1.025, 0.71), (1.05, 0.58)):
+            run.hear(level, moment)
+        self.assertEqual(run.beats, 3)
+
+    def test_a_dimmer_as_a_colour_light(self) -> None:
+        state = ConsoleState()
+        state.set_lights({"dim": "dimmer"})
+        self.assertEqual(state.merge("dim", (0.5, 0.2, 0.1), 0.0), ((0.5, 0.5, 0.5), {}))  # (as the inputs give it)
+        state.set({"dim": {"dimmer": 255}}, 0.0, 1.0)
+        self.assertEqual(state.merge("dim", (0.0, 0.0, 0.0), 1.0), ((1.0, 1.0, 1.0), {}))  # (full, as Master allows)
+        state.set({"dim": {"dimmer": 51}}, 2.0, 2.0)
+        self.assertAlmostEqual(state.merge("dim", (0.0, 0.0, 0.0), 2.0)[0][0], 1.0)  # (fades from where it was)
+        state.merge("dim", (0.0, 0.0, 0.0), 4.5)  # (the engine works it out every tick)
+        state.release(["dim"], 1.0, 5.0)
+        self.assertAlmostEqual(state.merge("dim", (0.0, 0.0, 0.0), 5.5)[0][0], 0.1, places=2)  # (halfway down to 0)
+        state.play(Chase(("dim",), (ChaseStep(MappingProxyType({"dim": (1.0, 0.5, 0.0, 0.5)})),)), 6.0)
+        self.assertAlmostEqual(state.merge("dim", (0.0, 0.0, 0.0), 6.0)[0][0], 0.5)  # (as the input would light it)
+
+    def test_the_consoles_lights_are_not_black(self) -> None:
+        engine = FakeEngine(show())
+        self.assertTrue(engine.colour_black())
+        engine.submit(ConsoleSet({A: RED}))
+        engine.settle(0.05)
+        self.assertFalse(engine.colour_black())
+        engine.submit(ConsoleRelease(fade=0.0))
+        engine.settle(0.05)
+        self.assertTrue(engine.colour_black())
+
+    def test_lights_a_new_chase_leaves_fade_back(self) -> None:
+        engine = FakeEngine(show())
+        engine.submit(SendToBase("warm-white", cut=True))
+        engine.settle(0.1)
+        warm = chans(engine)[:3]
+        engine.submit(ConsoleChase("play", Chase((A,), steps(255))))
+        engine.settle(0.1)
+        engine.submit(ConsoleChase("play", Chase((B,), steps(255, light=B))))
+        engine.settle(1.0)  # (halfway through the 2 s release fade)
+        self.assertNotEqual(chans(engine)[:3], (255, 0, 0))
+        self.assertNotEqual(chans(engine)[:3], warm)
+        engine.settle(1.1)
+        self.assertEqual(chans(engine)[:3], warm)
+
+    def test_stop_keeps_what_live_changes_hold(self) -> None:
+        engine = FakeEngine(show())
+        engine.submit(ConsoleChase("play", Chase((A,), steps(255))))
+        engine.submit(ConsoleSet({A: {"amber": 200}}))
+        engine.submit(ConsoleChase("stop"))
+        engine.settle(2.1)
+        self.assertIsNone(engine._console.chase)
+        self.assertEqual(chans(engine)[3], 200)  # (amber, held by a Live change, stays)
+
+    def test_switching_step_on_beat_on_keeps_its_place(self) -> None:
+        state = ConsoleState()
+        state.set_lights({A: "slimpar9"})
+        chase = Chase((A,), steps(10, 20, 30, 40), bpm=60)
+        state.play(chase, 0.0)
+        state.update_chase(replace(chase, on_beat=True), 2.5)
+        self.assertEqual(state.chase.current(3.0), 2)
+
+    def test_a_broken_live_json_never_stops_a_start(self) -> None:
+        state = ConsoleState()
+        state.set_lights({A: "slimpar9"})
+        chase = chase_to_dict(Chase((A,), steps(10, 20)))
+        state.restore({"held": {A: {"red": 10 ** 400, "green": 40}},
+                       "chase": {"chase": {**chase, "bpm": 10 ** 400, "steps": [{A: [10 ** 400, 0, 0, 1]}]},
+                                 "position": 1e308}}, 5.0)
+        rgb, _raw = state.merge(A, (0.0, 0.0, 0.0), 6.0)
+        self.assertTrue(all(0.0 <= value <= 1.0 for value in rgb))
+        engine = FakeEngine(show(), live=LiveState(console={"held": {A: "nonsense"}, "chase": [1, 2]}))
+        engine.settle(0.05)  # (it started)
+        self.assertFalse(engine._console.active)
 
 
 if __name__ == "__main__":
