@@ -434,6 +434,10 @@ Close the app first (it's holding the dongle), then:
         0 % and 60 %: switching vs fading).
   - [ ] Untick a light in **Lights** that's inside the rectangle: it stays off whatever the shape says.
   - [ ] Delete removes the selected mask shape; Ctrl+Z brings it back.
+- [ ] **Which week of the month**: Automation tab → a global automation with Days of the week → tick **Wed**, then
+      **1st** beside "weeks:". Its summary says "1st Wed". The **Week schedule** tab shows its block on the first
+      Wednesday only: step on with the arrows (the first Wednesday of December is the 2nd). **Every week** puts it
+      back as it was.
 
 ## 21. Afterwards: the commits
 

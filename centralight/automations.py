@@ -22,6 +22,7 @@ Everything here is plain Python (no Qt); the engine runs the AutomationRunner on
 
 from __future__ import annotations
 
+import calendar
 import itertools
 import math
 import re
@@ -98,6 +99,8 @@ GLOBAL_ACTIONS = ("load_show", "cut_black", "fade_black", "master", "house", "au
 GUI_ACTIONS = ("layout", "automation", "load_show")  # these change the show (or load another), so the window does them
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+WEEKS = ("1st", "2nd", "3rd", "4th", "last")  # Days of the week, which weeks of the month (M14; left out = every week)
+WEEK_NAMES = {"1st": "1st", "2nd": "2nd", "3rd": "3rd", "4th": "4th", "last": "Last"}
 WHERE = ("base", "overlay", "anywhere")  # (an older file's "overlay1"-"overlay4" become "overlay" as it's read)
 COMPARES = ("=", "!=", "<", ">", "on", "off")
 AUDIO_BANDS = ("level", "bass", "mid", "treble", "beat", "pitch")
@@ -180,6 +183,9 @@ def check_condition(cond: Mapping[str, Any], scope: str = SHOW) -> list[str]:
         days = cond.get("days")
         if not isinstance(days, list) or not days or any(d not in DAYS for d in days):
             problems.append(f'"days" must be a list of {", ".join(DAYS)}')
+        weeks = cond.get("weeks")
+        if weeks is not None and (not isinstance(weeks, list) or any(w not in WEEKS for w in weeks)):
+            problems.append(f'"weeks" must be a list of {", ".join(WEEKS)} (or left out for every week)')
     elif kind == "dates":
         for key in ("from", "to"):
             if parse_day_month(cond.get(key)) is None:
@@ -285,6 +291,10 @@ def describe_condition(cond: Mapping[str, Any], show: Show | None = None, shows:
         chosen = cond.get("days")
         days = [d for d in DAYS if isinstance(chosen, (list, tuple)) and d in chosen]
         text = "every day" if len(days) == 7 else ", ".join(DAY_NAMES[DAYS.index(d)] for d in days) or "no days"
+        weeks = chosen_weeks(cond)
+        if weeks and days:  # "1st Wed", "1st & 3rd Sun", "Last Fri"
+            which = " & ".join(WEEK_NAMES[w] for w in weeks)
+            text = f"{which} week of the month" if len(days) == 7 else f"{which} {text}"
     elif kind == "dates":
         a, b = parse_day_month(cond.get("from")), parse_day_month(cond.get("to"))
         if a and b:
@@ -447,6 +457,23 @@ def _skipped_start(start: int, previous: datetime | None, local: datetime, wall_
             return True
         probe += timedelta(minutes=1)
     return False
+
+
+def chosen_weeks(cond: Mapping[str, Any]) -> list[str]:
+    """A Days of the week condition's weeks of the month, in order ([] = every week)."""
+    weeks = cond.get("weeks")
+    return [w for w in WEEKS if isinstance(weeks, (list, tuple)) and w in weeks]
+
+
+def in_weeks(weeks: list[str], day: date) -> bool:
+    """Is the day in one of these weeks of its month? 1st is the 1st to the 7th (so it holds the month's first Monday,
+    first Tuesday …), 2nd the 8th to the 14th, 3rd the 15th to the 21st, 4th the 22nd to the 28th, and Last the month's
+    last seven days: the last Wednesday is always "Last", whether it's the 4th or the 5th. No weeks: every week."""
+    if not weeks:
+        return True
+    nth = (day.day - 1) // 7 + 1
+    last = day.day + 7 > calendar.monthrange(day.year, day.month)[1]
+    return any(last if week == "last" else WEEKS.index(week) + 1 == nth for week in weeks)
 
 
 def range_day(conditions: Iterable[Mapping[str, Any]], local: datetime) -> date:
@@ -795,7 +822,7 @@ class AutomationRunner:
             result = self._time_true(automation, index, cond, situation)
         elif kind == "days":
             days = cond.get("days")
-            result = isinstance(days, (list, tuple)) and DAYS[day.weekday()] in days
+            result = isinstance(days, (list, tuple)) and DAYS[day.weekday()] in days and in_weeks(chosen_weeks(cond), day)
         elif kind == "dates":
             result = _dates_true(cond, day)
         elif kind == "sun":

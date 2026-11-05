@@ -53,6 +53,8 @@ from ..automations import (
     MONTHS,
     SHOW,
     SUN_MINUTES,
+    WEEK_NAMES,
+    WEEKS,
     actions_for,
     add_automation,
     conditions_for,
@@ -281,6 +283,25 @@ class RuleRow(QFrame):
                 self._no_days_note = _hint("Tick at least one day: with none, this automation never runs.")
                 self._no_days_note.setVisible(not chosen)
                 self.notes.addWidget(self._no_days_note)
+                # which weeks of the month (M14): every week, or any of 1st-4th and Last
+                weeks = [w for w in WEEKS if w in (d.get("weeks") if isinstance(d.get("weeks"), (list, tuple)) else ())]
+                self._every_week = QPushButton("Every week")
+                self._every_week.setObjectName("ToolToggle")
+                self._every_week.setCheckable(True)
+                self._every_week.setChecked(not weeks)
+                self._every_week.setToolTip("Every week of the month, as before")
+                self._every_week.toggled.connect(self._toggle_every_week)
+                self._week_buttons: dict[str, QPushButton] = {}
+                for code in WEEKS:
+                    button = QPushButton(WEEK_NAMES[code])
+                    button.setObjectName("ToolToggle")
+                    button.setCheckable(True)
+                    button.setChecked(code in weeks)
+                    button.setToolTip("The last of these days in each month, whether it's the 4th or the 5th" if code == "last"
+                                      else f"The {code} of these days in each month (e.g. the {code} Wednesday)")
+                    button.toggled.connect(lambda on, c=code: self._toggle_week(c, on))
+                    self._week_buttons[code] = button
+                self._add(self._text("weeks:"), self._every_week, *self._week_buttons.values())
             elif kind == "dates":
                 for key in ("from", "to"):
                     month_day = parse_day_month(d.get(key)) or (12, 1)
@@ -454,6 +475,30 @@ class RuleRow(QFrame):
         self._set("days", [d for d in DAYS if d in days])
         if self._no_days_note is not None:
             self._no_days_note.setVisible(not days)
+
+    def _toggle_week(self, code: str, on: bool) -> None:
+        """A week of the month on or off (none: every week, and the key is left out, as before)."""
+        weeks = [w for w in WEEKS if w in (self.data.get("weeks") or ()) and w != code] + ([code] if on else [])
+        weeks = [w for w in WEEKS if w in weeks]
+        if weeks:
+            self._set("weeks", weeks)
+        else:
+            self._drop("weeks")
+        blocked = self._every_week.blockSignals(True)
+        self._every_week.setChecked(not weeks)
+        self._every_week.blockSignals(blocked)
+
+    def _toggle_every_week(self, on: bool) -> None:
+        if on:  # every week: the picked weeks go
+            for button in self._week_buttons.values():
+                blocked = button.blockSignals(True)
+                button.setChecked(False)
+                button.blockSignals(blocked)
+            self._drop("weeks")
+        elif not self.data.get("weeks"):  # (it stays on until a week is picked)
+            blocked = self._every_week.blockSignals(True)
+            self._every_week.setChecked(True)
+            self._every_week.blockSignals(blocked)
 
     def _set_date(self, key: str, day: QSpinBox, month: QComboBox) -> None:
         last = calendar.monthrange(2024, int(month.currentData()))[1]  # (a leap year: 29 Feb is allowed)

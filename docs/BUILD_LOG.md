@@ -39,6 +39,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — 4 one Overlay (copies, red boxes, hold for a flash, drag tiles to move them) | **done** (4 Nov, 23:30) |
 | — 9 a Colour element, and Paint without a fill | **done** (5 Nov, 01:05; a test-suite crash found on the way was fixed first; 853 tests pass twice) |
 | — 8 shapes in masks (Show / Hide rectangles and ellipses, Start with, Mask mode with Layer mode's tools) | **done** (5 Nov, 01:25; 866 tests pass) |
+| — 6 which week of the month (1st, 2nd, 3rd, 4th, Last) in Days of the week | **done** (5 Nov, 01:35; 875 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -147,6 +148,16 @@ The small ones first (3, 1, 2, 7):
 - **An animated mask works:** a rectangle sliding across reveals the lights one by one (the AI guide has this as an
   example, and explains mask shapes; the input schema has them).
 - Masks from before look exactly the same, and files keep mask shapes as they are (tests check both).
+
+**6. Which week of the month.**
+- **"Days of the week" has "weeks:" now:** **Every week** (the default, as before), or any of **1st**, **2nd**,
+  **3rd**, **4th** and **Last**. Wednesday + 1st is the first Wednesday of each month. **Last** is the last one in the
+  month, whether that's the 4th or the 5th. The weeks apply to every day ticked (for the 1st Wednesday and the 3rd
+  Sunday, use two automations, or two Days conditions with Any).
+- **Summary lines** say it: "1st Wed", "1st & 3rd Sun", "Last Fri".
+- **The week schedule and Coming up** follow (the schedule's later weeks show only the right Wednesdays), and an
+  overnight time range still belongs to the day it started (the 1st Wednesday's 23:00–01:00 carries on into Thursday).
+- The AI guides explain `"weeks"`. Automations from before stay "Every week" (the setting is left out of the file).
 
 **A crash the tests found (fixed).** With item 9's tests added, the whole test suite crashed part-way through. The
 cause was older than M14's changes (tests had just never lined up to show it):
@@ -1315,6 +1326,10 @@ Problems the tests found and that are fixed:
   - **Mask mode starts on the Light tool** (ticking lights), as it did; drawing a shape, or picking one in the Mask
     shapes list, switches to Select.
   - **A mask shape written without "mode"** (by hand, or an AI tool) hides, like the Editor's default on a shown mask.
+  - **Which weeks:** the 1st week is the 1st to the 7th of the month (so it holds the first of every day), the 2nd the
+    8th to the 14th, and so on; Last is the month's last seven days. The buttons are **Every week**, 1st, 2nd, 3rd,
+    4th and Last beside the days; picking a week turns Every week off, and Every week clears the picked ones. With
+    every day ticked, the summary says e.g. "1st week of the month".
 - **M13 choices** (all easy to change):
   - **The week schedule is a tab beside the automation's editor** (Automation | Week schedule) rather than squeezed
     in beside the Coming up list: at 1280×720 that panel is too short for a week, and the left column too narrow.

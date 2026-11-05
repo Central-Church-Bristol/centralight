@@ -471,8 +471,8 @@ def guide_text(show: Show, full: bool = True) -> str:
                              else next(iter(show.input_order), "follow-screen")},
                             {"do": "house", "light": show.house[-1].fixture if show.house else "dimmer-4", "level": 0.7, "fade": 2}],
             }) + "```\n\n"
-            "Days are `mon` ... `sun`; times `\"HH:MM\"` (overnight ranges like 22:00-02:00 are fine); dates `\"MM-DD\"` "
-            "with an optional `year`. Sunrise / sunset (Bristol's times): `{\"type\": \"sun\", \"when\": \"after\", "
+            "Days are `mon` ... `sun`. " + WEEKS_TEXT + " Times `\"HH:MM\"` (overnight ranges like 22:00-02:00 are fine); "
+            "dates `\"MM-DD\"` with an optional `year`. Sunrise / sunset (Bristol's times): `{\"type\": \"sun\", \"when\": \"after\", "
             "\"event\": \"sunset\", \"minutes\": -30}` is true from half an hour before sunset until midnight "
             "(`when` after / before, `event` sunset / sunrise, `minutes` -180 to 180)."
         )
@@ -480,6 +480,11 @@ def guide_text(show: Show, full: bool = True) -> str:
 
 
 GUIDE_MARKER = "<!-- Made by CentraLight: it rewrites this file when the show changes. Keep your own notes in another file. -->"
+WEEKS_TEXT = ("A Days condition can also pick weeks of the month: `\"weeks\": [\"1st\", \"3rd\"]` (any of `1st`, `2nd`, "
+              "`3rd`, `4th` and `last`; left out, every week). `{\"type\": \"days\", \"days\": [\"wed\"], \"weeks\": "
+              "[\"1st\"]}` is the first Wednesday of each month; `last` is the last one in the month, whether that's the 4th "
+              "or the 5th. The weeks apply to every day ticked (for the 1st Wednesday and the 3rd Sunday, use two "
+              "automations, or two Days conditions with `\"logic\": \"any\"`).")
 
 
 def _ours(data: bytes) -> bool:
@@ -546,8 +551,8 @@ def global_guide_text(shows: list[tuple[str, str]], house_labels: list[str]) -> 
         "now, Wait 10 min and Skip; one that comes from the clock starts early, so the change still happens on time.",
         "```json\n" + json_text(example) + "```",
         "## The shows\n\n" + show_rows,
-        "Days are `mon` ... `sun`; times `\"HH:MM\"` (overnight ranges like 22:00-02:00 are fine); dates `\"MM-DD\"` with "
-        "an optional `year`; sunrise / sunset are Bristol's times.",
+        "Days are `mon` ... `sun`. " + WEEKS_TEXT + " Times `\"HH:MM\"` (overnight ranges like 22:00-02:00 are fine); "
+        "dates `\"MM-DD\"` with an optional `year`; sunrise / sunset are Bristol's times.",
     ]) + "\n"
 
 
