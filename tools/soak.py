@@ -238,6 +238,14 @@ def remote_get(port: int, path: str) -> bool:
         return False
 
 
+def use_soak_folders(home: Path) -> None:
+    """This process uses the soak's own app data and shows too, not only the app it starts: what it does with
+    CentraLight's code here (making the shows, allowing the linked video) logs to the soak's session.log, never the
+    real one in %LOCALAPPDATA%\\CentraLight (M14)."""
+    os.environ["CENTRALIGHT_APPDATA"] = str(home / "appdata")
+    os.environ["CENTRALIGHT_SHOWS"] = str(home / "shows")
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--minutes", type=float, default=1.0)
@@ -254,6 +262,7 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     width, height = (int(v) for v in args.size.split("x"))
     home = Path(tempfile.mkdtemp(prefix="centralight-soak-"))
+    use_soak_folders(home)  # (first: everything below writes to the soak's own session log, never the real one)
     make_show(home / "shows")
     if args.countdown > 0:
         add_countdown_automation(home / "shows" / "Central Church")  # (before the second show is copied from it)

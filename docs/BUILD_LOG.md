@@ -42,6 +42,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — 6 which week of the month (1st, 2nd, 3rd, 4th, Last) in Days of the week | **done** (5 Nov, 01:35; 875 tests pass) |
 | — 5 a default show (opens when the PC starts, comes back after a schedule) | **done** (5 Nov, 01:50; 889 tests pass) |
 | — 10 remember or reset each show variable when its show loads | **done** (5 Nov, 02:15; 901 tests pass) |
+| — the two extras: every quit in the session log; the soak tool's own folders | **done** (5 Nov, 02:20) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -188,6 +189,14 @@ The small ones first (3, 1, 2, 7):
   variable as the show loads. The Dashboard's Variables panel shows the new value straight away.
 - **Files:** show.json has `"on_load": "reset"` only on the ones that reset; older files load as Keep. Import / export
   carry it, and the AI guide's table of show variables says which reset.
+
+**The two small extras.**
+- **Every quit is in the session log** now, before CentraLight stops, with the choice made: e.g. "Quit by closing the
+  window: turn the lights off (Settings say so)", "Quit from the tray menu: leave the lights as they are (chosen when
+  asked, and remembered)", "Quit, as Windows logs off or shuts down: …", and a cancelled quit too. So a quit can be
+  told from a crash even if stopping gets stuck ("CentraLight closed" still follows once it's done).
+- **The soak tool's own lines** (making its shows, allowing its linked video) now go to the soak's own temporary
+  session log, like the app it runs: never your real one.
 
 **A crash the tests found (fixed).** With item 9's tests added, the whole test suite crashed part-way through. The
 cause was older than M14's changes (tests had just never lined up to show it):

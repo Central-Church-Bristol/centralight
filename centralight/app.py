@@ -20,7 +20,7 @@ from .output import DmxOutputThread, device_spec, universe_size
 from .sources import SourceManager
 from .paths import default_show_dir, shows_root
 from .priority import prefer_livestream_apps
-from .settings import QUIT_OFF, Settings
+from .settings import Settings
 from .show_io import SHOW_FILE, ShowError, backup_show
 from .timing import begin_precise_timer, end_precise_timer
 
@@ -179,8 +179,8 @@ def main(argv: list[str] | None = None) -> int:
 
     window = MainWindow(settings, show, engine, output, remote=remote, global_automations=global_automations,
                         shows_root=shows_root())
-    # Windows logging off or shutting down: stop cleanly without asking
-    app.aboutToQuit.connect(lambda: window.shutdown(lights_off=settings.quit_action == QUIT_OFF))
+    # Windows logging off or shutting down: stop cleanly without asking (written in the session log, as every quit is)
+    app.aboutToQuit.connect(lambda: window.quit_without_asking("as Windows logs off or shuts down"))
 
     # Always running: the tray, a second launch showing this window, sleep / wake, start with Windows
     tray = Tray(window) if QSystemTrayIcon.isSystemTrayAvailable() else None

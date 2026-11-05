@@ -67,7 +67,7 @@ from ..ndi_source import CONNECTED, NO_SIGNAL, SEARCHING
 from ..output import device_spec, universe_size
 from ..paths import documents_dir, settings_path
 from ..paths import shows_root as default_shows_root
-from ..settings import QUIT_ASK, QUIT_OFF, Settings
+from ..settings import QUIT_ASK, QUIT_LEAVE, QUIT_OFF, Settings
 from ..clshow import (
     PackageError,
     clean_leftover_imports,
@@ -120,6 +120,7 @@ from .settings_dialog import SettingsDialog
 from .widgets import STATE_ERROR, STATE_INFO, STATE_OK, STATE_WARN, install_wheel_guard
 
 LOAD_HOLD = 30.0  # seconds a show asked for by an automation or the Stream Deck waits for an open dialog to close
+QUIT_WORDS = {QUIT_OFF: "turn the lights off", QUIT_LEAVE: "leave the lights as they are"}  # (for the session log)
 LIVE_HEARTBEAT_MS = 60_000  # live.json is saved at least this often, so a restart knows when CentraLight last ran
 
 
@@ -1530,9 +1531,10 @@ class MainWindow(QWidget):
             "until CentraLight starts again.",
         )
         if answer != QMessageBox.StandardButton.Yes:
+            log_info("Quit from the tray menu: cancelled (CentraLight carries on)")
             return False
         self._quitting = True
-        if not self._quit_flow():
+        if not self._quit_flow("from the tray menu"):
             self._quitting = False
             return False
         return True
@@ -1558,21 +1560,35 @@ class MainWindow(QWidget):
         else:
             event.ignore()
 
-    def _quit_flow(self) -> bool:
-        """Turn the lights off or leave them (asking if the setting says so), then stop. True if it quit."""
+    def _quit_flow(self, how: str = "by closing the window") -> bool:
+        """Turn the lights off or leave them (asking if the setting says so), then stop. True if it quit. Each quit is
+        written in the session log first, with the choice (M14: so a quit can be told from a crash)."""
         choice = self.settings.quit_action
+        why = "Settings say so"
         if choice == QUIT_ASK:
             dialog = QuitDialog(self if self.isVisible() else None)
             if dialog.exec() != QDialog.DialogCode.Accepted or dialog.choice is None:
+                log_info(f"Quit {how}: cancelled (CentraLight carries on)")
                 return False
             choice = dialog.choice
+            why = "chosen when asked" + (", and remembered" if dialog.remember.isChecked() else "")
             if dialog.remember.isChecked():
                 self.settings.quit_action = choice
+        log_info(f"Quit {how}: {QUIT_WORDS.get(choice, choice)} ({why})")
         self.shutdown(lights_off=(choice == QUIT_OFF))
         if self.tray is not None:
             self.tray.hide()
         QTimer.singleShot(0, QApplication.quit)
         return True
+
+    def quit_without_asking(self, why: str) -> None:
+        """Windows logging off or shutting down: stop cleanly without asking, as Settings say (turning the lights off
+        only if they say so). Written in the session log first, as every quit is."""
+        if self._shut_down:
+            return  # (a quit that's under way already: it was written then)
+        lights_off = self.settings.quit_action == QUIT_OFF
+        log_info(f"Quit, {why}: {QUIT_WORDS[QUIT_OFF] if lights_off else QUIT_WORDS[QUIT_LEAVE]} (Settings say so)")
+        self.shutdown(lights_off=lights_off)
 
     def shutdown(self, lights_off: bool) -> None:
         """Stop the engine and the output, and save where everything was."""
