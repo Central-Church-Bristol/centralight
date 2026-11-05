@@ -50,6 +50,10 @@ from ..commands import (
     SetCountdownLength,
     SetDefaultShow,
     CloseShow,
+    SetReleaseFade,
+    ConsoleChase,
+    ConsoleRelease,
+    ConsoleSet,
     SetOverlayOn,
     SetOverlayOpacity,
     SetVariable,
@@ -64,6 +68,7 @@ from ..engine import EngineFrame
 from ..input_edit import delete_input, duplicate_input, move_input, new_input, update_input
 from ..live_state import LiveState
 from ..log import log_exception, log_info
+from ..console import COLOUR, ConsoleView, fan
 from ..model import NO_SHOW, Show, clean_notes, safe_text
 from ..ndi_source import CONNECTED, NO_SIGNAL, SEARCHING
 from ..output import device_spec, show_channels
@@ -86,6 +91,7 @@ from ..clshow import (
 )
 from ..show_import import apply_import, copy_files, imported_automation_ids
 from ..show_io import SHOW_FILE, ShowError, backup_show
+from ..show_edit import add_saved_colour, remove_saved_colour, save_group
 from ..show_io import load_show as read_show
 from ..shows import (
     ShowInfo,
@@ -112,6 +118,7 @@ from ..video_source import videos
 from .document import KIND_GLOBAL, SCOPE_AUTOMATIONS, SCOPE_LAYOUT, SCOPE_SHOW, ShowDocument
 from .editor_page import EditorPage
 from .header import PAGES, Header
+from .console_page import ConsolePage
 from .layout_page import LayoutPage
 from .no_show import NoShowPage, automations_line
 from .countdown_banner import CountdownBanner
@@ -236,6 +243,7 @@ class MainWindow(QWidget):
         self.countdown_banner = CountdownBanner()
         self.countdown_banner.pressed.connect(lambda what, cid: self.engine.submit(CountdownAction(what, cid)))
         self.engine.submit(SetCountdownLength(settings.countdown))
+        self.engine.submit(SetReleaseFade(settings.release_fade))  # (the Console's Release, M15)
         self.engine.submit(SetDefaultShow(settings.default_show, settings.black_fade))  # (it comes back after a schedule, M14)
 
         sources = getattr(engine, "sources", None)
@@ -282,8 +290,13 @@ class MainWindow(QWidget):
         self.layout_page.set_linked(self.linked_media)
         if save_files:
             clean_leftover_imports(self.shows_root())  # (what an import cut short by a crash left behind)
+        # the Console (M15): a hands-on lighting desk (wired to the engine below, once the header is made)
+        self.console_page = ConsolePage(show)
+        self._console_wired = False
+        self._console_held = -1  # (the header chip's count, as last shown)
         self.pages: dict[str, QWidget] = {
             "dashboard": self.dashboard,
+            "console": self.console_page,
             "editor": self.editor_page,
             "layout": self.layout_page,
             "automation": self.automation_page,
@@ -336,6 +349,7 @@ class MainWindow(QWidget):
         self.header.chips["remote"].clicked.connect(self.open_remote_page)
         self.header.chips["automations"].set_clickable(True)
         self.header.chips["automations"].clicked.connect(lambda: self._locked or self.engine.submit(SetAutomationsPaused(None)))
+        self._wire_console()
         self._next_run_text = ""
         self._next_run_checked = 0.0
 
@@ -535,6 +549,98 @@ class MainWindow(QWidget):
         self.document.load(show, automation)
         log_info(f"{who + ': ' if who else ''}show “{show.name}” loaded")
         return True
+
+    # ------------------------------------------------------------ the Console (M15)
+
+    def _wire_console(self) -> None:
+        """The Console page and the engine: its named actions become engine commands (for the chosen lights, in their
+        order), and frames come back to it (see _on_frame). The header chip shows on every page while it holds lights."""
+        self._console_wired = True
+        page = self.console_page
+        page.brightness_set.connect(lambda lights, level, fade: self._console_set(lights, {"dimmer": level * 255.0}, fade))
+        page.colour_set.connect(lambda lights, rgb, fade: self._console_set(
+            lights, {attr: float(value) * 255.0 for attr, value in zip(COLOUR, rgb)}, fade))
+        page.channel_set.connect(lambda lights, attr, value, fade: self._console_set(lights, {attr: float(value)}, fade))
+        page.fan_set.connect(self._console_fan)
+        page.look_restore.connect(self._console_restore)
+        page.release_requested.connect(lambda lights: self._console_release(tuple(lights)) if lights else None)
+        page.release_all_requested.connect(lambda: self._console_release(None))
+        page.group_save_requested.connect(self._save_console_group)
+        page.saved_colour_added.connect(self._save_console_colour)
+        page.saved_colour_removed.connect(lambda colour: self.document.apply(
+            remove_saved_colour(self.document.show, colour), f"Remove the saved colour {colour}"))
+        page.chase_play_requested.connect(lambda chase: self._console_chase("play", chase))
+        page.chase_pause_requested.connect(lambda paused: self._console_chase("pause" if paused else "resume"))
+        page.chase_next_requested.connect(lambda: self._console_chase("next"))
+        page.chase_tap_requested.connect(lambda: self._console_chase("tap"))
+        page.chase_edited.connect(lambda chase: self._console_chase("update", chase) if self._chase_playing() else None)
+        chip = self.header.chips["console"]
+        chip.set_clickable(True)
+        chip.clicked.connect(lambda: None if self._locked else self._console_release(None))
+        for button in (page.save_look, page.save_chase):  # (Save as input comes with part 4)
+            button.hide()
+
+    def _console_set(self, lights: list[str], attrs: dict, fade: float) -> None:
+        if lights and not self._locked:
+            self.engine.submit(ConsoleSet({light: dict(attrs) for light in lights}, max(0.0, float(fade))))
+
+    def _console_fan(self, lights: list[str], how: dict, fade: float) -> None:
+        if lights and not self._locked:
+            values = fan(list(lights), how.get("kind", ""), how.get("start", (1.0, 0.0, 0.0)), how.get("end", (0.0, 0.0, 1.0)),
+                         how.get("low", 0.0), how.get("high", 1.0))
+            if values:
+                self.engine.submit(ConsoleSet(values, max(0.0, float(fade))))
+
+    def _console_restore(self, values: dict, let_go: list) -> None:
+        """Cancel in the Console's colour picker: the colours held before, or the inputs' again (at once)."""
+        if values:
+            self.engine.submit(ConsoleSet(values, 0.0))
+        if let_go:
+            self.engine.submit(ConsoleRelease(tuple(let_go), 0.0, COLOUR))
+
+    def _console_chase(self, action: str, chase=None) -> None:
+        if not self._locked:
+            self.engine.submit(ConsoleChase(action, chase))
+
+    def _chase_playing(self) -> bool:
+        return self.last_frame is not None and self.last_frame.console.chase is not None
+
+    def _console_release(self, lights: tuple[str, ...] | None) -> None:
+        if not self._locked:
+            self.engine.submit(ConsoleRelease(lights))
+
+    def _save_console_group(self, lights: list) -> None:
+        if self._locked or self.document.read_only:
+            return
+        if not lights:
+            self._message("Save as group", "Choose the lights first (click them on the map), then save them as a group.")
+            return
+        taken = {g.name.casefold() for g in self.document.show.groups}
+        number = 1
+        while f"group {number}" in taken:
+            number += 1
+        name, ok = QInputDialog.getText(self, "Save as group", f"A name for these {len(lights)} lights (a button on the "
+                                        "Console, saved with this show; a group of the same name is replaced):",
+                                        text=f"Group {number}")
+        if ok and name.strip():
+            self.document.apply(save_group(self.document.show, name, list(lights)), f"Save the group {name.strip()}")
+
+    def _save_console_colour(self, colour: str) -> None:
+        if not self._locked and not self.document.read_only:
+            self.document.apply(add_saved_colour(self.document.show, colour), f"Save the colour {colour}")
+
+    def _update_console_chip(self, view: ConsoleView) -> None:
+        """"Console: 5 lights" on every page while the Console holds lights (a click lets them all go)."""
+        count = view.held_count if self._console_wired else 0
+        if count == self._console_held:
+            return
+        self._console_held = count
+        if count:
+            self.header.set_chip("console", STATE_WARN, f"Console: {count} light{'s' if count != 1 else ''}",
+                                 "The Console page holds these lights, so they don't follow the inputs.\n"
+                                 "Click to let them all go (they fade back).")
+        else:
+            self.header.set_chip("console", None)
 
     def _leave_show(self) -> None:
         """Before another show loads (or none): what belonged to this one ends."""
@@ -813,6 +919,7 @@ class MainWindow(QWidget):
         self.editor_page.setEnabled(not locked)
         self.automation_page.setEnabled(not locked)
         self.no_show_page.setEnabled(not locked)
+        self.console_page.set_locked(locked)
         self.header.show_picker.setEnabled(not locked)
         self.lock_banner.setVisible(locked)
         self.countdown_banner.set_locked(locked)
@@ -875,6 +982,7 @@ class MainWindow(QWidget):
         if self._save_files and self._guide_inputs(show) != self._guide_key:
             self._guide_timer.start()  # the lights or globals changed: rewrite the AI guide soon
         self.dashboard.set_show(show)
+        self.console_page.set_show(show)  # (its lights, groups and saved colours)
         if not show.no_show:  # (no show, M14: the last show's house lights stay on the header, greyed out)
             self.header.set_house([(h.fixture, h.label) for h in show.house])
         self.header.set_show_name(show.name, show.folder)
@@ -902,6 +1010,7 @@ class MainWindow(QWidget):
                 self.header.set_chip("engine", None)
         self.last_frame = frame
         self._do_engine_requests()
+        self._update_console_chip(frame.console)
         self._save_live_soon(frame)
         self.countdown_banner.set_view(frame.countdown, self._show_name_for)
         if self.tray is not None:
@@ -914,6 +1023,10 @@ class MainWindow(QWidget):
         self._update_ndi_chip(frame)
         self._update_audio_chip(frame)
         self.dashboard.set_frame(frame)
+        if self._console_wired and self._page == "console" and not self.document.show.no_show:
+            self.console_page.master = frame.master
+            self.console_page.set_levels(frame.colours, {fid: view.out for fid, view in frame.house.items()})
+            self.console_page.set_view(frame.console)
         self.editor_page.set_frame(frame)
         self.automation_page.set_frame(frame)
         self._update_automations_chip(frame)
@@ -1025,6 +1138,7 @@ class MainWindow(QWidget):
         audio_before = (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release)
         dialog.apply_to(self.settings)
         self.engine.submit(SetCountdownLength(self.settings.countdown))
+        self.engine.submit(SetReleaseFade(self.settings.release_fade))
         self.engine.submit(SetDefaultShow(self.settings.default_show, self.settings.black_fade))
         self.automation_page.set_default_show(self.settings.default_show)
         if (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release) != audio_before:
@@ -1302,6 +1416,7 @@ class MainWindow(QWidget):
             if item.name not in KEEP_ON_THIS_PC:
                 setattr(self.settings, item.name, getattr(imported, item.name))
         self.engine.submit(SetCountdownLength(self.settings.countdown))
+        self.engine.submit(SetReleaseFade(self.settings.release_fade))
         self.engine.submit(SetDefaultShow(self.settings.default_show, self.settings.black_fade))
         self.automation_page.set_default_show(self.settings.default_show)
         self.editor_page.timeline.ndi_default = self.settings.ndi_default
@@ -1626,6 +1741,7 @@ class MainWindow(QWidget):
         self.layout_page.apply_split(self.settings.splitters.get("layout"))
         self.editor_page.apply_split(self.settings.splitters.get("editor"))
         self.automation_page.apply_split(self.settings.splitters.get("automation"))
+        self.console_page.apply_split(self.settings.splitters.get("console"))
 
     def _remember_splits(self) -> None:
         if self._splits_applied:
@@ -1633,6 +1749,7 @@ class MainWindow(QWidget):
             self.settings.splitters["layout"] = self.layout_page.splits()
             self.settings.splitters["editor"] = self.editor_page.splits()
             self.settings.splitters["automation"] = self.automation_page.splits()
+            self.settings.splitters["console"] = self.console_page.splits()
 
     # ------------------------------------------------------------ quitting
 

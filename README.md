@@ -57,6 +57,7 @@ Some useful ones:
 | Master, Cut / Fade to black | `/api/master?level=0.8`, `/api/black/cut`, `/api/black/fade` (`?all=1`: the Festoon and Key lights too; `?seconds=2`, or else the time in Settings) |
 | Load a show | `/api/show/central-church` (its folder's name, or its name); `/api/shows` lists them |
 | A global automation | `/api/global-automation/sunday-morning/run` (or `/enable`, `/disable`) |
+| The Console | `/api/live/release` (Release all; `?lights=slimpar-101,slimpar-102`: just those), `/api/live/tap`, `/next`, `/pause`, `/resume`, `/speed?bpm=120` (its chase) |
 
 Inputs, variables, house lights, automations and layouts are the loaded show's: a URL for something that isn't in it answers 404 "not in this show". A Stream Deck **Multi Action** can pair a vMix key with a lights URL. The remote only answers this PC unless
 Settings → Remote → **Allow other computers and phones** is ticked; they then need the key shown there

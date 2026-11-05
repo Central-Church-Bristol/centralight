@@ -41,10 +41,13 @@ from .model import (
     TRACK_COUNT,
     TRANSITION_KINDS,
     clean_notes,
+    safe_text,
     no_markup,
     Fixture,
     GlobalVar,
     HouseLight,
+    LightGroup,
+    SAVED_COLOURS_MAX,
     Automation,
     Input,
     Layout,
@@ -647,6 +650,10 @@ def show_to_dict(show: Show) -> dict[str, Any]:
         data["active_layout"] = show.active_layout
     if show.notes:
         data["notes"] = show.notes
+    if show.groups:  # (the Console's saved groups and colours, M15: left out when there are none)
+        data["groups"] = [{"name": g.name, "lights": list(g.lights)} for g in show.groups]
+    if show.saved_colours:
+        data["saved_colours"] = list(show.saved_colours)
     if show.automation_order or show.automations:
         data["automation_order"] = [a.id for a in show.ordered_automations()] if show.automations else list(show.automation_order)
     return data
@@ -735,8 +742,41 @@ def show_from_dict(data: Any) -> tuple[Show, list[str]]:
         active_layout=active_layout,
         automation_order=tuple(dict.fromkeys(automation_order)),
         notes=clean_notes(data.get("notes", "")),
+        groups=_groups_from(data.get("groups"), {fx.id for fx in fixtures if fx.role == ROLE_COLOUR}, warnings),
+        saved_colours=_saved_colours_from(data.get("saved_colours"), warnings),
     )
     return show, warnings
+
+
+def _groups_from(data: Any, colour_lights: set[str], warnings: list[str]) -> tuple[LightGroup, ...]:
+    """The Console's saved groups: each a name and its colour lights (lights that aren't there are left out)."""
+    if data is None:
+        return ()
+    if not isinstance(data, list):
+        warnings.append('show.json "groups" is not a list, so the saved groups were left out')
+        return ()
+    groups: list[LightGroup] = []
+    for item in data:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"].strip():
+            warnings.append(f"saved group {item!r} has no name, so it was left out")
+            continue
+        raw = item.get("lights")
+        lights = tuple(dict.fromkeys(light for light in raw if isinstance(light, str) and light in colour_lights)) if isinstance(raw, list) else ()
+        name = safe_text(" ".join(item["name"].split())[:40])
+        if lights and all(g.name.casefold() != name.casefold() for g in groups):
+            groups.append(LightGroup(name, lights))
+    return tuple(groups)
+
+
+def _saved_colours_from(data: Any, warnings: list[str]) -> tuple[str, ...]:
+    """The Console's saved colours ("#RRGGBB"); anything else is left out."""
+    if data is None:
+        return ()
+    if not isinstance(data, list):
+        warnings.append('show.json "saved_colours" is not a list, so the saved colours were left out')
+        return ()
+    colours = [value.upper() for value in data if isinstance(value, str) and re.fullmatch(r"#[0-9A-Fa-f]{6}", value)]
+    return tuple(dict.fromkeys(colours))[:SAVED_COLOURS_MAX]
 
 
 def _fixture_from_dict(item: Any) -> Fixture:

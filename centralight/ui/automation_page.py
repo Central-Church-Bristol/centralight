@@ -415,6 +415,8 @@ class RuleRow(QFrame):
             self._add(pick)
         elif kind == "overlay_clear_all":
             self._add(self._text("every copy goes, the way it came in"))
+        elif kind == "release_console":
+            self._add(self._text("every light the Console holds fades back to the inputs (Settings: Release fades over)"))
         elif kind == "house":
             light = _combo([(h.fixture, h.label) for h in show.house], d.get("light"))
             light.currentIndexChanged.connect(lambda _i: self._set("light", light.currentData()))

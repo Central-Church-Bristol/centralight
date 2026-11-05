@@ -26,6 +26,7 @@ from typing import Protocol
 
 from fixtures import PROFILES
 
+from .console import channels_of
 from .log import log_exception, log_info
 from .model import ROLE_COLOUR, Fixture
 from .settings import OUTPUT_ARTNET, OUTPUT_SIMULATED, OUTPUT_USB, Settings
@@ -78,11 +79,14 @@ def encode_dmx(
     colours: Mapping[str, RGB],
     levels: Mapping[str, float],
     size: int = DMX_CHANNELS,
+    extras: Mapping[str, Mapping[str, int]] | None = None,
 ) -> bytes:
     """Build the DMX universe.
 
     colours: fixture id -> (r, g, b) from 0 to 1, for colour lights
     levels: fixture id -> 0 to 1, for house lights (dimmers)
+    extras: fixture id -> attribute -> 0-255, for a colour light's other channels (the Console, M15: its dimmer,
+    amber, colour macro, strobe, program and dimmer speed; the dimmer is otherwise full and the rest 0)
     Lights not mentioned are sent as 0 (black / off).
     """
     dmx = bytearray(size)
@@ -100,6 +104,12 @@ def encode_dmx(
                 dmx[base + prof["dimmer"]] = 255
             else:  # a plain dimmer used as a colour light: brightest of the three (like set_fixture)
                 dmx[base + prof["dimmer"]] = to_byte(max(r, g, b))
+            more = extras.get(fx.id) if extras else None
+            if more:
+                offsets = {attr: index for index, (attr, _name) in enumerate(channels_of(fx.profile))}
+                for attr, value in more.items():
+                    if attr in offsets:
+                        dmx[base + offsets[attr]] = max(0, min(255, int(value)))
         else:
             level = levels.get(fx.id, 0.0)
             if "red" in prof:  # an RGB light used as a house light: white at that level

@@ -7,6 +7,7 @@ its next tick (1/40 s later). Many slider moves in one tick simply leave the las
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -296,6 +297,45 @@ class QuietAutomations:
     automation_ids: tuple[str, ...]
 
 
+
+@dataclass(frozen=True)
+class ConsoleSet:
+    """The Console (M15): hold these values, light id -> attribute -> 0-255 (red, green, blue, dimmer, amber, macro,
+    strobe, program, dimmer_speed), fading in over `fade` seconds. They win over the inputs, per light and attribute,
+    until released; between Live changes and a chase, the later one wins."""
+
+    values: Mapping[str, Mapping[str, float]]
+    fade: float = 0.0
+
+
+@dataclass(frozen=True)
+class ConsoleRelease:
+    """Hand lights the Console holds back to the inputs (lights None: all of them), fading over `fade` seconds (None:
+    Settings' release fade). Strobe, the colour macro, programs and dimmer speed snap back."""
+
+    lights: tuple[str, ...] | None = None
+    fade: float | None = None
+    attrs: tuple[str, ...] | None = None  # only these attributes (None: all of them)
+
+
+@dataclass(frozen=True)
+class ConsoleChase:
+    """The Console's chase: "play" (chase: from its first step), "update" (chase: changed while it plays, keeping its
+    place), "pause", "resume", "next" (the next step now), "tap" (Tap tempo), "speed" (bpm: beats a minute, keeping its
+    place) or "stop" (it lets its lights go, fading)."""
+
+    action: str
+    chase: Any = None
+    bpm: float | None = None
+
+
+@dataclass(frozen=True)
+class SetReleaseFade:
+    """Settings: how long Release and Release all take to hand lights back (M15)."""
+
+    seconds: float
+
+
 Command = (
     SetMaster
     | SetHouse
@@ -329,4 +369,8 @@ Command = (
     | CountdownAction
     | QuietAutomations
     | CloseShow
+    | ConsoleSet
+    | ConsoleRelease
+    | ConsoleChase
+    | SetReleaseFade
 )

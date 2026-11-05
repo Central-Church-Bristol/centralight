@@ -62,6 +62,10 @@ from .bus import (
 from .commands import (
     BLACK_FADE,
     CloseShow,
+    ConsoleChase,
+    ConsoleRelease,
+    ConsoleSet,
+    SetReleaseFade,
     HOUSE_SLEW,
     HOUSE_SWITCH_FADE,
     QUIT_FADE,
@@ -100,6 +104,7 @@ from .commands import (
     ToBlack,
 )
 from .compositor import to_rgb8
+from .console import RELEASE_FADE, ConsoleState, ConsoleView
 from .countdown import DEFAULT_SECONDS as DEFAULT_COUNTDOWN
 from .countdown import MAX_SECONDS as MAX_COUNTDOWN
 from .countdown import STARTUP_QUIET
@@ -133,7 +138,7 @@ LATE_PREVIEW_INTERVAL = 1.0  # ...while ticks run late (the lights come first; t
 # commands a person sends (the window, the Stream Deck, the phone page) that mean they've taken charge of the lights:
 # after a "Turn lights off" quit, automations are held back only until one of these comes
 PERSON_TAKES_CHARGE = (SendToBase, ClearBase, SendToOverlay, ClearFromOverlay, ClearOverlay, SetHouse, ToBlack, RunAutomation,
-                       SetSolo)
+                       SetSolo, ConsoleSet, ConsoleChase)
 LATE_TICK = 0.005  # seconds: a tick that starts this much after its time is late (pictures for the screen wait then)
 TIMING_WINDOW = 60  # seconds of tick timings kept for the lateness figures
 TIDY_INTERVAL = 1.0
@@ -303,6 +308,7 @@ class EngineFrame:
     show_folder: str = ""  # the loaded show
     frozen_from: str = ""  # Base holds another show's look, frozen when this one loaded (that show's name)
     countdown: CountdownView | None = None  # the countdown before an automatic change the banner shows (M13)
+    console: ConsoleView = ConsoleView()  # what the Console page holds, and every colour light's channels (M15)
     tick_ms: float = 0.0  # average work per tick
     tick_max_ms: float = 0.0
     tick_rate: float = 0.0  # ticks in the last second
@@ -440,10 +446,16 @@ class Engine:
         self._overlay_opacity = Ramp(1.0)
         self._solo: Instance | None = None
         self._solo_fixed = False  # the solo input came with its command (not from the show)
+        # the Console (M15): what it holds wins over the inputs until released; it carries on over a reopen
+        self._console = ConsoleState()
+        self._console.set_lights(self._light_profiles(show))
+        self.release_fade = RELEASE_FADE
+        self._last_dmx = b""
         if self._pc_start:
             log_info("The PC has just started: the lights start black, with nothing playing")
         else:
             self._restore_buses(live, initial_base, now)
+            self._console.restore(live.console, now)
         self._last_canvas = self._lights.empty()
         # At startup the lights keep showing what they showed (the dongle repeats it) until the feeds Base and the
         # Overlay use have their first picture, instead of going black for a second or two meanwhile
@@ -553,6 +565,7 @@ class Engine:
             show_globals={k: dict(v) for k, v in self._show_globals.items()},
             automations=self._runner.to_dict(),
             global_automations=self._global_runner.to_dict(),
+            console=self._console.to_dict(now),
         )
 
     # ------------------------------------------------------------ the tick
@@ -575,16 +588,29 @@ class Engine:
         sampled = canvas[:3].T  # (premultiplied colour is already "over black")
         master = self._master.value(now)
         colours: dict[str, RGB] = {}
-        for light_id, (r, g, b) in zip(self._lights.ids, sampled):
-            colours[light_id] = (clamp01(r) * master, clamp01(g) * master, clamp01(b) * master)
-        self._apply_overrides(colours, now)
+        extras: dict[str, dict[str, int]] = {}  # the Console's channels besides the colour (M15)
+        console = self._console
+        console.note_inputs(self._lights.ids, sampled)
+        if console.active:
+            console.hear(float(self._ctx.audio.get("beat", 0.0) or 0.0), now)
+            for light_id, (r, g, b) in zip(self._lights.ids, sampled):
+                rgb, raw = console.merge(light_id, (clamp01(r), clamp01(g), clamp01(b)), now)
+                if raw:
+                    extras[light_id] = raw
+                colours[light_id] = (rgb[0] * master, rgb[1] * master, rgb[2] * master)  # (Master scales Live too)
+        else:
+            for light_id, (r, g, b) in zip(self._lights.ids, sampled):
+                colours[light_id] = (clamp01(r) * master, clamp01(g) * master, clamp01(b) * master)
+        self._apply_overrides(colours, now, extras)
         out_colours = colours
         house_out = {fid: h.out(now) for fid, h in self._house.items()}
+        dmx = encode_dmx(self.show.fixtures, out_colours, house_out, extras=extras)
+        self._last_dmx = dmx
 
         if self._holding and not (self._ctx.waiting and now < self._hold_until):
             self._holding = False  # every feed has a picture (or it's been long enough): from now on, always send
         if not self._holding:
-            self.output.submit(encode_dmx(self.show.fixtures, out_colours, house_out))
+            self.output.submit(dmx)
 
         if now - self._last_tidy >= TIDY_INTERVAL:
             self._last_tidy = now
@@ -638,6 +664,7 @@ class Engine:
         plain switch on brings it back the same way."""
         base = self._base
         solo, self._solo = self._solo, None  # (the Editor's "Show on lights" ends too: black means black)
+        self._console.release(None, seconds, now)  # (and the Console lets go: cut or faded with the rest, M15)
         if seconds > 0.0 and (not self._black_now(now) or solo is not None):
             base.outgoing = self._still_mix(now, solo)
             base.transition = Transition("fade", seconds)
@@ -735,21 +762,26 @@ class Engine:
         """A tick started late in the last second: pictures for people should wait (the Editor draws fewer)."""
         return time.perf_counter() < self._late_until
 
-    def _apply_overrides(self, colours: dict[str, RGB], now: float) -> None:
-        """Identify, test colours and flashes (after Master: they're always full brightness)."""
+    def _apply_overrides(self, colours: dict[str, RGB], now: float, extras: dict[str, dict[str, int]] | None = None) -> None:
+        """Identify, test colours and flashes (after Master: they're always full brightness, and on top of what the
+        Console holds: its other channels go back to normal for those lights)."""
+        extras = extras if extras is not None else {}
         if self._identify:
             for light_id in colours:
                 colours[light_id] = self._identify_map.get(light_id, WHITE)
+            extras.clear()
         if self._test_colour is not None:
             for light_id in colours:
                 if not self._test_fixtures or light_id in self._test_fixtures:
                     colours[light_id] = self._test_colour
+                    extras.pop(light_id, None)
         for light_id, start in list(self._flashes.items()):
             step = int((now - start) / FLASH_STEP)
             if step >= FLASH_STEPS or light_id not in colours:
                 del self._flashes[light_id]
                 continue
             colours[light_id] = WHITE if step % 2 == 0 else BLACK
+            extras.pop(light_id, None)
 
     def _drain(self, now: float) -> bool:
         applied = False
@@ -867,6 +899,15 @@ class Engine:
             self.black_fade = max(0.0, float(command.fade))
         elif isinstance(command, CloseShow):
             self._start_close(command.seconds, command.who, False, now)
+        elif isinstance(command, ConsoleSet):
+            self._console.set(command.values, max(0.0, float(command.fade)), now)
+        elif isinstance(command, ConsoleRelease):
+            fade = self.release_fade if command.fade is None else max(0.0, float(command.fade))
+            self._console.release(command.lights, fade, now, command.attrs)
+        elif isinstance(command, ConsoleChase):
+            self._console_chase(command, now)
+        elif isinstance(command, SetReleaseFade):
+            self.release_fade = max(0.0, min(60.0, float(command.seconds)))
         elif isinstance(command, CountdownAction):
             self._countdown_pressed(command.what, command.countdown_id, now)
         elif isinstance(command, QuietAutomations):
@@ -1073,6 +1114,41 @@ class Engine:
                 for who, action in runner.run_early(automation, early[1], now, self._wall()):
                     do(who, action, now)
 
+    # ------------------------------------------------------------ the Console (M15)
+
+    @staticmethod
+    def _light_profiles(show: Show) -> dict[str, str]:
+        return {fx.id: fx.profile for fx in show.colour_fixtures()}
+
+    def _console_chase(self, command: ConsoleChase, now: float) -> None:
+        console = self._console
+        action = command.action
+        if action == "play" and command.chase is not None:
+            if not console.play(command.chase, now):
+                log_info("Console: the chase has no steps, or none of its lights are in this show", key="console-chase-empty")
+        elif action == "update" and command.chase is not None:
+            console.update_chase(command.chase, now)
+        elif action in ("pause", "resume"):
+            console.pause_chase(action == "pause", now)
+        elif action == "next":
+            console.next_step(now)
+        elif action == "tap":
+            console.tap(now)
+        elif action == "speed" and command.bpm is not None:
+            console.set_speed(command.bpm, now)
+        elif action == "stop" and console.chase is not None:
+            console.release(list(console.chase.lights), self.release_fade, now)
+
+    def _console_view(self, now: float) -> ConsoleView:
+        """For the window: what the Console holds, and each colour light's channels as sent (0-255)."""
+        dmx = self._last_dmx
+        values = {}
+        for fx in self.show.colour_fixtures():
+            start = fx.address - 1
+            if start + fx.channels <= len(dmx):
+                values[fx.id] = tuple(dmx[start:start + fx.channels])
+        return self._console.view(values, now)
+
     def _start_close(self, seconds: float, who: str, automatic: bool, now: float) -> None:
         """No show from now on (M14): the lights fade off (the Festoon and Key lights too), then the window is asked to
         close the show (at once if they're off already). A show loaded meanwhile stops it. automatic: a global
@@ -1250,6 +1326,7 @@ class Engine:
             self._lights = lights
             self._last_canvas = lights.empty()
         self._ctx.lights = self._picture_ctx.lights = lights
+        self._console.set_lights(self._light_profiles(show))
         self._ctx.folder = self._picture_ctx.folder = show.folder
         self._base.update_inputs(show.inputs)
         self._overlay.update_inputs(show.inputs, now)
@@ -1273,6 +1350,7 @@ class Engine:
             return
         solo, self._solo = self._solo, None
         self._solo_fixed = False
+        self._console.release(None, self.release_fade, now)  # (another show: the Console lets its lights go, M15)
         base = self._base
         fading_to_black = (solo is None and base.current is None and base.held is None and base.transitioning(now)
                            and not self._overlay.lit(now, including_fades=False))
@@ -1505,6 +1583,7 @@ class Engine:
             show_folder=self.show.folder,
             frozen_from=held.name if held is not None else "",
             countdown=self._countdown_view(now),
+            console=self._console_view(now),
             tick_ms=1000.0 * sum(times) / len(times) if times else 0.0,
             tick_max_ms=1000.0 * max(times) if times else 0.0,
             tick_rate=float(len(self._tick_stamps)),

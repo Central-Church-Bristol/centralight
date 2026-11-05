@@ -311,7 +311,7 @@ class ShortcutTests(WindowTestCase):
     def test_minimum_size_and_pages_exist(self) -> None:
         window, _engine = self.make()
         self.assertLessEqual(window.minimumWidth(), main_window_module.MIN_WIDTH)
-        self.assertEqual(set(window.pages), {"dashboard", "editor", "layout", "automation"})
+        self.assertEqual(set(window.pages), {"dashboard", "console", "editor", "layout", "automation"})  # (Console: M15)
 
 
 if __name__ == "__main__":

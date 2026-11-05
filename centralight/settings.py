@@ -48,6 +48,7 @@ class Settings:
     audio_attack: float = 0.05  # seconds for audio values to rise
     audio_release: float = 0.3  # ... and to fall
     black_fade: float = 2.0  # seconds Fade to black takes (the header's button, and the API's default)
+    release_fade: float = 2.0  # seconds the Console's Release and Release all take to hand lights back (M15)
     countdown: int = 15  # seconds of countdown before an automation loads a show or goes to black (0 = none)
     # M14: the show that opens when the PC starts and comes back after a schedule: "" Last loaded (open the last show,
     # and nothing comes back), "_none" None (lights off: no show), or a show's id
@@ -93,6 +94,8 @@ class Settings:
             setattr(self, name, float(value) if ok else default)
         value = self.black_fade
         self.black_fade = float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and 0.0 <= value <= 60.0 else defaults.black_fade
+        value = self.release_fade
+        self.release_fade = float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and 0.0 <= value <= 60.0 else defaults.release_fade
         self.countdown = _int(self.countdown, defaults.countdown, 0, 60)
         self.default_show = str(self.default_show).strip() if isinstance(self.default_show, str) else ""
         self.maximized = bool(self.maximized)

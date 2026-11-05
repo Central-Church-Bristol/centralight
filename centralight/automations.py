@@ -39,6 +39,7 @@ from .countdown import WAIT as COUNTDOWN_WAIT
 from .commands import (
     BLACK_FADE,
     ClearFromOverlay,
+    ConsoleRelease,
     ClearOverlay,
     SendToBase,
     SendToOverlay,
@@ -80,6 +81,7 @@ ACTIONS: dict[str, str] = {
     "master": "Master",
     "cut_black": "Cut to black",
     "fade_black": "Fade to black",
+    "release_console": "Release the Console",
     "variable": "Set a show variable",
     "layout": "Switch layout",
     "automation": "Turn an automation on or off",
@@ -92,9 +94,9 @@ SHOW_CONDITIONS = ("time", "days", "dates", "sun", "input_live", "variable", "nd
 GLOBAL_CONDITIONS = ("time", "days", "dates", "sun", "ndi", "audio", "colour_black", "loaded_show", "app_started",
                      "pc_startup", "pc_woke")
 SHOW_ACTIONS = ("base", "overlay", "overlay_clear", "overlay_clear_all", "house", "master", "cut_black", "fade_black",
-                "variable", "layout",
+                "release_console", "variable", "layout",
                 "automation")
-GLOBAL_ACTIONS = ("load_show", "cut_black", "fade_black", "master", "house", "automation")
+GLOBAL_ACTIONS = ("load_show", "cut_black", "fade_black", "release_console", "master", "house", "automation")
 GUI_ACTIONS = ("layout", "automation", "load_show")  # these change the show (or load another), so the window does them
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -373,6 +375,8 @@ def describe_action(action: Mapping[str, Any], show: Show | None = None, scope: 
         text = f"clear {input_name(action.get('input'))} from the Overlay"
     elif kind == "overlay_clear_all":
         text = "clear the Overlay"
+    elif kind == "release_console":
+        text = "release the Console's lights (they fade back)"
     elif kind == "house":
         label = show.house_label(action.get("light", "")) if show else action.get("light", "?")
         parts = []
@@ -1378,6 +1382,8 @@ def action_command(action: Mapping[str, Any], show: Show, scope: str = SHOW) -> 
         return ClearFromOverlay(input_id=action["input"]) if isinstance(action.get("input"), str) and action.get("input") else None
     if kind == "overlay_clear_all":
         return ClearOverlay()
+    if kind == "release_console":  # (M15: everything the Console page holds, with Settings' release fade)
+        return ConsoleRelease()
     if kind == "house":
         light = action.get("light")
         if not any(h.fixture == light for h in show.house):
@@ -1487,6 +1493,8 @@ def default_action(kind: str, show: Show, scope: str = SHOW, loaded: Show | None
         return {"do": kind, "input": input_id}
     if kind == "overlay_clear_all":
         return {"do": "overlay_clear_all"}
+    if kind == "release_console":
+        return {"do": "release_console"}
     if kind == "house":
         light = show.house[-1].fixture if show.house else ""
         return {"do": "house", "light": light, "level": 0.7, "fade": 2}

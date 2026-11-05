@@ -487,6 +487,28 @@ Close the app first (it's holding the dongle), then:
       Wednesday only: step on with the arrows (the first Wednesday of December is the 2nd). **Every week** puts it
       back as it was.
 
+## 20c. M15: the Console page (try these on the lights)
+
+- [ ] **Console** tab (after Dashboard). Click SlimPAR 101's dot: a blue ring with **1**. Ctrl-click 103: **2**. Drag a box
+      round the top four from a gap: all four, numbered left to right. **None**, then **Top Wash**: the same four.
+- [ ] **Colour** → pick a warm orange with Preview ticked: the four follow as you drag. **Cancel**: they go back. Again,
+      **OK**: they keep it, with an amber dot on each on the map, and the header says **Console: 4 lights**.
+- [ ] **Brightness** to 30 %: they dim (their own dimmer). Send another input on the Dashboard: the four stay orange,
+      the others change.
+- [ ] **+** saves the colour; click it later on other lights. **Save as group…** "Front": a **Front** button appears.
+- [ ] **Fan → Rainbow** on **All**: a rainbow across the room, left to right. **Fade 2 s**, then a saved colour: they fade.
+- [ ] **Release** (with two chosen): those two fade back to the input in 2 s. **Release all**: the rest do.
+- [ ] **Advanced**: the channel faders. Choose one light, **Amber** up: warmer. **Strobe** a little: it flashes (read
+      the note first). **Release**: strobe stops at once, the rest fades back.
+- [ ] Hold some lights, then **Fade to black**: they fade with everything, and the header chip goes.
+- [ ] Hold some lights, quit and reopen CentraLight: they come back as they were.
+- [ ] The phone page: **Console · release all** while it holds lights. An automation **Release the Console** at a set
+      time: the lights go back at that time.
+- [ ] **Chase:** choose the Pillars, **Quick → Colours across the lights**, **Play**: they step through your saved
+      colours, and the line above the steps says **On: Pillars**. **Tap** four times in time: the speed follows. **Crossfade** 100 %: they glide. **Pause**, **Next step**.
+      Direction **Bounce**, then **Random**. **Release all**: they fade back.
+- [ ] Lock the padlock: the page can't be changed. Unlock.
+
 ## 21. Afterwards: the commits
 
 Each finished milestone is already committed on the branch `claude/centralight-gui` (nothing on `main`, nothing

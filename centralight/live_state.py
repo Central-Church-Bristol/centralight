@@ -41,6 +41,7 @@ class LiveState:
     show_globals: dict[str, dict[str, Any]] = field(default_factory=dict)  # other shows' variables, by folder
     automations: dict[str, Any] = field(default_factory=dict)  # the show's: paused, each one's state, history
     global_automations: dict[str, Any] = field(default_factory=dict)  # the global ones' state and history
+    console: dict[str, Any] = field(default_factory=dict)  # what the Console held (M15): {"held": ..., "chase": ...}
     saved_at: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
@@ -58,6 +59,7 @@ class LiveState:
             "show_globals": self.show_globals,
             "automations": self.automations,
             "global_automations": self.global_automations,
+            **({"console": self.console} if self.console else {}),
             "saved_at": self.saved_at,
         }
 
@@ -106,6 +108,8 @@ class LiveState:
         state.automations = dict(automations) if isinstance(automations, dict) else {}
         global_automations = data.get("global_automations")
         state.global_automations = dict(global_automations) if isinstance(global_automations, dict) else {}
+        console = data.get("console")
+        state.console = dict(console) if isinstance(console, dict) else {}
         saved = data.get("saved_at", 0.0)
         state.saved_at = float(saved) if isinstance(saved, (int, float)) and not isinstance(saved, bool) else 0.0
         return state

@@ -185,6 +185,17 @@ class HouseLight:
 
 
 @dataclass(frozen=True)
+class LightGroup:
+    """A group of colour lights saved on the Console page (M15): a button that chooses them, besides the patch's."""
+
+    name: str
+    lights: tuple[str, ...]
+
+
+SAVED_COLOURS_MAX = 24  # the Console's saved colours a show keeps (the oldest goes first)
+
+
+@dataclass(frozen=True)
 class GlobalVar:
     name: str
     type: str = "number"
@@ -262,6 +273,8 @@ class Show:
     automations: Mapping[str, Automation] = EMPTY
     automation_order: tuple[str, ...] = ()  # the order they're listed and run in
     notes: str = ""  # a few lines about the show (what it's for), shown in the show menu, the Dashboard and the phone page
+    groups: tuple[LightGroup, ...] = ()  # the Console's saved groups of lights (M15), besides the patch's
+    saved_colours: tuple[str, ...] = ()  # the Console's saved colours, "#RRGGBB" (M15)
     # Not saved: where the show was loaded from and what was wrong with it
     folder: str = ""
     read_only: bool = False

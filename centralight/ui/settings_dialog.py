@@ -255,6 +255,13 @@ class SettingsDialog(QDialog):
         self.countdown.setSpecialValueText("None")
         self.countdown.setValue(settings.countdown)
         black_form.addRow("Countdown first", self.countdown)
+        self.release_fade = QDoubleSpinBox()
+        self.release_fade.setRange(0.0, 60.0)
+        self.release_fade.setSingleStep(0.5)
+        self.release_fade.setDecimals(1)
+        self.release_fade.setSuffix(" s")
+        self.release_fade.setValue(settings.release_fade)
+        black_form.addRow("Console: Release takes", self.release_fade)
         black_form.addRow(hint("Before an automation loads a show, or cuts or fades to black, a banner counts down (on the "
                                "window and the phone page): Load now, Wait 10 min or Skip. A change that's on a schedule "
                                "still lands on time: its banner starts early. Not for Run now, or just after CentraLight "
@@ -428,6 +435,7 @@ class SettingsDialog(QDialog):
         settings.artnet_universe = self.artnet_universe.value()
         settings.quit_action = str(self.quit_action.currentData() or QUIT_ASK)
         settings.black_fade = round(self.black_fade.value(), 2)
+        settings.release_fade = round(self.release_fade.value(), 2)
         settings.countdown = self.countdown.value()
         settings.default_show = str(self.default_show.currentData() or "")
         settings.start_with_windows = self.start_with_windows.isChecked()

@@ -48,7 +48,8 @@ from .widgets import (
     discard,
 )
 
-PAGES = (("dashboard", "Dashboard"), ("editor", "Editor"), ("layout", "Layout"), ("automation", "Automation"))
+PAGES = (("dashboard", "Dashboard"), ("console", "Console"), ("editor", "Editor"), ("layout", "Layout"),
+         ("automation", "Automation"))
 BLACK_TIP = "Click: colour lights. Hold: everything, including Festoon and Key lights (Shift-click too)."
 MASTER_TIP = "Master: brightness of the colour lights (not the festoon or key lights)"
 NO_SHOW_TIP = "Load a show first"  # (M14: no show loaded, so the controls that need one are greyed out)
@@ -327,7 +328,7 @@ class Header(QFrame):
         chip_layout = QHBoxLayout(self.chip_box)
         chip_layout.setContentsMargins(0, 0, 0, 0)
         chip_layout.setSpacing(6)
-        for name in ("engine", "files", "output", "automations", "ndi", "audio", "remote"):
+        for name in ("engine", "files", "console", "output", "automations", "ndi", "audio", "remote"):
             chip = StatusChip(name)
             chip_layout.addWidget(chip)
             chip.setVisible(name == "output")
@@ -587,12 +588,21 @@ class Header(QFrame):
         try:
             width = self.width()
             self.show_picker.set_text_limit(SHOW_NAME_MAX_PX)
+            self._show_wordmark(True)  # (measured with it first)
             one_row = self._row1_width(True, False) <= width
             compact = (not one_row) and self._row1_width(False, False) > width
             if compact:  # still short of room with the chips as dots: the show's name shortens to fit
                 over = self._row1_width(False, True) - width
                 if over > 0:
                     self.show_picker.set_text_limit(SHOW_NAME_MAX_PX - over - 8)  # (… cuts whole letters: some to spare)
+                if self._row1_width(False, True) > width:
+                    # and still (five tabs on a small screen, M15): the wordmark goes, the logo stays, and the
+                    # show's name gets back what that frees
+                    self._show_wordmark(False)
+                    self.show_picker.set_text_limit(SHOW_NAME_MAX_PX)
+                    over = self._row1_width(False, True) - width
+                    if over > 0:
+                        self.show_picker.set_text_limit(SHOW_NAME_MAX_PX - over - 8)
             if force or one_row != self._one_row:
                 self._place_levels(one_row)
             if force or compact != self._compact_chips:
@@ -602,6 +612,13 @@ class Header(QFrame):
             self._compact_chips = compact
         finally:
             self._arranging = False
+
+    def _show_wordmark(self, shown: bool) -> None:
+        wordmark = self.brand.wordmark
+        if wordmark.isHidden() == shown:
+            wordmark.setVisible(shown)
+            self.brand.layout().invalidate()
+            self.brand.updateGeometry()
 
     def _place_levels(self, one_row: bool) -> None:
         self.row1.removeWidget(self.levels)

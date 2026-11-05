@@ -29,6 +29,10 @@ in a browser for a page listing every URL, with big buttons (it doubles as a pho
                                            one of its inputs is sent)
     /api/countdown/now, /wait, /skip       the countdown before an automatic show load or Cut / Fade
                                            to black: do it now, 10 minutes later, or not this time
+    /api/live/release                      the Console lets go of its lights: they fade back to the
+                                           inputs (?lights=a,b: just those; ?fade=1)
+    /api/live/tap, /next, /pause, /resume  the Console's chase: Tap tempo, the next step, pause, play on
+    /api/live/speed?bpm=120                ...and its speed
     /api/shows                             the shows there are, as JSON
     /api/state                             what's happening now, as JSON
     POST /api/command {"op": "input", "id": "warm-white"}   the same things as JSON
@@ -61,6 +65,8 @@ from .commands import (
     BLACK_FADE,
     ClearFromOverlay,
     ClearOverlay,
+    ConsoleChase,
+    ConsoleRelease,
     CountdownAction,
     RequestShow,
     RunAutomation,
@@ -77,6 +83,7 @@ from .commands import (
     SwitchLayout,
     ToBlack,
 )
+from .console import BPM_RANGE
 from .expressions import describe_value
 from .log import log_exception, log_info
 from .model import TRANSITION_KINDS, Show, Transition, slugify
@@ -162,6 +169,22 @@ def _automation_id(show: Show, raw: str, what: str = "automation", where: str = 
         if automation.name.casefold() == raw.casefold() or slugify(automation.name) == slugify(raw):
             return automation.id
     raise BadRequest(404, f"there's no {what} called {raw!r}" + (f": {where}" if where else ""))
+
+
+def _light_ids(show: Show, raw: str) -> tuple[str, ...]:
+    """?lights=slimpar-101,Pillar left: colour lights by id or name."""
+    found: list[str] = []
+    for word in (w.strip() for w in raw.split(",")):
+        if not word:
+            continue
+        fx = next((f for f in show.colour_fixtures() if word in (f.id, slugify(f.name)) or f.name.casefold() == word.casefold()), None)
+        if fx is None:
+            raise BadRequest(404, f"there's no colour light called {word!r}: {_in_this_show(show)}")
+        if fx.id not in found:
+            found.append(fx.id)
+    if not found:
+        raise BadRequest(400, "add ?lights=… (light ids, with commas between)")
+    return tuple(found)
 
 
 def _opacity(params: dict[str, str]) -> SetOverlayOpacity:
@@ -274,6 +297,15 @@ def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any
         if countdown is None and not wanted:
             raise BadRequest(409, "there's no countdown now")
         return CountdownAction(rest[0], wanted or countdown.id)
+    elif head == "live" and len(rest) == 1:  # (M15: the Console page)
+        if rest[0] == "release":  # everything it holds fades back (?lights=a,b: just those)
+            return ConsoleRelease(lights=_light_ids(show, params["lights"]) if "lights" in params else None,
+                                  fade=_fade(params))
+        if rest[0] in ("tap", "next", "pause", "resume"):  # its chase
+            return ConsoleChase(rest[0])
+        if rest[0] == "speed":
+            return ConsoleChase("speed", bpm=_number(params, "bpm", *BPM_RANGE))
+        raise BadRequest(404, "use /api/live/release, /tap, /next, /pause, /resume or /speed?bpm=120")
     elif head == "identify" and len(rest) == 1:
         on = _on_off(rest[0])
         if on is None:
@@ -336,6 +368,11 @@ def command_from_json(payload: Any, show: Show, frame: Any = None, black_fade: f
     elif op == "identify":
         parts = [op, str(payload.get("state", "toggle"))]
         params.pop("state", None)
+    elif op == "live":  # {"op": "live", "state": "release"}: the Console lets its lights go (M15); or its chase's
+        parts = ["live", str(payload.get("state", "release"))]  # tap / next / pause / resume, or speed with "bpm"
+        params.pop("state", None)
+        if isinstance(payload.get("lights"), (list, tuple)):  # ("lights": [...] for Release of some)
+            params["lights"] = ",".join(str(light) for light in payload["lights"])
     elif op == "show":
         parts = ["show", str(payload.get("id") or payload.get("name") or "")]
     elif op == "countdown":  # {"op": "countdown", "state": "now" | "wait" | "skip", "id": optional}
@@ -393,6 +430,7 @@ def state_of(engine: Any, shows: list[ShowInfo] | None = None) -> dict[str, Any]
             "identify": frame.identify,
             "output": frame.output.label if frame.output is not None else "",
             "countdown": _countdown_state(frame.countdown, shows or []),
+            "console": {"held": frame.console.held_count, "lights": sorted(light for light, attrs in frame.console.held.items() if attrs)},
         })
     return data
 
@@ -688,6 +726,8 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
         ("Cut the colour lights to black", "/api/black/cut  (?all=1: the Festoon and Key lights too)"),
         ("Fade them to black", "/api/black/fade  (?seconds=2, ?all=1)"),
         ("Identify", "/api/identify/on  (or /off)"),
+        ("Release the Console's lights", "/api/live/release  (?fade=1: over a second; ?lights=a,b: just those)"),
+        ("The Console's chase", "/api/live/tap  (or /next, /pause, /resume, /speed?bpm=120)"),
         ("Run an automation", "/api/automation/<id>/run  (or /enable, /disable)"),
         ("Run a global automation", "/api/global-automation/<id>/run  (or /enable, /disable)"),
         ("Pause all automations", "/api/automations/pause  (or /resume, /toggle)"),
@@ -802,12 +842,15 @@ p {{ margin: 8px 16px; color: var(--dim); }}
 .countdown[hidden] {{ display: none; }}
 #countdown-text {{ flex: 1; font-weight: 600; color: #FFB547; }}
 p.noshow {{ margin: 24px 16px; font-size: 17px; color: var(--text); }}
+button.console {{ border-color: #FFB547; color: #FFB547; }}
+button.console[hidden] {{ display: none; }}
 </style></head>
 <body>
 <header><h1>{show}</h1>
 <select id="shows" title="Load another show (the lights hold what they show until one of its inputs is sent)">{show_options}</select>
 <span id="status">Connecting…</span>
-{black}<div id="countdown" class="countdown" hidden><span id="countdown-text"></span>
+{black}<button class="small console" id="console" data-path="/api/live/release" hidden title="The Console page holds these lights: tap to let them all go (they fade back)">Console: release all</button>
+<div id="countdown" class="countdown" hidden><span id="countdown-text"></span>
 <button class="small" data-countdown="now" id="countdown-now">Do it now</button>
 <button class="small" data-countdown="wait">Wait 10 min</button>
 <button class="small" data-countdown="skip">Skip</button></div></header>
@@ -875,6 +918,10 @@ async function refresh() {{
       document.getElementById("countdown-text").textContent = state.countdown.text + " in " + state.countdown.clock + more;
       document.getElementById("countdown-now").textContent = state.countdown.load ? "Load now" : "Do it now";
     }}
+    const consoleButton = document.getElementById("console");  // (M15: the Console page holds lights)
+    const held = state.console ? state.console.held : 0;
+    consoleButton.hidden = !held;
+    if (held) consoleButton.textContent = "Console: " + held + " light" + (held === 1 ? "" : "s") + " · release all";
     const notes = document.getElementById("notes");
     if (notes.textContent !== (state.notes || "")) notes.textContent = state.notes || "";  // (changed in CentraLight)
     document.getElementById("status").textContent = state.no_show ? "The lights are off" : "Base: " + state.base.name;

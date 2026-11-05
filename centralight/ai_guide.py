@@ -562,7 +562,9 @@ def global_guide_text(shows: list[tuple[str, str]], house_labels: list[str]) -> 
         "now, Wait 10 min and Skip; one that comes from the clock starts early, so the change still happens on time. "
         "If Settings has a default show, it opens when the PC starts, and loads again when the automation that loaded a "
         "show stops matching (unless someone loaded a show by hand since, that automation's `on_end` loads one, or "
-        "another automation that loads a show matches then), so a schedule only needs its own times.",
+        "another automation that loads a show matches then), so a schedule only needs its own times. With the default "
+        "None (lights off), no show opens and the show closes instead (every light off until a show loads). "
+        "`release_console` hands back every light the Console page holds, with Settings' release fade.",
         "```json\n" + json_text(example) + "```",
         "## The shows\n\n" + show_rows,
         "Days are `mon` ... `sun`. " + WEEKS_TEXT + " Times `\"HH:MM\"` (overnight ranges like 22:00-02:00 are fine); "

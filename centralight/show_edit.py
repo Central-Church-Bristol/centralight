@@ -13,7 +13,19 @@ from typing import Any
 from fixtures import PROFILES
 
 from .layouts import forget_lights, sync_active_layout
-from .model import ROLE_COLOUR, ROLE_HOUSE, Fixture, GlobalVar, HouseLight, MapSpot, Show, slugify
+from .model import (
+    ROLE_COLOUR,
+    ROLE_HOUSE,
+    SAVED_COLOURS_MAX,
+    Fixture,
+    GlobalVar,
+    HouseLight,
+    LightGroup,
+    MapSpot,
+    Show,
+    safe_text,
+    slugify,
+)
 
 DEFAULT_COLOUR_PROFILE = "slimpar9"
 PROFILE_LABELS = {
@@ -122,7 +134,47 @@ def add_colour_light(show: Show, x: float = 0.5, y: float = 0.5) -> tuple[Show, 
 def remove_lights(show: Show, fixture_ids: set[str]) -> Show:
     fixtures = tuple(fx for fx in show.fixtures if fx.id not in fixture_ids)
     house = tuple(h for h in show.house if h.fixture not in fixture_ids)
-    return sync_active_layout(forget_lights(replace(show, fixtures=fixtures, house=house), fixture_ids))
+    groups = tuple(LightGroup(g.name, kept) for g in show.groups  # (a saved group loses them; an empty one goes)
+                   if (kept := tuple(light for light in g.lights if light not in fixture_ids)))
+    return sync_active_layout(forget_lights(replace(show, fixtures=fixtures, house=house, groups=groups), fixture_ids))
+
+
+# ---------------------------------------------------------------- the Console's groups and colours (M15)
+
+
+def save_group(show: Show, name: str, lights: list[str]) -> Show:
+    """Save the lights as a group with this name (one with the same name, in any case, is replaced where it was).
+    Only colour lights; with none (or no name), nothing changes."""
+    name = safe_text(" ".join(str(name).split())[:40])
+    colour = {fx.id for fx in show.colour_fixtures()}
+    kept = tuple(dict.fromkeys(light for light in lights if light in colour))
+    if not name or not kept:
+        return show
+    groups = list(show.groups)
+    at = next((i for i, g in enumerate(groups) if g.name.casefold() == name.casefold()), None)
+    if at is None:
+        groups.append(LightGroup(name, kept))
+    else:
+        groups[at] = LightGroup(name, kept)
+    return replace(show, groups=tuple(groups))
+
+
+def remove_group(show: Show, name: str) -> Show:
+    return replace(show, groups=tuple(g for g in show.groups if g.name != name))
+
+
+def add_saved_colour(show: Show, colour: str) -> Show:
+    """Save a colour ("#RRGGBB") with the show, at the end (one already there moves to the end; past
+    SAVED_COLOURS_MAX the oldest goes)."""
+    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", str(colour)):
+        return show
+    colour = str(colour).upper()
+    colours = [c for c in show.saved_colours if c != colour] + [colour]
+    return replace(show, saved_colours=tuple(colours[-SAVED_COLOURS_MAX:]))
+
+
+def remove_saved_colour(show: Show, colour: str) -> Show:
+    return replace(show, saved_colours=tuple(c for c in show.saved_colours if c != str(colour).upper()))
 
 
 def set_identify_seed(show: Show, seed: int) -> Show:

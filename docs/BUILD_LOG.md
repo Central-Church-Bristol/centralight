@@ -56,6 +56,9 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — your change of 5 Nov: the Default show's **Last loaded** and **None (lights off)** (no show loaded) | **done** (5 Nov, 11:07) |
 | — a 1-hour soak going to no show and back (15 times), and three small fixes made meanwhile | **done** (5 Nov, 12:57; no errors; 981 tests pass twice) |
 | — your new logo of 5 Nov ("soft light"): in the app, and in CentraLight.exe's and .clshow files' icons | **done** (5 Nov, 13:02) |
+| **M15: the Console page** (you said go at 13:30 on 5 Nov) — the design check (screenshots with made-up lights): you said yes, and added the chase's "On: …" line | **done** (5 Nov) |
+| — 1 and 2: choosing lights, the Look, fans, Advanced, takeover until Release, everywhere, safety, restarts | **done** (5 Nov, 16:58) |
+| — 3: chases (Add step, Quick, timing, Tap, Play / Pause / Next, step on each beat) | **done** (5 Nov, 16:58) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -79,6 +82,53 @@ Run all the tests (about five minutes, including the layout check at every scali
   started. They're left exactly as they were; the app reads `Assets/CentraLight Logo 1024.png` for its icon.
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
+
+## M15: the Console page (5 Nov, afternoon on)
+
+A hands-on lighting desk, on its own tab after the Dashboard (you saw it with made-up lights first, said yes, and
+added one thing: the chase's "On: …" line). Parts 1 to 3:
+
+**Choosing lights.**
+- **On the room map** (as on the Dashboard): click a light's dot; Ctrl- or Shift-click adds or takes one away; drag a box
+  round several (from a gap between lights). Chosen lights have a blue ring and their number in the order.
+- **Buttons above the map:** All, None, Invert, Odd, Even, each group of the patch (Top Wash, Side Fill, Pillars), your
+  saved groups, and **Save as group…** (saved with the show, with undo).
+- **Order** below the map: as clicked, left to right or right to left. Fans, chases and Odd / Even follow it.
+
+**The Look** (for the chosen lights): **Brightness** (the light's own dimmer), **Colour** (the picker; with Preview the
+lights follow as you pick, and Cancel puts back what they had), the show's **saved colours** (click one to use it, + to
+save the colour above, right-click to remove one), **Fan** (a rainbow, from one colour to another, or brightness from one
+% to another, across the chosen lights in their order) and **Fade** (how long a colour, a saved colour or a fan takes;
+faders follow your hand).
+
+**Advanced** (the switch at the top right): every channel of the chosen lights as a 0–255 fader (Red, Green, Blue,
+Amber, Colour macro, Strobe, Program, Dimmer, Dimmer speed), saying "mixed" when the lights differ, with a short
+photosensitivity note under Strobe.
+
+**The Console takes over until Release**, like a desk's programmer:
+- What you set wins, light by light and channel by channel; what you haven't touched keeps following the inputs.
+  Between a change on the page and a chase, the later one wins.
+- **Release** (the chosen lights) and **Release all** hand them back over 2 s (Settings → Cut / Fade to black →
+  "Console: Release takes"). Strobe, the colour macro, programs and dimmer speed go back at once.
+- **Everywhere:** the header chip "Console: 5 lights" on every page while it holds any (click it: Release all), a
+  "Console · release all" button on the phone page, `/api/live/release` for the Stream Deck (`?lights=…` for some),
+  and an automation action **Release the Console** (show and global), for the end of a service, say.
+- **Safety:** Master still scales the Console's colours; **Cut / Fade to black let go of everything** the Console
+  holds, cut or faded with the rest; Identify and the Layout tab's test colours show on top; the padlock locks the page.
+- **Restarts:** reopening CentraLight carries on with what the Console held (and its chase, where it was). The PC
+  having just started, or another show loading, lets it all go.
+
+**Chases** (part 3):
+- **Steps:** **Add step** takes the chosen lights as they look now. **Quick** makes the steps for you: the saved colours
+  across the lights, one light at a time, or odd / even. Choose a step card to move it (◀ ▶), **Copy** or **Remove** it.
+- **Timing:** **Speed** in BPM (a step a beat) or seconds a step, with **Tap**; **Crossfade** (0 % snaps, 100 % glides
+  all the way); **Direction** (forward, backward, bounce, random); Loop or Play once; or a step on each beat the audio
+  hears (Settings → Audio).
+- **Play** puts it on its lights (held until Release), **Pause**, **Next step**; speed and the rest change while it plays.
+- **The line above the steps** says which lights the chase is on (your addition): "On: SlimPAR 101, SlimPAR 103", or
+  a group's name for a whole group ("On: Pillars"). It follows the chase as steps are added or lights are released.
+- **From the Stream Deck:** `/api/live/tap`, `/api/live/next`, `/api/live/pause`, `/api/live/resume` and
+  `/api/live/speed?bpm=120`.
 
 ## M14: your changes after the rig test (4 Nov, night)
 
@@ -1686,6 +1736,27 @@ Problems the tests found and that are fixed:
       the line is worked out again every 20 seconds, and at once when the automations are paused or resumed.
     - **The phone page with no show** has no Cut / Fade to black buttons (they'd only answer "No show loaded"), and
       says "The lights are off" where it usually says what's on Base.
+  - **M15, the Console page** (parts 1 to 3), the choices I made:
+    - **The tab is after Dashboard,** so Ctrl+2 opens the Console, and the Editor, Layout and Automation move to Ctrl+3,
+      4 and 5.
+    - **Clicking a light means its dot** (and a little round it), not its whole glow, so a box can start between lights.
+      A box chooses left to right.
+    - **Odd and Even** take every other one of the chosen lights, in their order; with none chosen, of all of them.
+    - **Faders follow your hand** (no fade); the Fade time is for a colour, a saved colour and a fan.
+    - **The colour picker's Cancel** puts back what the lights had: the Console's colour, or the inputs' again.
+    - **Fans** go across the chosen lights in their order (the Order below the map); Rainbow goes once round the wheel.
+    - **The automation action is called "Release the Console"** (the plan's "Release Live control": "Live" became
+      "Console"). It uses Settings' release fade.
+    - **The header chip: a click lets everything go** (with the release fade). The phone page has the same button.
+    - **Another show loading** lets go with the release fade; the PC starting lets go at once.
+    - **Chases:** Add step takes Master back out of the colours (Master scales the chase again when it plays). Quick
+      replaces the steps there were; "Colours across" uses your saved colours (four rainbow colours when there are none).
+      Release takes the chosen lights out of the chase too; it stops when none are left. Play once stops on its last
+      step (bounce: back on the first). Random plays every step once a pass, never the same one twice in a row. Tap
+      needs two taps, averages up to five, and starts again after a gap of 2.5 s; it works before Play too.
+    - **Saved groups and colours** go in the show's `show.json`, with undo; a show keeps up to 24 colours.
+    - **The "On: …" line** names a whole patch group first (Top Wash, Side Fill, Pillars), then a whole saved group,
+      then single lights, in the chase's order; "every light" when it's all of them.
 - **M13 choices** (all easy to change):
   - **The week schedule is a tab beside the automation's editor** (Automation | Week schedule) rather than squeezed
     in beside the Coming up list: at 1280×720 that panel is too short for a week, and the left column too narrow.

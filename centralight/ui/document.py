@@ -66,7 +66,7 @@ SCOPE_LAYOUT = "layout"  # lights, house lights, identify colours, saved layouts
 SCOPE_AUTOMATIONS = "automations"  # the Automation tab
 LAYOUT_FIELDS = ("fixtures", "house", "identify_seed", "layouts", "active_layout")
 AUTOMATION_FIELDS = ("automations", "automation_order")
-SHOW_FIELDS = ("name", "globals", "input_order", "notes")
+SHOW_FIELDS = ("name", "globals", "input_order", "notes", "groups", "saved_colours")  # (the last two: M15)
 
 
 def input_scope(input_id: str) -> str:
