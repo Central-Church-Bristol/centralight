@@ -38,7 +38,7 @@ def install() -> None:
     import serial
 
     serial.Serial = _refuse  # type: ignore[assignment]
-    import dmx_output
+    from centralight import dmx_output
 
     dmx_output.StupidArtnet = _refuse  # type: ignore[assignment]
 

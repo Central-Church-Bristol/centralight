@@ -19,7 +19,7 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from fixtures import PROFILES
+from .fixtures import PROFILES
 
 ROLE_COLOUR = "colour"
 ROLE_HOUSE = "house"

@@ -1,51 +1,70 @@
 # CentraLight
 
-Takes the Media Background Pane NDI feed, samples regions of the frame, and sends the average colour of each region to the house lights over DMX, so the lights follow the screen.
+The lighting app for [Central Church Bristol](https://github.com/Central-Church-Bristol): it drives the church's
+lights over DMX, from *inputs* (looks) such as **Follow screen**, where the lights follow the Media Background Pane
+picture, to colours, paintings, pictures, videos and timed sequences, with automations, the Stream Deck, and a
+hands-on Console. Windows only.
 
-Built for [Central Church Bristol](https://github.com/Central-Church-Bristol). Windows only (the scripts use the Windows console Esc key).
+## Starting it
 
-## The CentraLight app (new, being tested)
+Double-click `CentraLight.exe` (or `run.bat`). The first time, `run.bat` sets up `.venv` with what the app needs
+(from `requirements.txt`) and copies the church fonts (below).
 
-Double-click `CentraLight.exe` (or `run.bat`, which also sets things up the first time) to start the CentraLight app: a window with the **Festoon**, **Key lights** and **Master** faders, **Cut to black** and **Fade to black** (click: the colour lights; hold: everything), a map of the lights, and *inputs* (looks) such as **Follow screen**, where the lights follow Media Background Pane like `ndi_pixel_mapper.py` does.
-
-- The first time, `run.bat` installs what the app needs into `.venv` and copies the church fonts from `G:\My Drive\Video Projection\Brand\Fonts` into `fonts\`.
-- The app starts with **Simulated** output: it shows what it would send, but doesn't touch the lights. To drive the lights, click the gear (top right) → **Output** → **Eurolite USB-DMX512 PRO**. Close the console scripts and MagicQ first: only one program can use the dongle at a time.
-- **Layout** tab: drag each dot to where its light is, click a dot to flash that light, and turn on **Identify** to give every light its own colour. A light is just its dot: it shows Paint exactly at the dot, and a picture (NDI, Image or Video) averaged over a patch around it, as big as that element's **Area** in the Editor (raise it for calmer colours; **Smoothing** makes changes glide). Notes about where each light is go into `fixture_map.csv` (the same file `usb_dmx_patch_test.py` uses).
-- **Editor** tab: build inputs from Colour (a colour or gradient), Paint (shapes and painting), Image and NDI elements on four tracks; untick lights an element should leave alone; pick a transition. **=** next to a setting gives it an *expression*, a small formula such as `wave(time, 0.25)` or `mix(#FF0000, accent, 0.5)`. *Show variables* (Editor → Show variables tab) can be shown on the Dashboard and set from the Stream Deck. Untick **Infinite** for a timed sequence: elements placed in time on the timeline (move, trim, split, in / out transitions), keyframes (the ◆ next to a setting) and Video elements. Paint elements can be painted on (brush, eraser, bucket, gradient, light colour), any element's mask is a black-and-white picture (white shows it, black hides it) painted with the same tools in greys, with rectangles and ellipses, White, Black and Invert, and pictures have a gizmo to move, scale and turn them.
-- **Sound**: Settings → Audio → listen to this PC's output (or an input), then use `audio.level`, `audio.bass`, `audio.mid`, `audio.treble`, `audio.beat` or `audio.pitch` (all 0–1) in any expression, e.g. opacity `0.2 + 0.8 * audio.bass`.
-- **Automation** tab: "when these conditions are met, do this", e.g. Sundays 09:00–12:30 → Warm white on Base and the key lights at 70 %, or "after sunset − 30 min" (Bristol's times) → festoon on. Each show has its own automations; the **Global automations** above them are app-wide, e.g. Sundays 08:30 → load the Morning show. Closing the window keeps CentraLight running in the tray by the clock, so automations and the Stream Deck keep working; **Quit** is in the tray icon's menu.
-- **Inputs made by AI**: **Create with AI** on the **+ New input** tile (or the sparkle on a tile, to edit one). Describe the look, click **Copy prompt**, paste it into any AI chat (ChatGPT, Claude, Gemini, Copilot), and paste the reply back: it's checked and previewed before you add it. AI tools such as Claude Code or Cursor can also work in the show folder (Settings → AI → **Open show folder**): they read `AI_GUIDE.md` there, and inputs they write appear straight away (Ctrl+Z undoes them).
-- **Shows**: the header's **Show: Central Church ▾** loads another show, or makes, copies, renames or deletes one (a morning and an evening show, say). A show is everything above (inputs, show variables, automations, the lights and layouts, media), in its own folder in `Documents\CentraLight Shows`; changes save by themselves. Loading a show never sends an input: the lights hold what they show until you send one of its inputs. The global automations are in `Documents\CentraLight Shows\_Global automations`. Settings, `live.json` (what was playing, in which show) and the session log (`session.log`, for when something goes wrong) are in `%LOCALAPPDATA%\CentraLight`. When the PC has just started, the default show opens (Settings → Starting and quitting: **Last loaded**, a show, or **None (lights off)**, which loads no show: every light off, every tab saying "No show loaded" with a Load button for each show, and the global automations still on), with every light black; reopening CentraLight carries on as it was.
-- `docs\BUILD_LOG.md` lists what's done; `docs\WEDNESDAY_TESTS.md` is the checklist for trying it on the lights.
-
-### Always running
-
+- It starts with **Simulated** output: it shows what it would send without touching the lights. To drive them:
+  the gear (top right) → **Output** → **Eurolite USB-DMX512 PRO** (or **Art-Net**, to MagicQ or an Art-Net node).
+  Only one program can use the dongle at a time, so close MagicQ first.
 - Closing the window keeps CentraLight running in the tray (by the clock), so automations, the Stream Deck and the
   lights carry on. **Quit** is in the tray icon's menu.
 - **Start CentraLight when I sign in to Windows** (Settings → Starting and quitting) starts it in the tray at
-  sign-in. It stays off until it has been tried on the lights (`docs\WEDNESDAY_TESTS.md`, step 1b).
-- After a restart that nobody signs in to (e.g. Windows Update in the night), CentraLight only starts once someone
-  signs in. For it to come back by itself, Windows has to sign in automatically. That's your choice, and a Windows
-  setting that CentraLight never changes: press Win+R, type `netplwiz`, untick **Users must enter a user name and
+  sign-in. After a restart that nobody signs in to (Windows Update in the night, say), it only starts once someone
+  signs in; for it to come back by itself, Windows has to sign in automatically. That's your choice, and a Windows
+  setting CentraLight never changes: press Win+R, type `netplwiz`, untick **Users must enter a user name and
   password to use this computer**, and type the account's password. (No tick box? Settings → Accounts → Sign-in
   options → turn off **Require Windows Hello sign-in for Microsoft accounts**, then try again.) Anyone who switches
-  the PC on then gets the desktop without a password.
-- Windows Update's **active hours** (Settings → Update & Security → Change active hours) stop it restarting the PC
+  the PC on then gets the desktop without a password. Windows Update's **active hours** stop it restarting the PC
   during services.
+- When the PC has just started, the default show opens (Settings → Starting and quitting: **Last loaded**, a show,
+  or **None (lights off)**) with every light black; reopening CentraLight carries on as it was.
 
-### Stream Deck (and phones)
+## What's in it
 
-While the app runs, every action has a web address on this PC, so a Stream Deck key can fire it:
+- **Dashboard:** the inputs as tiles: send one to **Base** (with its transition) or a copy to the **Overlay** on top;
+  the Festoon, Key lights and Master faders; **Cut to black** and **Fade to black** (click: the colour lights; hold:
+  everything); show variables; the show's notes.
+- **Console:** a hands-on lighting desk. Choose lights on the map (click, Ctrl-click, a box, groups), set their
+  brightness and colour, fans, every channel in Advanced, and chases (steps, speed with Tap, crossfade, directions,
+  a step on each beat). What it sets wins until **Release**; **Save as input** keeps a look or a chase as an input.
+- **Editor:** inputs from Colour, Paint, Image, Video, NDI and Lights elements on four tracks; masks as
+  black-and-white pictures; expressions (`wave(time, 0.25)`, `0.2 + 0.8 * audio.bass`); timed sequences with
+  keyframes; transitions.
+- **Layout:** where each light is (drag its dot), Identify, saved layouts, and notes in `fixture_map.csv`.
+- **Automation:** "when these conditions are met, do this" (times, days, sunset, the screen feed, sound, variables),
+  for the show, and **Global automations** for the whole app (Sundays 08:30 → load the Morning show, say).
+- **Sound:** Settings → Audio listens to this PC's output (or an input) for `audio.level`, `audio.bass`, `audio.mid`,
+  `audio.treble`, `audio.beat` and `audio.pitch`.
 
-1. In the **Elgato Stream Deck** app, drag a **Website** action (System) onto a key.
-2. Paste a URL, e.g. `http://127.0.0.1:8746/api/input/warm-white`, and tick **GET request in background**
-   (otherwise a browser window opens each time).
-3. Bitfocus **Companion**: the CentraLight module (in the `companion` folder; `companion\README.md` has the steps)
-   lights its keys with what's happening. Companion's **Generic HTTP → GET** with the same URLs works too.
+## Shows, files and the AI guide
 
-Open <http://127.0.0.1:8746/> in a browser for the full list (with buttons for every input), or click the
-**Remote** chip at the top of the app. The Editor's **Copy Stream Deck URLs** button copies one input's URLs.
-Some useful ones:
+- A show is everything above (inputs, variables, automations, the lights and layouts, media), in its own folder in
+  `Documents\CentraLight Shows`; changes save by themselves. The header's **Show ▾** loads, makes, copies, renames,
+  imports and exports them (`.clshow` files). The global automations are in `_Global automations` there.
+- Settings, `live.json` (what was playing) and `session.log` (for when something goes wrong) are in
+  `%LOCALAPPDATA%\CentraLight`.
+- **Inputs made by AI:** **Create with AI** on the **+ New input** tile, or the sparkle on a tile to change one: copy
+  the prompt into any AI chat and paste its reply back (it's checked and previewed first). AI tools that work in
+  folders (Claude Code, Cursor) can work in the show folder (Settings → AI → **Open show folder**): they read
+  `AI_GUIDE.md` there, and what they write appears straight away (Ctrl+Z undoes it).
+
+## Stream Deck, Companion and phones
+
+While CentraLight runs, every action has a web address on this PC. Open <http://127.0.0.1:8746/> (or click the
+**Remote** chip) for all of them, with a button for each input: a phone remote too.
+
+- **Bitfocus Companion** (5.1 or later): the CentraLight module in `companion\` lights its keys with what's happening
+  (the input on Base, the Overlay, black, countdowns, the Console) and has an action for everything.
+  `companion\README.md` has the steps: Modules → **Import module package** → `companion\centralight-1.0.0.tgz`.
+- **Elgato Stream Deck app:** a **Website** action with a URL such as `http://127.0.0.1:8746/api/input/warm-white`,
+  with **GET request in background** ticked.
 
 | What | URL |
 |---|---|
@@ -55,39 +74,23 @@ Some useful ones:
 | The Overlay | `/api/overlay/clear` (Clear all), `/api/overlay/toggle` (or `/on`, `/off`: off hides it without emptying it) |
 | Set a show variable | `/api/var/speed?value=0.7` (colours: `?value=FF6F59`; switches: `on`, `off`, `toggle`) |
 | Key lights | `/api/house/key-lights?level=0.6&fade=3`, `/api/house/key-lights/toggle` |
-| Master, Cut / Fade to black | `/api/master?level=0.8`, `/api/black/cut`, `/api/black/fade` (`?all=1`: the Festoon and Key lights too; `?seconds=2`, or else the time in Settings) |
+| Master, Cut / Fade to black | `/api/master?level=0.8`, `/api/black/cut`, `/api/black/fade` (`?all=1`: the Festoon and Key lights too) |
 | Load a show | `/api/show/central-church` (its folder's name, or its name); `/api/shows` lists them |
 | A global automation | `/api/global-automation/sunday-morning/run` (or `/enable`, `/disable`) |
-| The Console | `/api/live/release` (Release all; `?lights=slimpar-101,slimpar-102`: just those), `/api/live/tap`, `/next`, `/pause`, `/resume`, `/speed?bpm=120` (its chase) |
+| The Console | `/api/live/release` (Release all; `?lights=slimpar-101,slimpar-102`: just those), `/api/live/tap`, `/next`, `/pause`, `/resume`, `/speed?bpm=120` |
 
-Inputs, variables, house lights, automations and layouts are the loaded show's: a URL for something that isn't in it answers 404 "not in this show". A Stream Deck **Multi Action** can pair a vMix key with a lights URL. The remote only answers this PC unless
-Settings → Remote → **Allow other computers and phones** is ticked; they then need the key shown there
-(`?key=…`). Requests that a web page in a browser makes for another website are always refused.
-
-The console scripts below still work, and stay the fallback until the app has been tested on the lights.
-
-Run the app's tests (about five minutes; they never touch the lights):
-
-```bat
-.venv\Scripts\python.exe -m unittest discover -s tests -t .
-```
-
-## What it does
-
-- Finds the NDI source from **Media Background Pane** (any source whose name contains `NDI_SOURCE` in `ndi_pixel_mapper.py`)
-- Averages the colour of each light's screen region (default: all 8 SlimPARs follow the whole screen; the festoon and key lights don't follow it)
-- Sends DMX straight out of a Eurolite USB-DMX512 PRO Cable Interface — no MagicQ or lighting desk needed. Art-Net is still available as an option.
-- Esc in the terminal window stops the script and turns the lights off
-
-## Hardware
-
-PC USB → Eurolite USB-DMX512 PRO Cable Interface → 3-pin XLR → lights.
-
-The Eurolite shows up as a COM port (FTDI chip, VID 0403 / PID 6001). The scripts find it automatically, and Windows installs the FTDI driver itself. Close MagicQ, QLC+ or any other lighting software first: only one program can use the dongle at a time.
+Inputs, variables, house lights, automations and layouts are the loaded show's: a URL for something that isn't in it
+answers 404 "not in this show". The remote only answers this PC unless Settings → Remote → **Allow other computers
+and phones** is ticked; they then need the key shown there (`?key=…`). Requests a web page makes for another website
+are always refused.
 
 ## The lights
 
-`fixtures.py` holds the patch, from the MagicQ show `Central Church.shw` (DMX universe 1) and checked in the room on 2 Nov 2026:
+PC USB → Eurolite USB-DMX512 PRO Cable Interface → 3-pin XLR → lights. The Eurolite shows up as a COM port (FTDI,
+VID 0403 / PID 6001); CentraLight finds it by itself, and Windows installs the driver.
+
+A new show starts from the church's patch (`centralight\fixtures.py`, from the MagicQ show `Central Church.shw`,
+universe 1, checked in the room on 2 Nov 2026); each show keeps its own lights in its `show.json` (the Layout tab):
 
 | Start channel | Light | Type | Group |
 |---|---|---|---|
@@ -97,82 +100,23 @@ The Eurolite shows up as a COM port (FTDI chip, VID 0403 / PID 6001). The script
 | 41, 68 | SlimPAR 105, 108 | Chauvet SlimPAR Q12 USB, 9-channel mode | Side Fill |
 | 50, 59 | SlimPAR 106, 107 | Chauvet SlimPAR Q12 USB, 9-channel mode | Pillars |
 
-Nothing answers on channels 2 and 3, so they're left out.
+Nothing answers on channels 2 and 3. A SlimPAR's nine channels are red, green, blue, amber, colour macro, strobe,
+program, dimmer and dimmer speed: inputs set the colour with the dimmer at full; the Console can set them all.
 
-In 9-channel mode a SlimPAR's channels are red, green, blue, amber, colour macro, strobe, program, **dimmer**, dimmer speed. The scripts set the dimmer (8th channel) to full and leave the effect channels at 0, so only red, green and blue change. If a light is re-addressed, change `fixtures.py`: the test scripts and the mapper all read it.
+## Fonts
 
-## Requirements
+The app uses the church's Futura PT fonts. They aren't in git: `run.bat` copies them once from
+`G:\My Drive\Video Projection\Brand\Fonts\Futura PT` into `fonts\`. Without them CentraLight uses Windows' own fonts.
 
-- Windows
-- [Python 3](https://www.python.org/)
-- [NDI Runtime](https://ndi.video/tools/)
-- Media Background Pane running (it sends the NDI feed the lights follow)
-- Eurolite USB-DMX512 PRO Cable Interface
+## For whoever works on it
 
-## Install
-
-In this folder:
-
-```bat
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-## Test the lights (no video)
-
-```bat
-.venv\Scripts\python.exe usb_dmx_patch_test.py
-```
-
-It turns every light on white so you can count them, then **Left / Right** goes through them one at a time. **C** changes colour, **N** saves a note of where the lit light is to `fixture_map.csv`, and **Esc** stops (lights off).
-
-`usb_dmx_test.py` is a lower-level check of the dongle and cable: it chases red / green / blue / white on raw channels 1–6.
-
-## Run pixel mapping
-
-1. Start Media Background Pane.
-2. Plug in the Eurolite and close any other lighting software (including the test scripts).
-3. Run:
-
-```bat
-.venv\Scripts\python.exe ndi_pixel_mapper.py
-```
-
-Press **Esc** in that window to stop; the lights go off.
-
-If it cannot find the feed, it prints the NDI sources it did see. Start Media Background Pane, or if its NDI name was changed in its settings, set `NDI_SOURCE` in `ndi_pixel_mapper.py` to match.
-
-## Light mapping
-
-Edit `LIGHTS` near the top of `ndi_pixel_mapper.py`. Each entry is a light name from `fixtures.py` and the screen region it follows, as fractions of the frame (`X`, `Y`, `Width`, `Height` from 0.0 to 1.0):
-
-```python
-{"name": "SlimPAR 101", "region": (0.0, 0.0, 0.5, 1.0)},  # left half of the screen
-{"name": "SlimPAR 108", "region": (0.5, 0.0, 0.5, 1.0)},  # right half
-```
-
-The festoon and key lights aren't RGB, so they don't follow the screen. The script still sends every DMX channel, so while it runs they sit at the level in `STATIC_LEVELS`: 0 (off, the default) to 255 (full).
-
-## Art-Net / MagicQ (optional)
-
-Set `OUTPUT = "artnet"` in `ndi_pixel_mapper.py` to send Art-Net instead of using the USB dongle, for example to MagicQ or an Art-Net node. The target is `ARTNET_IP` (default `192.168.1.16`), universe `UNIVERSE` (default 0).
-
-`artnet_test.py` is a no-NDI check of that route: it chases R/G/B/W on channels 1–6 over Art-Net.
-
-```bat
-.venv\Scripts\python.exe artnet_test.py
-.venv\Scripts\python.exe artnet_test.py --ip 127.0.0.1
-.venv\Scripts\python.exe artnet_test.py --ip 192.168.1.16 --broadcast
-```
-
-MagicQ setup for Art-Net in:
-
-1. **SETUP → VIEW DMX I/O** — Universe 1: Status **Enabled**, In Type **Art-Net**, In Uni **0**
-2. Set **Test** on that universe to **Input** (forces input onto output while testing)
-3. **SETUP → VIEW SETTINGS** — Network IP Address = this PC’s LAN IP
-4. **OUT → VIEW CHANS → VIEW DMX → VIEW ART-NET** — packets should leave 0
-5. Same window → **VIEW INPUTS** — channels should move
-
-## Assets
-
-`Assets/` has the CentraLight logo: `CentraLight Logo.svg` (its source) and PNGs at 1024 and 4096 pixels. The app uses the 1024 one for its window, taskbar and tray icon (and draws the same circles itself if it's missing), and `launcher\icon.ico` (CentraLight.exe's icon) and `launcher\clshow.ico` (.clshow files' icon) are made from it.
+- Requirements: Windows, [Python 3](https://www.python.org/) (it's built and tested on 3.14), the [NDI Runtime](https://ndi.video/tools/) (for
+  the screen feed), and Media Background Pane for Follow screen.
+- The tests (about ten minutes; they never touch the lights or your files):
+  `.venv\Scripts\python.exe -m unittest discover -s tests -t .`
+- `docs\BUILD_LOG.md` is the history of how it was built and why; `docs\RIG_CHECKLIST.md` is what to try on the
+  lights after a change.
+- `tools\`: the soak test (`soak.py`: the whole app for hours, Simulated, watching memory and CPU), the launcher and
+  icon builders, the Companion module's builder, and `tick_timing.py`.
+- `Assets\` has the logo (`CentraLight Logo.svg` and PNGs at 1024 and 4096 pixels); the app uses the 1024 one, and
+  `launcher\icon.ico` and `launcher\clshow.ico` are made from it.

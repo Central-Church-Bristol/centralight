@@ -1,4 +1,6 @@
-# Wednesday 4 Nov, 3pm — trying the CentraLight app on the real lights
+# The rig checklist: trying CentraLight on the real lights
+
+(First used on Wednesday 4 Nov, 3pm; each change since added its own steps below.)
 
 Everything so far was built and tested **without the lights** (Simulated output, fake dongles, test NDI
 sources). This is the checklist for the room. Tick things off as you go; if anything misbehaves, note the
@@ -15,8 +17,8 @@ cd C:\Users\avbri\Documents\Centralight
 - [ ] **Restart Media Background Pane first.** On 2 Nov its picture froze (its compositor stopped), and the
       copy that's running still has the old video code that plays clips too fast (the other Claude session
       fixed that in its files; a restart picks the fix up). Then play something colourful.
-- [ ] Nothing else is using the Eurolite: close MagicQ, QLC+, and any `usb_dmx_test.py`,
-      `usb_dmx_patch_test.py` or `ndi_pixel_mapper.py` windows.
+- [ ] Nothing else is using the Eurolite: close MagicQ, QLC+, and any of the old console scripts' windows (the
+      pixel mapper or the dongle tests, if the main folder still has them).
 - [ ] The Eurolite is plugged in (the lights are currently blacked out: the dongle is repeating an all-zero frame).
 - [ ] If something goes wrong, the app's log is here (open it in Notepad):
 
@@ -106,7 +108,7 @@ They're one-off buttons, not a switch: the next input you send lights things aga
       dot: how much of a picture it averages is the picture element's **Area** (step 2).
 - [ ] Click a dot: that light flashes white three times.
 - [ ] Type where each light is in the **Where** column (e.g. "front left, above the drums"). It's saved to
-      `fixture_map.csv`, the same file `usb_dmx_patch_test.py` uses.
+      `fixture_map.csv` (the same file, in the same format, the old patch test used).
 - [ ] Select some dots and try **Test colours** (Red, Green, Blue, White, Off), then **Stop test**.
 - [ ] Go back to the **Dashboard**: Identify and test colours switch off by themselves.
 - [ ] Back on the Dashboard, with Follow screen on Base, play something with different colours on the left

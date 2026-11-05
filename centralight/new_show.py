@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fixtures import PATCH, PROFILES
+from .fixtures import PATCH, PROFILES
 
 from .layouts import ensure_layouts
 from .model import ROLE_COLOUR, ROLE_HOUSE, Fixture, HouseLight, Input, MapSpot, Show, slugify

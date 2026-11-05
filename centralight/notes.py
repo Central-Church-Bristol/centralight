@@ -1,6 +1,6 @@
 """Where each light is: fixture_map.csv next to main.py.
 
-It's the same file, in the same format, as usb_dmx_patch_test.py writes (name, group,
+It's the same file, in the same format, as the old patch-test script wrote (name, group,
 start_ch, channels, profile, where), so notes made in either place show up in both.
 Notes are matched to lights by name.
 """

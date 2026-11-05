@@ -8,7 +8,7 @@
   map (positions and the room photo); Save as, Rename and Delete are there too.
 - Undo / Redo / History at the top right cover everything on this page.
 - Lights: names, groups, DMX addresses (overlaps are flagged) and a note of where each
-  light is, saved to fixture_map.csv (the same file usb_dmx_patch_test.py uses).
+  light is, saved to fixture_map.csv (Excel can open it).
 - Identify: every light shows its own colour, the same colour as its dot.
 - Test: red / green / blue / white / off on the selected lights, or all of them.
 Identify and test colours switch off when you leave this page.
@@ -55,7 +55,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from fixtures import PROFILES
+from ..fixtures import PROFILES
 
 from ..commands import FlashLights, SetIdentify, SetTestColour
 from ..elements import media_path

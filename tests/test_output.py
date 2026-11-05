@@ -6,7 +6,7 @@ import random
 import time
 import unittest
 
-from fixtures import PATCH, set_fixture
+from centralight.fixtures import PATCH, set_fixture
 
 from centralight.new_show import fixture_id, show_from_patch
 from centralight.output import (
@@ -38,7 +38,7 @@ def wait_for(condition, timeout: float = 2.0) -> bool:
 
 class EncodeTests(unittest.TestCase):
     def test_matches_set_fixture_for_random_looks(self) -> None:
-        """Parity: encode_dmx gives the same bytes as fixtures.set_fixture (the console scripts)."""
+        """Parity: encode_dmx gives the same bytes as fixtures.set_fixture (how the first console scripts did it)."""
         show = show_from_patch()
         rng = random.Random(4)
         for _ in range(200):

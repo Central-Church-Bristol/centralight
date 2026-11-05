@@ -42,7 +42,7 @@ class Settings:
     remote_port: int = DEFAULT_REMOTE_PORT
     remote_lan: bool = False
     remote_key: str = ""
-    start_with_windows: bool = False  # in the tray at sign-in; switched on by hand (WEDNESDAY_TESTS.md) once it has been tried
+    start_with_windows: bool = False  # in the tray at sign-in; switched on by hand (docs/RIG_CHECKLIST.md) once it has been tried
     clshow_files: bool = True  # Windows opens .clshow files (exported shows) with CentraLight (filetype.py)
     audio_source: str = ""  # "" off, "output" this PC's output, or an input's name (audio.AUDIO sources)
     audio_attack: float = 0.05  # seconds for audio values to rise

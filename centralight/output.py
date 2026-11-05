@@ -24,7 +24,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Protocol
 
-from fixtures import PROFILES
+from .fixtures import PROFILES
 
 from .console import channels_of
 from .log import log_exception, log_info
@@ -150,7 +150,7 @@ class DeviceSpec:
 
 
 def _open_usb(port: str | None) -> Device:
-    from dmx_output import UsbDmxOutput
+    from .dmx_output import UsbDmxOutput
 
     # UsbDmxOutput prints the COM port list; keep that out of the app's console while it retries
     with contextlib.redirect_stdout(io.StringIO()):
@@ -158,7 +158,7 @@ def _open_usb(port: str | None) -> Device:
 
 
 def _open_artnet(ip: str, universe: int) -> Device:
-    from dmx_output import ArtNetOutput
+    from .dmx_output import ArtNetOutput
 
     return ArtNetOutput(ip, universe)
 

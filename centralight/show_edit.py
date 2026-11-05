@@ -10,7 +10,7 @@ import re
 from dataclasses import replace
 from typing import Any
 
-from fixtures import PROFILES
+from .fixtures import PROFILES
 
 from .layouts import forget_lights, sync_active_layout
 from .model import (

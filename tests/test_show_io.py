@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from fixtures import PATCH
+from centralight.fixtures import PATCH
 
 from centralight import files, show_io
 from centralight.model import Input, Transition

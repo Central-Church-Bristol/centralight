@@ -1,4 +1,4 @@
-"""Show edits and the fixture_map.csv notes (shared with usb_dmx_patch_test.py)."""
+"""Show edits and the fixture_map.csv notes (in the format the old patch-test script wrote, so its file still reads)."""
 
 from __future__ import annotations
 
@@ -79,14 +79,18 @@ class NotesTests(unittest.TestCase):
         self.assertEqual(notes["SlimPAR 102"], "")
         self.assertTrue(self.path.read_bytes().startswith(b"\xef\xbb\xbf"))  # Excel-friendly, like the patch test
 
-    def test_same_file_as_the_patch_test(self) -> None:
-        import usb_dmx_patch_test as patch_test
-
-        with mock.patch.object(patch_test, "MAP_FILE", self.path):
-            patch_test.save_notes({"SlimPAR 105": "left wall"})
-            self.assertEqual(load_notes(self.path)["SlimPAR 105"], "left wall")
-            save_notes(show_from_patch(), {"SlimPAR 106": "pillar, left"}, self.path)
-            self.assertEqual(patch_test.load_notes()["SlimPAR 106"], "pillar, left")
+    def test_same_file_as_the_old_patch_test(self) -> None:
+        """A fixture_map.csv the old patch-test script wrote (its exact format) reads, and ours is written the same way."""
+        old = ("\ufeffname,group,start_ch,channels,profile,where\r\n"
+               "SlimPAR 101,Top Wash,10,9,slimpar9,\r\n"
+               "SlimPAR 105,Side Fill,46,9,slimpar9,left wall\r\n")
+        self.path.write_bytes(old.encode("utf-8"))
+        self.assertEqual(load_notes(self.path)["SlimPAR 105"], "left wall")
+        save_notes(show_from_patch(), {"SlimPAR 106": "pillar, left"}, self.path)
+        text = self.path.read_bytes().decode("utf-8-sig")
+        self.assertTrue(text.startswith("name,group,start_ch,channels,profile,where\r\n"))
+        self.assertIn("SlimPAR 106,Pillars,", text)
+        self.assertEqual(load_notes(self.path)["SlimPAR 106"], "pillar, left")
 
     def test_missing_or_broken_file_means_no_notes(self) -> None:
         self.assertEqual(load_notes(self.path), {})

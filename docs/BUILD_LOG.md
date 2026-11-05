@@ -5,7 +5,7 @@ while you're away (2 Nov → Wednesday 4 Nov 2026, 3pm). Newest news first in ea
 
 **The real lights have not been touched.** The app's output defaults to **Simulated** (nothing is opened or
 sent), every test uses fake outputs (a guard makes it impossible for a test to open a COM port), and COM3 has
-never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TESTS.md`.
+never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 
 ## Status
 
@@ -64,6 +64,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | **M16: the Stream Deck through Companion** — CentraLight's live connection (`/api/ws`, pushing what's happening) | **done** (5 Nov, 17:37) |
 | — the CentraLight module for Companion 5.1: actions, feedbacks, variables, presets; built as `companion\centralight-1.0.0.tgz` | **done** (5 Nov, 17:37) |
 | A look at the Console page and the Lights element (two reviewers, 28 findings, all fixed) | **done** (5 Nov, 18:08) |
+| **M17: the repo clean-up** (the app alone: the console scripts gone, the output and patch code in the package) | **done** (5 Nov, 18:20) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -79,7 +80,7 @@ Run all the tests (about five minutes, including the layout check at every scali
   Your checkout is still on `main` with every file as it was: this checkout is shared with other Claude
   sessions, so the commits were made without switching branches. To make the branch the checked-out one
   without touching a single file, run `git symbolic-ref HEAD refs/heads/claude/centralight-gui` and then
-  `git reset -q` (step 21 of `WEDNESDAY_TESTS.md`). A plain `git switch claude/centralight-gui` refuses, because
+  `git reset -q` (step 21 of `RIG_CHECKLIST.md`). A plain `git switch claude/centralight-gui` refuses, because
   the app's files are already there (untracked, as far as `main` knows). Tried on a copy of the repository.
 - Your own earlier changes to the logo files in `Assets\` aren't in the commits (they're yours to commit); the
   app draws its logo itself if `CentraLight Logo 1024.png` isn't there.
@@ -114,6 +115,25 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
+
+## M17: the repo clean-up (5 Nov, evening)
+
+As you asked on 5 Nov ("a nice clean repo that just contains the centralight app"):
+- **Gone** (git's history keeps them): `ndi_pixel_mapper.py`, `usb_dmx_test.py`, `usb_dmx_patch_test.py`,
+  `artnet_test.py` (the console scripts the app replaced), and `tools\ndi_follow_check.py` (a one-off check).
+- **Moved into the app's package:** `dmx_output.py` (the Eurolite USB and Art-Net output) and `fixtures.py` (the
+  church's patch, now only what a new show starts from) are in `centralight\`. The test that the app sends the same
+  bytes as the first scripts did now checks the moved code; the notes file (`fixture_map.csv`) is still read and
+  written in the old script's format.
+- **The rig checklist** is `docs\RIG_CHECKLIST.md` now (it was `WEDNESDAY_TESTS.md`; older entries in this log use
+  the old name).
+- **The README** is about the app alone: starting it, what's in it, shows and the AI guide, the Stream Deck and
+  Companion, the lights, the fonts.
+- `requirements.txt` stays as it was: the app uses all of it. The main folder's own copies of the removed scripts go
+  when it's next updated.
+- **Checked:** nothing imports a removed file; the full suite twice; the app started from a fresh copy (Simulated, with
+  and without the fonts). `run.bat` on a brand-new copy would install the packages from the internet, so that's left
+  for when it's next needed.
 
 ## A look at the Console page and the Lights element (5 Nov, evening)
 

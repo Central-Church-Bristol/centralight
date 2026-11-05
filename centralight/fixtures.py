@@ -2,11 +2,10 @@
 The Central Church lights: what each one is and which DMX channels it uses.
 
 PATCH comes from the MagicQ show "Central Church.shw" (universe 1), checked in the
-room with usb_dmx_patch_test.py on 2 Nov 2026: every SlimPAR and the festoon answer
-as labelled, both key lights are on channel 4, and nothing answers on channels 2
-or 3 (MagicQ patches dimmers there), so those two are left out.
-If a light is re-addressed, change it here: the patch test and the pixel mapper
-both read this file.
+room on 2 Nov 2026: every SlimPAR and the festoon answer as labelled, both key lights
+are on channel 4, and nothing answers on channels 2 or 3 (MagicQ patches dimmers
+there), so those two are left out. A new show starts from this patch (new_show.py);
+a show's own lights are in its show.json (the Layout tab), so this is only the start.
 """
 
 from __future__ import annotations

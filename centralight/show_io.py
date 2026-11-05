@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
-from fixtures import PROFILES
+from .fixtures import PROFILES
 
 from .files import forget_written, json_text, loads_json_bytes, read_json, write_atomic, write_json_atomic
 from .layouts import ensure_layouts
