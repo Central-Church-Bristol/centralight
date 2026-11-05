@@ -49,7 +49,8 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | A look at M14 (three reviewers, 21 findings): the default show's nine | **done** (5 Nov, 03:05) |
 | — and the Overlay and Dashboard's six (one went with the clean-up) | **done** (5 Nov, 03:10) |
 | — and Colour, Split and mask shapes' six | **done** (5 Nov, 03:15) |
-| A second look (two reviewers: item 11, the clean-up and those fixes; 16 findings) | **done** (5 Nov, 04:10; 945 tests pass) |
+| A second look (two reviewers: item 11, the clean-up and those fixes; 16 findings) | **done** (5 Nov, 04:10; 945 tests pass twice) |
+| A 3-hour soak of M14 (show loads, video copies on the Overlay, countdowns, a linked video) | **done** (5 Nov, 07:16; no errors; memory level after the first hour, threads flat) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -265,6 +266,25 @@ cause was older than M14's changes (tests had just never lined up to show it):
 - **Found on the way, not reachable today:** if Qt ever copied one of CentraLight's drawn icons in order to change
   it, the copy's drawing code would be freed straight away (a PySide quirk), and the app would crash. Nothing in
   CentraLight changes an icon after making it, so it can't happen now. It's noted as a follow-up.
+
+## A 3-hour soak of M14 (5 Nov, 04:16–07:16)
+
+The whole app, as it runs for you but with Simulated output and its own temporary settings and shows (never your
+lights or files), for three hours, following a test NDI picture, while the soak tool:
+- loaded the other show every 2 minutes (90 loads, every one answered);
+- put two copies of a linked video on the Overlay every 90 seconds, a second apart, and cleared them 20 seconds later
+  (234 copies, 117 clears): each copy with a video reader of its own, taken over or closed afterwards;
+- set a show variable every 10 minutes so an automation counted down and faded to black, then came back (16 times, 26
+  runs waited for their countdown);
+- replaced the linked video's original every 30 minutes (5 times: 12 copies made and swapped in).
+
+Results:
+- **No errors:** the session log has 250 lines, none of them an error.
+- **Memory** rose for the first hour as the pictures and videos filled their caches (143 MB to about 205), then stayed
+  level: 210 MB, 210, 211 and 212 for the next four half hours, the same slow rise of under 1 MB an hour that every
+  soak shows (it's NDI's own).
+- **Threads** stayed between 42 and 56 the whole time (44 at the end), so no video reader was left open.
+- **CPU** averaged 6.6 % of one core (0.4 % of the PC), at most 17 %.
 
 ## A look at M14 (5 Nov, early morning)
 
