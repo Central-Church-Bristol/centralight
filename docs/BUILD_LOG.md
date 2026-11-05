@@ -38,6 +38,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — 3 tick boxes, 1 rename, 2 Editor opens paused, 7 Delete removes a shape | **done** (4 Nov, 22:15) |
 | — 4 one Overlay (copies, red boxes, hold for a flash, drag tiles to move them) | **done** (4 Nov, 23:30) |
 | — 9 a Colour element, and Paint without a fill | **done** (5 Nov, 01:05; a test-suite crash found on the way was fixed first; 853 tests pass twice) |
+| — 8 shapes in masks (Show / Hide rectangles and ellipses, Start with, Mask mode with Layer mode's tools) | **done** (5 Nov, 01:25; 866 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -124,6 +125,28 @@ The small ones first (3, 1, 2, 7):
     change; it's greyed out if there's no empty track. Setting the Background to None makes it an ordinary Paint
     element.
 - The AI guide (and so the AI prompts) teaches Colour, its examples use it, and the input schema has it.
+
+**8. Shapes in masks.**
+- **Mask mode has Layer mode's tools now:** Select, Rectangle and Ellipse (the same buttons), the **Brush** (paints
+  where the element is hidden) and the **Eraser** (rubs that out, so it shows again) instead of Show and Hide, and the
+  **Light** bulb (click a light's dot to tick or untick it) instead of the Lights button. Each tooltip says what the
+  tool does in Mask mode. Bucket, Gradient and the eyedropper aren't there. Brush size and softness work as in Layer
+  mode.
+- **Mask shapes:** a rectangle or ellipse drawn in Mask mode (Shift: square, circle) is a shape of the mask, edited on
+  the Selected view like a Paint shape: position, size, rotation and softness, each with keyframes or a formula. Each
+  one **Shows** or **Hides** the element inside it (a Hide shape's outline is red). The details panel lists them under
+  **Mask shapes**, with + Rectangle, + Ellipse, Show / Hide, Forward / Back and Remove, and the selected one's
+  settings. Delete removes the selected one in the Selected view. Picking one in the list switches the Selected view
+  to Mask mode, so its handles show.
+- **Start with: Shown everywhere / Hidden everywhere** (on the Mask shapes panel). Shown everywhere is the default, as
+  before. With Hidden everywhere, a Show rectangle means "only here".
+- **How a light works out its mask, at its dot:** where the mask starts, then the painted strokes, then the shapes in
+  list order, each showing or hiding by its softness, and the per-light ticks on top (an unticked light is left alone,
+  whatever the shapes say). A mask with no strokes or shapes shows everywhere, as before. The red tint in Mask mode
+  shows the same thing across the picture.
+- **An animated mask works:** a rectangle sliding across reveals the lights one by one (the AI guide has this as an
+  example, and explains mask shapes; the input schema has them).
+- Masks from before look exactly the same, and files keep mask shapes as they are (tests check both).
 
 **A crash the tests found (fixed).** With item 9's tests added, the whole test suite crashed part-way through. The
 cause was older than M14's changes (tests had just never lined up to show it):
@@ -1282,6 +1305,16 @@ Problems the tests found and that are fixed:
     those. When nothing would change, the line says it looks exactly the same.
   - **An input saved with a Colour element shows nothing for that element in the version before M14** (it doesn't
     know Colour), in case you ever go back to it.
+  - **A new mask shape does something you can see:** it's a Hide shape on a mask that starts shown, and a Show shape on
+    one that starts hidden everywhere (a Show shape on a shown mask would change nothing). Show / Hide changes it.
+  - **The mask's painting can only hide** (as before: the Brush hides, the Eraser rubs that out), and it comes before
+    the shapes, as the plan says. So on a mask that starts hidden everywhere, the Brush and Eraser change nothing:
+    Show shapes say where it shows.
+  - **Mask shapes are placed on the screen**, like the mask's painting (not in the element's own picture), so moving or
+    scaling the element doesn't move its mask. They have no colour or opacity of their own.
+  - **Mask mode starts on the Light tool** (ticking lights), as it did; drawing a shape, or picking one in the Mask
+    shapes list, switches to Select.
+  - **A mask shape written without "mode"** (by hand, or an AI tool) hides, like the Editor's default on a shown mask.
 - **M13 choices** (all easy to change):
   - **The week schedule is a tab beside the automation's editor** (Automation | Week schedule) rather than squeezed
     in beside the Coming up list: at 1280×720 that panel is too short for a week, and the left column too narrow.

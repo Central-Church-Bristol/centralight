@@ -72,6 +72,7 @@ class EditorPage(QWidget):
         self.input_id = ""
         self.element_id = ""
         self.shape_id = ""
+        self.mask_shape_id = ""  # the selected shape of the element's mask (M14: edited in the Selected view's Mask mode)
         self.playhead = 0.0  # the input's time shown in the viewports (seconds)
         self.playing = False  # (an input opens paused, M14: press play to see it move)
         self._play_origin = time.monotonic()  # when time 0 would have been, while playing
@@ -188,6 +189,7 @@ class EditorPage(QWidget):
         # --- wiring
         self.timeline.element_selected.connect(self.select_element)
         self.details.shape_selected.connect(self._shape_from_details)
+        self.details.mask_shape_selected.connect(self._mask_shape_from_details)
         self.details.element_removed.connect(lambda: self.select_element(""))
         self.selected_canvas.shape_selected.connect(self._shape_from_viewport)
         self.selected_canvas.shape_remove_requested.connect(self._remove_shape_by_key)
@@ -199,7 +201,7 @@ class EditorPage(QWidget):
         self.selected_canvas.load_picture = self._picture_now
         self.selected_canvas.painted.connect(self._painted)
         self.selected_canvas.transform_changing.connect(self._picture_dragged)
-        self.selected_panel.mode_changed.connect(lambda _on: self._request())
+        self.selected_panel.mode_changed.connect(self._mask_mode_changed)
         self.palette.element_clicked.connect(self.timeline.add_to_first_empty)
         self.palette.transition_clicked.connect(self.timeline.set_transition_kind)
         document.changed.connect(self._show_changed)
@@ -258,6 +260,7 @@ class EditorPage(QWidget):
         self.input_id = input_id
         self.element_id = ""
         self.shape_id = ""
+        self.mask_shape_id = ""
         self.playhead, self.playing, self._play_origin = 0.0, False, time.monotonic()  # (opens paused at the start)
         if self._entered:
             self.document.set_scope(self.undo_scope())
@@ -273,6 +276,7 @@ class EditorPage(QWidget):
     def select_element(self, element_id: str) -> None:
         self.element_id = element_id or ""
         self.shape_id = ""
+        self.mask_shape_id = ""
         self.timeline.set_selected(self.element_id)
         self.details.set_target(self.input_id, self.element_id or None, None)
         self._sync_scope()
@@ -281,20 +285,46 @@ class EditorPage(QWidget):
 
     def _shape_from_details(self, shape_id: str) -> None:
         self.shape_id = shape_id or ""
+        if shape_id and self.selected_canvas.mask_mode:
+            self.selected_panel.layer.setChecked(True)  # (a Paint shape's handles are in Layer mode)
+        self._sync_selected_view()
+
+    def _mask_shape_from_details(self, shape_id: str) -> None:
+        """A mask shape picked in the details panel's Mask shapes list: the Selected view goes to Mask mode, with Select,
+        so its handles show."""
+        self.mask_shape_id = shape_id or ""
+        if shape_id and not self.selected_canvas.mask_mode:
+            self.selected_panel.mask.setChecked(True)
+            self.selected_panel.select_tool.setChecked(True)
         self._sync_selected_view()
 
     def _shape_from_viewport(self, shape_id: str) -> None:
-        self.shape_id = shape_id or ""
-        self.details.select_shape(self.shape_id or None)
+        if self.selected_canvas.mask_mode:  # (a shape of the mask)
+            self.mask_shape_id = shape_id or ""
+            self.details.select_mask_shape(self.mask_shape_id or None)
+        else:
+            self.shape_id = shape_id or ""
+            self.details.select_shape(self.shape_id or None)
         self._sync_selected_view()
+
+    def _mask_mode_changed(self, _on: bool) -> None:
+        self._sync_selected_view()  # (each mode has its own selected shape)
+        self._request()
 
     def _remove_shape_by_key(self, shape_id: str) -> None:
         """Delete or Backspace in the Selected view (M14): the selected shape goes, as with Remove on the details panel
-        ("Remove Rectangle 2", one undo step). Never the element itself: that's the timeline's Delete."""
-        if not shape_id or shape_id != self.shape_id or self.show_data.read_only:
+        ("Remove Rectangle 2", one undo step), a mask shape in Mask mode. Never the element itself: that's the
+        timeline's Delete."""
+        if not shape_id or self.show_data.read_only:
             return
-        self.details.select_shape(shape_id)  # (the details panel removes the shape it shows)
-        self.details.remove_selected_shape()
+        if self.selected_canvas.mask_mode:
+            if shape_id == self.mask_shape_id:
+                self.details.select_mask_shape(shape_id)  # (the details panel removes the shape it shows)
+                self.details.remove_selected_mask_shape()
+            return
+        if shape_id == self.shape_id:
+            self.details.select_shape(shape_id)
+            self.details.remove_selected_shape()
 
     def _element(self):
         inp = self.current_input()
@@ -307,7 +337,7 @@ class EditorPage(QWidget):
         element = self._element()
         self.selected_canvas.time = self.element_time()
         self.selected_canvas.folder = self.show_data.folder
-        self.selected_canvas.set_element(element, self.shape_id)
+        self.selected_canvas.set_element(element, self.mask_shape_id if self.selected_canvas.mask_mode else self.shape_id)
         self.selected_panel.set_paint_tools(element is not None and element.get("kind") == "paint")
 
     def _sync_buttons(self) -> None:
@@ -372,7 +402,7 @@ class EditorPage(QWidget):
         self.timeline.set_playhead(self.playhead, self.playing)
         self.details.set_time()
         self.selected_canvas.time = self.element_time()
-        if self.shape_id or self.selected_canvas.selected_shape:
+        if self.shape_id or self.mask_shape_id or self.selected_canvas.selected_shape:
             self.selected_canvas.update()
 
     def _tick(self) -> None:
@@ -406,6 +436,7 @@ class EditorPage(QWidget):
         if self._element() is None:
             self.element_id = ""
             self.shape_id = ""
+            self.mask_shape_id = ""
         self.selected_canvas.set_show(show)
         self.result_canvas.set_show(show)
         self.result_panel.strip.set_show(show)
@@ -426,16 +457,23 @@ class EditorPage(QWidget):
     def _key_time(self) -> float:
         return self._drag_t if self._drag_t is not None else self.element_time()
 
+    def _shape_group(self) -> str:
+        """The shapes the Selected view edits now: the Paint element's, or (in Mask mode) the mask's."""
+        return "mask.shapes" if self.selected_canvas.mask_mode else "shapes"
+
     def _shape_dragged(self, element_id: str, shape_id: str, values: dict) -> None:
         if self.input_id:  # keyframed settings get a key at the playhead (where it was when the drag began)
-            self.document.preview(set_shape_values_at(self.show_data, self.input_id, element_id, shape_id, values, self._key_time()))
+            self.document.preview(set_shape_values_at(self.show_data, self.input_id, element_id, shape_id, values,
+                                                      self._key_time(), self._shape_group()))
 
     def _shape_drawn(self, shape_type: str, values: dict) -> None:
         if not self.input_id or not self.element_id:
             return
+        group = self._shape_group()
         show, shape_id = add_shape(self.show_data, self.input_id, self.element_id, shape_type,
-                                   values["x"], values["y"], values["w"], values["h"])
-        if shape_id and self.document.apply(show, f"Draw {'rectangle' if shape_type == 'rect' else 'ellipse'} {shape_id}"):
+                                   values["x"], values["y"], values["w"], values["h"], group=group)
+        what = ("mask " if group == "mask.shapes" else "") + ("rectangle" if shape_type == "rect" else "ellipse")
+        if shape_id and self.document.apply(show, f"Draw {what} {shape_id}"):
             self.selected_panel.select_tool.setChecked(True)
             self._shape_from_viewport(shape_id)
 

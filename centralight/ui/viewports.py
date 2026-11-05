@@ -5,8 +5,10 @@
   For a Paint element its shapes have handles: drag the middle to move, a corner to
   resize (Shift keeps the proportions), the round knob to rotate (Shift snaps to 15°).
   The Rectangle and Ellipse tools draw new shapes (Shift: square / circle). The painting tools
-  (brush, eraser, bucket, gradient, light colour) paint on a Paint element's strokes; in Mask
-  mode, Show and Hide paint the element's mask. The eyedropper picks the brush colour. An
+  (brush, eraser, bucket, gradient, light colour) paint on a Paint element's strokes. Mask
+  mode has the same Select, Rectangle and Ellipse for the mask's shapes (each shows or hides
+  the element), the Brush (hides) and Eraser (rubs that out) for its painting, and the Light
+  tool to tick or untick a light (M14). The eyedropper picks the brush colour. An
   Image, Video or NDI element's picture has a gizmo: drag it to move, a corner to scale, the
   knob to turn it.
 - Result: the whole input, with a strip underneath showing each light's colour,
@@ -44,7 +46,7 @@ from ..model import Show
 from ..output import RGB, to_byte
 from ..assets import ASSET_H, ASSET_W
 from ..params import evaluate, expression_of
-from ..step_names import element_name, shape_name
+from ..step_names import element_name, lower_first, mask_shape_name, shape_name
 from . import icons, theme
 from .light_view import rgb_colour
 from .widgets import Fader, FlowLayout
@@ -217,6 +219,22 @@ class ViewportCanvas(QWidget):
 
 PAINT_TOOLS = ("brush", "eraser", "bucket", "gradient", "light")  # paint on a Paint element's strokes
 MASK_TOOLS = ("show", "hide")  # paint an element's mask
+MASK_BRUSHES = {"brush": "hide", "eraser": "show"}  # Mask mode: the Brush hides, the Eraser rubs that out (M14)
+MASK_MODE_TOOLS = ("select", "rect", "ellipse", "brush", "eraser", "light")  # no bucket, gradient or eyedropper there
+TOOL_TIPS = {  # (in Layer mode, in Mask mode)
+    "select": ("Select, move, resize and rotate shapes (or the picture of an Image, Video or NDI element)",
+               "Select, move, resize and rotate the mask's shapes"),
+    "rect": ("Draw a rectangle (Shift: square)",
+             "Draw a rectangle on the mask (Shift: square): it hides the element there, or shows it if the mask starts "
+             "hidden everywhere"),
+    "ellipse": ("Draw an ellipse (Shift: circle)",
+                "Draw an ellipse on the mask (Shift: circle): it hides the element there, or shows it if the mask starts "
+                "hidden everywhere"),
+    "brush": ("Brush: paint on this Paint element", "Brush: paint where this element is hidden"),
+    "eraser": ("Eraser: rub out painting", "Eraser: rub out the mask's painting, so the element shows there again"),
+    "light": ("Light colour: click a light's dot to fill the patch it follows",
+              "Light: click a light's dot to tick or untick it (an unticked light is left alone by this element)"),
+}
 BRUSH_TOOLS = ("brush", "eraser", "show", "hide")
 PAINT_VERBS = {"brush": "brush stroke", "eraser": "eraser", "bucket": "bucket fill", "gradient": "gradient",
                "light": "light colour", "show": "mask: show", "hide": "mask: hide"}
@@ -271,8 +289,9 @@ class SelectedViewport(ViewportCanvas):
         self.update()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
-        """Delete or Backspace removes the selected shape (never the element: that's the timeline's Delete)."""
-        if (event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.selected_shape and not self.mask_mode
+        """Delete or Backspace removes the selected shape, a Paint shape or (in Mask mode) a mask shape (never the
+        element: that's the timeline's Delete)."""
+        if (event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.selected_shape
                 and self._drag is None and self._draw is None
                 and any(str(shape.get("id")) == self.selected_shape for shape in self.shapes())):
             self.shape_remove_requested.emit(self.selected_shape)
@@ -283,10 +302,20 @@ class SelectedViewport(ViewportCanvas):
     def _is_paint(self) -> bool:
         return self.element is not None and self.element.get("kind") == "paint"
 
+    def _shapes_here(self) -> bool:
+        """Can shapes be drawn and edited now? A Paint element's, in Layer mode; any element's mask shapes, in Mask mode."""
+        return self.element is not None and (self.mask_mode or self._is_paint())
+
     def shapes(self) -> list[Mapping]:
-        if not self._is_paint():
+        """The shapes being edited: the Paint element's, or (in Mask mode) the mask's."""
+        if not self._shapes_here():
             return []
-        return [s for s in (self.element.get("shapes") or ()) if hasattr(s, "get")]
+        if self.mask_mode:
+            mask = self.element.get("mask")
+            raw = mask.get("shapes") if hasattr(mask, "get") else None
+        else:
+            raw = self.element.get("shapes")
+        return [s for s in (raw or ()) if hasattr(s, "get")]
 
     def shape_geometry(self, shape: Mapping) -> tuple[QPointF, float, float, float]:
         """(centre, half width, half height, rotation in degrees) in widget pixels."""
@@ -382,14 +411,14 @@ class SelectedViewport(ViewportCanvas):
                 p = points[key]
                 painter.drawRect(QRectF(p.x() - HANDLE / 2 - 1, p.y() - HANDLE / 2 - 1, HANDLE + 2, HANDLE + 2))
             painter.drawEllipse(points["rotate"], HANDLE * 0.9, HANDLE * 0.9)
-        if self.mask_mode:
-            return
         for shape in self.shapes():
             centre, hw, hh, rotation = self.shape_geometry(shape)
             selected = shape.get("id") == self.selected_shape
             painter.save()
             painter.setTransform(self._transform(centre, rotation), True)
-            pen = QPen(QColor(theme.ACCENT if selected else "#FFFFFF"), 1.4 if selected else 1.0, Qt.PenStyle.SolidLine if selected else Qt.PenStyle.DashLine)
+            # (in Mask mode a Hide shape's outline is red, like what the mask hides; a Show shape's is white)
+            outline = theme.DANGER if self.mask_mode and shape.get("mode", "hide") != "show" else "#FFFFFF"
+            pen = QPen(QColor(theme.ACCENT if selected else outline), 1.4 if selected else 1.0, Qt.PenStyle.SolidLine if selected else Qt.PenStyle.DashLine)
             pen.setCosmetic(True)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -433,11 +462,12 @@ class SelectedViewport(ViewportCanvas):
     # ------------------------------------------------------------ painting
 
     def painting_tool(self) -> str:
-        """The tool that paints right now ("" = none): strokes on a Paint element, or the mask's brushes."""
+        """The tool that paints right now ("" = none): strokes on a Paint element, or the mask's brushes (in Mask mode
+        the Brush paints where the element is hidden, and the Eraser rubs that out)."""
         if self.element is None:
             return ""
         if self.mask_mode:
-            return self.tool if self.tool in MASK_TOOLS else ""
+            return MASK_BRUSHES.get(self.tool, "")
         return self.tool if self.tool in PAINT_TOOLS and self._is_paint() else ""
 
     def to_picture(self, point: QPointF, what: str) -> tuple[float, float]:
@@ -684,7 +714,7 @@ class SelectedViewport(ViewportCanvas):
         if event.button() != Qt.MouseButton.LeftButton:
             return super().mousePressEvent(event)
         point = event.position()
-        if self.tool == "dropper" and self.element is not None:
+        if self.tool == "dropper" and self.element is not None and not self.mask_mode:
             self._pick_colour(point)
             return
         tool = self.painting_tool()
@@ -693,12 +723,12 @@ class SelectedViewport(ViewportCanvas):
             return
         if self._begin_picture_drag(point):
             return
-        if self.mask_mode:
+        if self.mask_mode and self.tool == "light":  # (Mask mode's Light: tick or untick the light whose dot this is)
             light = self.light_at(point)
             if light is not None:
                 self.light_clicked.emit(light)
             return
-        if not self._is_paint():
+        if not self._shapes_here():
             return
         if self.tool in ("rect", "ellipse"):
             self._draw = (point, point)
@@ -787,7 +817,8 @@ class SelectedViewport(ViewportCanvas):
             mode, shape = self._drag["mode"], self._shape(self._drag["shape"])
             self._drag = None
             verb = {"move": "Move", "rotate": "Rotate"}.get(mode, "Resize")
-            self.shapes_changed.emit(f"{verb} {shape_name(shape)}" if shape is not None else f"{verb} shape")
+            name = (lower_first(mask_shape_name(shape)) if self.mask_mode else shape_name(shape)) if shape is not None else "shape"
+            self.shapes_changed.emit(f"{verb} {name}")
 
     def _constrained(self, start: QPointF, point: QPointF, modifiers) -> QPointF:
         if not modifiers & Qt.KeyboardModifier.ShiftModifier:
@@ -843,10 +874,10 @@ class SelectedViewport(ViewportCanvas):
             outline = QPolygonF([points[k] for k in ("tl", "tr", "br", "bl")])
             self.setCursor(Qt.CursorShape.SizeAllCursor if outline.containsPoint(point, Qt.FillRule.OddEvenFill) else Qt.CursorShape.ArrowCursor)
             return
-        if self.mask_mode:
+        if self.mask_mode and self.tool == "light":
             self.setCursor(Qt.CursorShape.PointingHandCursor if self.light_at(point) else Qt.CursorShape.ArrowCursor)
             return
-        if self.tool in ("rect", "ellipse") and self._is_paint():
+        if self.tool in ("rect", "ellipse") and self._shapes_here():
             self.setCursor(Qt.CursorShape.CrossCursor)
             return
         shape = self._shape(self.selected_shape)
@@ -972,39 +1003,37 @@ class SelectedPanel(ViewportPanel):
     def __init__(self, canvas: SelectedViewport, parent: QWidget | None = None) -> None:
         super().__init__("Selected", canvas, parent)
         self.layer = _toggle("Layer", "The element itself", True)
-        self.mask = _toggle("Mask", "What the element's mask hides (red). Click a light's dot to tick or untick it, "
-                                    "or paint with Show and Hide.")
+        self.mask = _toggle("Mask", "The element's mask: what it hides is red. Draw rectangles and ellipses that show or "
+                                    "hide it, paint with the Brush (hides) and Eraser, or tick and untick lights with "
+                                    "the Light tool.")
         modes = QButtonGroup(self)
         modes.setExclusive(True)
         modes.addButton(self.layer)
         modes.addButton(self.mask)
         self.mask.toggled.connect(self._mask_mode)
-        self.select_tool = _toggle("Select", "Select, move, resize and rotate shapes (or the picture of an Image, Video or NDI element)", True)
-        self.rect_tool = _toggle("Rectangle", "Draw a rectangle (Shift: square)")
-        self.ellipse_tool = _toggle("Ellipse", "Draw an ellipse (Shift: circle)")
-        self.brush_tool = _tool_icon(icons.draw_brush, "Brush: paint on this Paint element")
-        self.eraser_tool = _tool_icon(icons.draw_eraser, "Eraser: rub out painting")
+        self.select_tool = _toggle("Select", TOOL_TIPS["select"][0], True)
+        self.rect_tool = _toggle("Rectangle", TOOL_TIPS["rect"][0])
+        self.ellipse_tool = _toggle("Ellipse", TOOL_TIPS["ellipse"][0])
+        self.brush_tool = _tool_icon(icons.draw_brush, TOOL_TIPS["brush"][0])
+        self.eraser_tool = _tool_icon(icons.draw_eraser, TOOL_TIPS["eraser"][0])
         self.bucket_tool = _tool_icon(icons.draw_bucket, "Bucket: fill an area of the same colour")
         self.gradient_tool = _tool_icon(icons.draw_gradient, "Gradient: drag from where the colour starts to where it's gone (Shift: round)")
-        self.light_tool = _tool_icon(icons.draw_bulb, "Light colour: click a light's dot to fill the patch it follows")
+        self.light_tool = _tool_icon(icons.draw_bulb, TOOL_TIPS["light"][0])
         self.dropper_tool = _tool_icon(icons.draw_dropper, "Eyedropper: pick the brush colour from the picture")
-        self.lights_tool = _toggle("Lights", "Click a light's dot to tick or untick it", True)
-        self.show_tool = _toggle("Show", "Paint where the element shows")
-        self.hide_tool = _toggle("Hide", "Paint where the element is hidden")
         self.tools = QButtonGroup(self)
         self.tools.setExclusive(True)
+        # the same tools in both modes (M14): Mask mode shows Select, Rectangle, Ellipse, Brush, Eraser and Light
         self._layer_tools = ((self.select_tool, "select"), (self.rect_tool, "rect"), (self.ellipse_tool, "ellipse"),
                              (self.brush_tool, "brush"), (self.eraser_tool, "eraser"), (self.bucket_tool, "bucket"),
                              (self.gradient_tool, "gradient"), (self.light_tool, "light"), (self.dropper_tool, "dropper"))
-        self._mask_tools = ((self.lights_tool, "lights"), (self.show_tool, "show"), (self.hide_tool, "hide"))
-        for button, tool in self._layer_tools + self._mask_tools:
+        for button, tool in self._layer_tools:
             self.tools.addButton(button)
             button.toggled.connect(lambda on, t=tool: on and self._tool(t))
         self.toolbar.insertWidget(1, self.layer)
         self.toolbar.insertWidget(2, self.mask)
         tools_box = QWidget()
         tools_row = FlowLayout(tools_box, spacing=6)  # wraps onto a second line when the panel is narrow
-        for button, _tool in self._layer_tools + self._mask_tools:
+        for button, _tool in self._layer_tools:
             tools_row.addWidget(button)
         self.layout_.insertWidget(1, tools_box)
         # the brush's size, softness and colour (shown while a painting tool is picked)
@@ -1059,7 +1088,8 @@ class SelectedPanel(ViewportPanel):
     def _mask_mode(self, on: bool) -> None:
         canvas: SelectedViewport = self.canvas  # type: ignore[assignment]
         canvas.mask_mode = on
-        (self.lights_tool if on else self.select_tool).setChecked(True)
+        canvas.selected_shape = ""  # (each mode has its own shapes: the Editor gives this mode's selection)
+        (self.light_tool if on else self.select_tool).setChecked(True)  # (Mask mode starts on ticking lights, as before)
         self._sync_tools()
         canvas.update()
         self.mode_changed.emit(on)
@@ -1074,20 +1104,21 @@ class SelectedPanel(ViewportPanel):
         mask = self.mask.isChecked()
         paint = self._paint_element
         for button, tool in self._layer_tools:
-            button.setVisible(not mask)
-            button.setEnabled(paint or tool in ("select", "dropper"))
-        for button, _tool in self._mask_tools:
-            button.setVisible(mask)
+            button.setVisible(not mask or tool in MASK_MODE_TOOLS)
+            button.setEnabled(mask or paint or tool in ("select", "dropper"))  # (any element has a mask)
+            if tool in TOOL_TIPS:
+                button.setToolTip(TOOL_TIPS[tool][1 if mask else 0])
         canvas: SelectedViewport = self.canvas  # type: ignore[assignment]
-        self.options.setVisible(canvas.tool in BRUSH_TOOLS + ("bucket", "gradient", "light"))
-        self.colour.setVisible(canvas.tool in ("brush", "bucket", "gradient", "light"))
+        brushes = ("brush", "eraser") if mask else BRUSH_TOOLS + ("bucket", "gradient", "light")
+        self.options.setVisible(canvas.tool in brushes)
+        self.colour.setVisible(not mask and canvas.tool in ("brush", "bucket", "gradient", "light"))
 
     def set_paint_tools(self, enabled: bool) -> None:
         """Shapes and painting are for Paint elements (Select and the eyedropper work for them all)."""
         self._paint_element = enabled
         canvas: SelectedViewport = self.canvas  # type: ignore[assignment]
-        if not enabled and canvas.tool in ("rect", "ellipse") + PAINT_TOOLS:
-            self.select_tool.setChecked(True)
+        if not enabled and not self.mask.isChecked() and canvas.tool in ("rect", "ellipse") + PAINT_TOOLS:
+            self.select_tool.setChecked(True)  # (Mask mode's tools work on any element)
         self._sync_tools()
 
 

@@ -172,9 +172,18 @@ class BrushTests(PaintingTestCase):
         self.assertTrue(panel.dropper_tool.isEnabled())
         panel.mask.setChecked(True)
         process(self.app)
-        self.assertTrue(panel.show_tool.isVisibleTo(panel))  # masks can be painted on any element
-        self.assertFalse(panel.brush_tool.isVisibleTo(panel))
-        self.assertTrue(panel.lights_tool.isChecked())
+        # Mask mode (M14): the same tools as Layer mode, for any element; no bucket, gradient or eyedropper
+        for button in (panel.select_tool, panel.rect_tool, panel.ellipse_tool, panel.brush_tool, panel.eraser_tool, panel.light_tool):
+            self.assertTrue(button.isVisibleTo(panel) and button.isEnabled(), button.toolTip())
+        for button in (panel.bucket_tool, panel.gradient_tool, panel.dropper_tool):
+            self.assertFalse(button.isVisibleTo(panel))
+        self.assertTrue(panel.light_tool.isChecked())  # (it starts on ticking lights, as Mask mode did)
+        self.assertIn("hidden", panel.brush_tool.toolTip())
+        self.assertIn("tick", panel.light_tool.toolTip())
+        panel.layer.setChecked(True)
+        process(self.app)
+        self.assertIn("Paint element", panel.brush_tool.toolTip())
+        self.assertFalse(panel.brush_tool.isEnabled())
 
 
 class MaskAndGizmoTests(PaintingTestCase):
@@ -183,7 +192,9 @@ class MaskAndGizmoTests(PaintingTestCase):
         page = self.editor(window, "stage-shapes", "E1")
         panel, canvas = page.selected_panel, page.selected_canvas
         panel.mask.setChecked(True)
-        self.pick(page, panel.hide_tool)
+        self.pick(page, panel.brush_tool)  # (Mask mode's Brush paints where the element is hidden)
+        self.assertTrue(panel.size.isVisibleTo(panel))
+        self.assertFalse(panel.colour.isVisibleTo(panel))  # (a mask has no colour)
         panel.size.setValue(40)
         self.drag(canvas, [self.at(canvas, 0.5, 0.2), self.at(canvas, 0.5, 0.8)])
         element = self.element(window, "stage-shapes", "E1")
@@ -193,7 +204,7 @@ class MaskAndGizmoTests(PaintingTestCase):
         self.assertEqual(mask[180, 20], 255)
         self.assertEqual(element["mask"].get("exclude"), None)  # the ticked lights are untouched
         self.assertEqual(window.document.undo_stack.undoText(), "NDI E1: mask: hide")
-        self.pick(page, panel.show_tool)
+        self.pick(page, panel.eraser_tool)  # (and its Eraser rubs that out)
         self.drag(canvas, [self.at(canvas, 0.5, 0.5), self.at(canvas, 0.5, 0.52)])
         mask = load_mask(Path(window.document.show.folder) / self.element(window, "stage-shapes", "E1")["mask"]["paint"])
         self.assertEqual(mask[180, 320], 255)  # shown again where Show painted

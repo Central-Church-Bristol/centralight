@@ -20,6 +20,8 @@ FIT_MODES = (("fill", "Fill (crop the edges)"), ("fit", "Fit (show it all)"))
 FILL_TYPES = (("none", "None"), ("colour", "Colour"), ("linear", "Straight gradient"), ("radial", "Round gradient"))
 COLOUR_TYPES = FILL_TYPES[1:]  # a Colour element always shows something
 SHAPE_TYPES = (("rect", "Rectangle"), ("ellipse", "Ellipse"))
+MASK_STARTS = (("shown", "Shown everywhere"), ("hidden", "Hidden everywhere"))
+MASK_MODES = (("show", "Show"), ("hide", "Hide"))
 SNAP_CHOICES = ((True, "Snap"), (False, "Glide"))
 TRANSITION_CHOICES = (("cut", "Cut"), ("fade", "Fade"), ("dip", "Dip to black"), ("wipe", "Wipe"), ("iris", "Iris"), ("random", "Random by light"))
 ELEMENT_KINDS = (("colour", "Colour"), ("paint", "Paint"), ("image", "Image"), ("video", "Video"), ("ndi", "NDI"))
@@ -93,6 +95,17 @@ SHAPE = (
     Spec("softness", "Softness", "number", 0.0, 0.0, 1.0, unit="%", help="0 = a crisp edge, 100 % = fades all the way in"),
     Spec("colour", "Colour", "colour", "#FFFFFF"),
     Spec("opacity", "Opacity", "number", 1.0, unit="%"),
+)
+
+# Masks (M14): where a mask starts, and its shapes (each shows or hides the element inside it). Then the painted
+# strokes (they hide), the shapes in order, and the lights it leaves alone ("exclude") on top.
+MASK_START = Spec("mask.start", "Start with", "choice", "shown", choices=MASK_STARTS, animatable=False,
+                  help="Shown everywhere: the mask's Hide shapes and painting hide parts of the element. Hidden "
+                       "everywhere: it shows only inside Show shapes")
+MASK_SHAPE = (
+    Spec("mode", "Show or hide", "choice", "hide", choices=MASK_MODES, animatable=False,
+         help="Show: the element shows inside it. Hide: it's hidden inside it"),
+    *(spec for spec in SHAPE if spec.path not in ("colour", "opacity")),
 )
 
 # Image, Video and NDI: how each light reads the picture (worked out at the lights' dots, light_elements.py)

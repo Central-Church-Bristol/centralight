@@ -31,6 +31,11 @@ def shape_name(shape: Mapping[str, Any]) -> str:
     return f"{SHAPE_NAMES.get(str(shape.get('type', 'rect')), 'Shape')} {shape.get('id', '')}".strip()
 
 
+def mask_shape_name(shape: Mapping[str, Any]) -> str:
+    """'Mask rectangle M1' (M14: a shape of an element's mask)."""
+    return f"Mask {SHAPE_NAMES.get(str(shape.get('type', 'rect')), 'Shape').lower()} {shape.get('id', '')}".strip()
+
+
 def _number(value: float) -> str:
     return f"{round(value, 3):g}"
 

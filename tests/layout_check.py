@@ -129,9 +129,9 @@ def main() -> int:
                     elif state == "editor-ndi":
                         window.editor_page.selected_panel.select_tool.setChecked(True)
                         window.editor_page.select_element("E1")
-                    elif state == "editor-mask":  # Mask mode, painting with Hide
+                    elif state == "editor-mask":  # Mask mode, painting with the Brush (it hides)
                         window.editor_page.selected_panel.mask.setChecked(True)
-                        window.editor_page.selected_panel.hide_tool.setChecked(True)
+                        window.editor_page.selected_panel.brush_tool.setChecked(True)
                     elif state == "editor-input":
                         window.editor_page.selected_panel.layer.setChecked(True)
                         window.editor_page.select_element("")

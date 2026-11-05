@@ -70,8 +70,18 @@ from ..input_edit import (
 )
 from ..model import END_BEHAVIOURS, END_HOLD, END_LOOP, END_STOP, Input, Show, element_span
 from ..params import base_value, expression_of, is_keyframed, key_at, neighbour_key, with_base_value, with_expression
-from ..schema import SHAPE, TRANSITION, Spec, element_specs, get_path, has_background, visible
-from ..step_names import change_name, describe, element_name, level_name, lights_change_name, lower_first, shape_name
+from ..elements import mask_shapes
+from ..schema import MASK_SHAPE, MASK_START, SHAPE, TRANSITION, Spec, element_specs, get_path, has_background, visible
+from ..step_names import (
+    change_name,
+    describe,
+    element_name,
+    level_name,
+    lights_change_name,
+    lower_first,
+    mask_shape_name,
+    shape_name,
+)
 from ..variables import AUDIO_SILENT, evaluate_locals
 from . import icons, theme
 from .document import ShowDocument
@@ -106,6 +116,7 @@ def hint(text: str) -> QLabel:
 
 class DetailsPanel(QScrollArea):
     shape_selected = Signal(str)  # shape id ("" = none)
+    mask_shape_selected = Signal(str)  # a shape of the element's mask (M14; "" = none)
     element_removed = Signal()
     tab_changed = Signal(int)  # 0 = the Input tab, 1 = Globals
     seek_requested = Signal(float)  # move the Editor's playhead (input seconds): the ◆ menu's previous / next key
@@ -135,12 +146,14 @@ class DetailsPanel(QScrollArea):
         self.input_id = ""
         self.element_id: str | None = None
         self.shape_id: str | None = None
+        self.mask_shape_id: str | None = None
         self._structure: tuple = ()
         self._fields: dict[str, Any] = {}
         self._updating = False
         self._content: QWidget | None = None
         self.lights_tree: QTreeWidget | None = None
         self.shape_list: QListWidget | None = None
+        self.mask_shape_list: QListWidget | None = None
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setMinimumWidth(MIN_WIDTH)
@@ -172,12 +185,21 @@ class DetailsPanel(QScrollArea):
                 return shape
         return None
 
+    def current_mask_shape(self):
+        """The shape of the element's mask shown here (M14), or None."""
+        element = self.current_element()
+        if element is None or not self.mask_shape_id:
+            return None
+        return next((s for s in mask_shapes(element.get("mask")) if s.get("id") == self.mask_shape_id), None)
+
     def set_target(self, input_id: str, element_id: str | None, shape_id: str | None = None) -> None:
         if (input_id, element_id, shape_id) == (self.input_id, self.element_id, self.shape_id):
             return
         self._finish_typing()  # an edit half typed belongs to what's showing now
         self._gesture_t.clear()  # (a drag that began on what was showing is over)
         self._gesture += 1
+        if (input_id, element_id) != (self.input_id, self.element_id):
+            self.mask_shape_id = None  # (another element: its own mask)
         self.input_id, self.element_id, self.shape_id = input_id, element_id, shape_id
         self.refresh(self.show_data)
         element = self.current_element()
@@ -208,8 +230,12 @@ class DetailsPanel(QScrollArea):
         if self.current_element() is None:
             self.element_id = None
             self.shape_id = None
-        elif self.shape_id and self.current_shape() is None:
-            self.shape_id = None
+            self.mask_shape_id = None
+        else:
+            if self.shape_id and self.current_shape() is None:
+                self.shape_id = None
+            if self.mask_shape_id and self.current_mask_shape() is None:
+                self.mask_shape_id = None
         structure = self._structure_key()
         if structure != self._structure:
             self._rebuild()
@@ -230,7 +256,9 @@ class DetailsPanel(QScrollArea):
         shapes = tuple(str(s.get("id")) for s in element.get("shapes", ()) or ())
         lights = tuple((fx.id, fx.name, fx.group) for fx in self.show_data.colour_fixtures())
         split = self._split_state(inp, element) if has_background(element) else None  # (the Split button's note)
-        return ("element", inp.id, self.element_id, element.get("kind"), rows, shapes, self.shape_id, lights, split)
+        mask = tuple((str(s.get("id")), s.get("type", "rect"), s.get("mode", "hide")) for s in mask_shapes(element.get("mask")))
+        return ("element", inp.id, self.element_id, element.get("kind"), rows, shapes, self.shape_id, lights, split,
+                mask, self.mask_shape_id)
 
     def _split_state(self, inp: Input, element) -> tuple[bool, tuple[str, ...]]:
         """Split into Colour + Paint: (is there room, what it would change on the lights)."""
@@ -245,6 +273,7 @@ class DetailsPanel(QScrollArea):
         self._keys = {}
         self.lights_tree = None
         self.shape_list = None
+        self.mask_shape_list = None
         self.locals_panel = None
         self.globals_panel = None
         self.hotkey = None
@@ -504,6 +533,10 @@ class DetailsPanel(QScrollArea):
             shape = self.current_shape()
             if shape is not None:
                 layout.addWidget(self._shape_panel(shape))
+        layout.addWidget(self._mask_panel(element))
+        mask_shape = self.current_mask_shape()
+        if mask_shape is not None:
+            layout.addWidget(self._shape_panel(mask_shape, "mask.shapes"))
         layout.addWidget(self._lights_panel(element))
 
     def _shapes_panel(self, element) -> Panel:
@@ -544,16 +577,78 @@ class DetailsPanel(QScrollArea):
         panel.body.addWidget(buttons)
         return panel
 
-    def _shape_panel(self, shape) -> Panel:
-        panel = Panel(f"{SHAPE_TITLES.get(shape.get('type', 'rect'), 'Shape')} {shape.get('id', '')}")
+    def _shape_panel(self, shape, group: str = "shapes") -> Panel:
+        """A shape's settings: a Paint element's ("shapes"), or a shape of the element's mask ("mask.shapes", M14:
+        its Show / Hide is on the Mask shapes panel's buttons)."""
+        mask = group == "mask.shapes"
+        panel = Panel(mask_shape_name(shape) if mask else f"{SHAPE_TITLES.get(shape.get('type', 'rect'), 'Shape')} {shape.get('id', '')}")
         form = self._form(panel)
-        for spec in SHAPE:
-            field = self._field_for(spec, lambda value, final, path=spec.path: self._set_shape(path, value, final))
-            key = f"shape:{spec.path}"
+        for spec in MASK_SHAPE if mask else SHAPE:
+            if mask and spec.path == "mode":
+                continue
+            field = self._field_for(spec, lambda value, final, path=spec.path: self._set_shape(path, value, final, group))
+            key = f"{'mask_shape' if mask else 'shape'}:{spec.path}"
             self._fields[key] = field
             if spec.animatable and spec.type in ("number", "colour"):
                 field = self._with_expr(field, key, lambda k=key: self.edit_expression(k), keyable=True)
             form.addRow(self._label(spec.label), field)
+        return panel
+
+    def _mask_panel(self, element) -> Panel:
+        """The mask's shapes (M14): where the mask starts, then rectangles and ellipses that show or hide the element,
+        in order (the painted mask comes before them, and the Lights ticks after, on top)."""
+        panel = Panel("Mask shapes")
+        form = self._form(panel)
+        start = self._field_for(MASK_START, lambda value, _final: self._set_mask_start(value))
+        self._fields["mask:start"] = start
+        form.addRow(self._label(MASK_START.label), start)
+        self.mask_shape_list = QListWidget()
+        self.mask_shape_list.setObjectName("ShapeList")
+        shapes = mask_shapes(element.get("mask"))
+        for shape in shapes:
+            item = QListWidgetItem(f"{'Show' if shape.get('mode') == 'show' else 'Hide'} · "
+                                   f"{SHAPE_TITLES.get(shape.get('type', 'rect'), 'Shape')} {shape.get('id', '')}")
+            item.setData(Qt.ItemDataRole.UserRole, shape.get("id"))
+            self.mask_shape_list.addItem(item)
+            if shape.get("id") == self.mask_shape_id:
+                self.mask_shape_list.setCurrentItem(item)
+        rows = max(2, min(6, len(shapes)))
+        self.mask_shape_list.setFixedHeight(rows * (self.mask_shape_list.fontMetrics().height() + 10) + 6)
+        self.mask_shape_list.currentItemChanged.connect(self._mask_shape_clicked)
+        panel.body.addWidget(self.mask_shape_list)
+        if not shapes:
+            panel.body.addWidget(hint("No mask shapes yet. Add one here, or draw it on the Selected view in Mask mode. "
+                                      "Each one shows or hides this element inside it; the Lights ticks still apply on top."))
+        buttons = QWidget()
+        flow = FlowLayout(buttons, spacing=6)  # wraps onto a second line when the panel is narrow
+        add_rect = QPushButton("+ Rectangle")
+        add_rect.clicked.connect(lambda: self._add_mask_shape("rect"))
+        add_ellipse = QPushButton("+ Ellipse")
+        add_ellipse.clicked.connect(lambda: self._add_mask_shape("ellipse"))
+        selected = self.current_mask_shape()
+        modes = []
+        for mode, label, tip in (("show", "Show", "The element shows inside this shape"),
+                                 ("hide", "Hide", "The element is hidden inside this shape")):
+            button = QPushButton(label)
+            button.setObjectName("ToolToggle")
+            button.setCheckable(True)
+            button.setChecked(selected is not None and selected.get("mode", "hide") == mode)
+            button.setToolTip(tip)
+            button.clicked.connect(lambda _checked=False, m=mode, b=button: self._set_mask_shape_mode(m, b))
+            modes.append(button)
+        up = QPushButton("Forward")
+        up.setToolTip("Work this shape out after the next one (it wins where they overlap)")
+        up.clicked.connect(lambda: self._move_mask_shape(1))
+        down = QPushButton("Back")
+        down.setToolTip("Work this shape out before the one before it")
+        down.clicked.connect(lambda: self._move_mask_shape(-1))
+        delete = QPushButton("Remove")
+        delete.clicked.connect(self._remove_mask_shape)
+        for button in (add_rect, add_ellipse, *modes, up, down, delete):
+            flow.addWidget(button)
+        for button in (*modes, up, down, delete):
+            button.setEnabled(selected is not None)
+        panel.body.addWidget(buttons)
         return panel
 
     def _lights_panel(self, element) -> Panel:
@@ -658,6 +753,17 @@ class DetailsPanel(QScrollArea):
                     field = self._fields.get(key)
                     if field is not None:
                         self._show_value(field, spec, get_path(shape, spec.path, spec.default), self._exprs.get(key), self._keys.get(key), t)
+            mask_shape = self.current_mask_shape()
+            if mask_shape is not None:
+                for spec in MASK_SHAPE:
+                    key = f"mask_shape:{spec.path}"
+                    field = self._fields.get(key)
+                    if field is not None:
+                        self._show_value(field, spec, get_path(mask_shape, spec.path, spec.default), self._exprs.get(key),
+                                         self._keys.get(key), t)
+            start = self._fields.get("mask:start")
+            if start is not None:
+                self._show_value(start, MASK_START, get_path(element, MASK_START.path, MASK_START.default))
             if self.lights_tree is not None:
                 excluded = set(get_path(element, "mask.exclude", ()) or ())
                 blocked = self.lights_tree.blockSignals(True)
@@ -715,6 +821,8 @@ class DetailsPanel(QScrollArea):
         group, path = key.split(":", 1)
         if group == "shape" and self.shape_id:
             return param_path(self.shape_id, path), next((s for s in SHAPE if s.path == path), None)
+        if group == "mask_shape" and self.mask_shape_id:
+            return param_path(self.mask_shape_id, path, "mask.shapes"), next((s for s in MASK_SHAPE if s.path == path), None)
         element = self.current_element()
         specs = element_specs(str(element.get("kind")), element) if element is not None else ()
         return path, next((s for s in specs if s.path == path), None)
@@ -829,14 +937,21 @@ class DetailsPanel(QScrollArea):
                 return None
             title, kind, subject, element_key = self.show_data.house_label(path), "number", self.show_data.house_label(path), f"{inp.id}/house"
         else:
-            target = self.current_element() if where == "element" else self.current_shape()
-            specs = element_specs(str(self.current_element().get("kind")), self.current_element()) if where == "element" else SHAPE
+            if self.current_element() is None:
+                return None
+            if where == "element":
+                target, specs = self.current_element(), element_specs(str(self.current_element().get("kind")), self.current_element())
+            elif where == "mask_shape":
+                target, specs = self.current_mask_shape(), MASK_SHAPE
+            else:
+                target, specs = self.current_shape(), SHAPE
             spec = next((s for s in specs if s.path == path), None)
             if target is None or spec is None:
                 return None
             raw = get_path(target, path, spec.default)
             title, kind = spec.title, "colour" if spec.type == "colour" else "number"
-            subject = element_name(self.current_element()) if where == "element" else shape_name(target)
+            subject = (element_name(self.current_element()) if where == "element" else
+                       mask_shape_name(target) if where == "mask_shape" else shape_name(target))
             element_key = f"{inp.id}/{self.element_id}"
         default = base_value(raw, 0.0, (1.0, 1.0, 1.0) if kind == "colour" else 0.0, kind)
         if kind == "colour" and type(default) is tuple:
@@ -849,6 +964,9 @@ class DetailsPanel(QScrollArea):
                 show = set_house_param(self.show_data, self.input_id, path, new_raw)
             elif where == "element":
                 show = set_element_value(self.show_data, self.input_id, self.element_id, path, new_raw)
+            elif where == "mask_shape":
+                show = set_shape_value(self.show_data, self.input_id, self.element_id, str(target.get("id")), path, new_raw,
+                                       "mask.shapes")
             else:
                 show = set_shape_value(self.show_data, self.input_id, self.element_id, self.shape_id, path, new_raw)
             self.document.apply(show, label)
@@ -978,22 +1096,26 @@ class DetailsPanel(QScrollArea):
                         text, f"{key}/{self._gesture}")
         self._gesture_done(key, final)
 
-    def _set_shape(self, path: str, value: Any, final: bool = True) -> None:
-        shape = self.current_shape()
+    def _set_shape(self, path: str, value: Any, final: bool = True, group: str = "shapes") -> None:
+        """A setting of the shape shown here: a Paint element's ("shapes"), or the mask's ("mask.shapes")."""
+        mask = group == "mask.shapes"
+        shape = self.current_mask_shape() if mask else self.current_shape()
         if shape is None:
             return
-        spec = next((s for s in SHAPE if s.path == path), None)
+        shape_id = str(shape.get("id"))
+        name = mask_shape_name(shape) if mask else shape_name(shape)
+        spec = next((s for s in (MASK_SHAPE if mask else SHAPE) if s.path == path), None)
         raw = get_path(shape, path, None)
-        key = f"{self.input_id}/{self.element_id}/{self.shape_id}/{path}"
+        key = f"{self.input_id}/{self.element_id}/{group}/{shape_id}/{path}"
         if is_keyframed(raw):
             t = self._gesture_time(key)
-            self._apply(set_key(self.show_data, self.input_id, self.element_id, param_path(self.shape_id, path), t, value),
-                        f"{shape_name(shape)}: {spec.title.lower() if spec else path} keyframe at {t:.2f} s",
+            self._apply(set_key(self.show_data, self.input_id, self.element_id, param_path(shape_id, path, group), t, value),
+                        f"{name}: {spec.title.lower() if spec else path} keyframe at {t:.2f} s",
                         f"{key}/key/{t:.3f}/{self._gesture}")
         else:
-            text = change_name(shape_name(shape), spec, get_path(shape, path, spec.default), value) if spec else f"Change {shape_name(shape)}"
-            self._apply(set_shape_value(self.show_data, self.input_id, self.element_id, self.shape_id, path, with_base_value(raw, value)),
-                        text, f"{key}/{self._gesture}")
+            text = change_name(name, spec, get_path(shape, path, spec.default), value) if spec else f"Change {name}"
+            self._apply(set_shape_value(self.show_data, self.input_id, self.element_id, shape_id, path, with_base_value(raw, value),
+                                        group), text, f"{key}/{self._gesture}")
         self._gesture_done(key, final)
 
     def _shape_clicked(self, current, _previous) -> None:
@@ -1033,6 +1155,71 @@ class DetailsPanel(QScrollArea):
             shape_id, self.shape_id = self.shape_id, None
             self.document.apply(remove_shape(self.show_data, self.input_id, self.element_id, shape_id), f"Remove {shape_name(shape)}")
             self.shape_selected.emit("")
+
+    # --- the mask's shapes (M14)
+
+    def _mask_shape_clicked(self, current, _previous) -> None:
+        if self._updating or current is None:
+            return
+        shape_id = str(current.data(Qt.ItemDataRole.UserRole))
+        if shape_id != self.mask_shape_id:
+            self.mask_shape_id = shape_id
+            self.mask_shape_selected.emit(shape_id)
+            self.refresh()
+
+    def select_mask_shape(self, shape_id: str | None) -> None:
+        if shape_id != self.mask_shape_id:
+            self.mask_shape_id = shape_id
+            self.refresh()
+
+    def _add_mask_shape(self, shape_type: str) -> None:
+        if self.current_element() is None or self.show_data.read_only:
+            return
+        show, shape_id = add_shape(self.show_data, self.input_id, self.element_id, shape_type, group="mask.shapes")
+        if shape_id and self.document.apply(show, f"Add mask {SHAPE_TITLES[shape_type].lower()} {shape_id}"):
+            self.mask_shape_id = shape_id
+            self.mask_shape_selected.emit(shape_id)
+            self.refresh()
+
+    def _set_mask_shape_mode(self, mode: str, button: QPushButton | None = None) -> None:
+        """Show or Hide: what the selected mask shape does to the element inside it (one undo step)."""
+        shape = self.current_mask_shape()
+        if shape is None or self.show_data.read_only or shape.get("mode", "hide") == mode:
+            if button is not None and shape is not None:
+                button.setChecked(shape.get("mode", "hide") == mode)  # (a click on the one that's already on keeps it on)
+            return
+        self._apply(set_shape_value(self.show_data, self.input_id, self.element_id, str(shape.get("id")), "mode", mode,
+                                    "mask.shapes"),
+                    f"{mask_shape_name(shape)}: {'show' if mode == 'show' else 'hide'} the element inside it")
+
+    def _move_mask_shape(self, step: int) -> None:
+        shape = self.current_mask_shape()
+        if shape is not None and not self.show_data.read_only:
+            self.document.apply(move_shape(self.show_data, self.input_id, self.element_id, str(shape.get("id")), step, "mask.shapes"),
+                                f"Move {lower_first(mask_shape_name(shape))} {'forward' if step > 0 else 'back'}")
+
+    def remove_selected_mask_shape(self) -> None:
+        """Remove (the button), or Delete in the Selected view's Mask mode: the mask shape shown here goes."""
+        self._remove_mask_shape()
+
+    def _remove_mask_shape(self) -> None:
+        shape = self.current_mask_shape()
+        if shape is not None and not self.show_data.read_only:
+            shape_id, self.mask_shape_id = str(shape.get("id")), None
+            self.document.apply(remove_shape(self.show_data, self.input_id, self.element_id, shape_id, "mask.shapes"),
+                                f"Remove {lower_first(mask_shape_name(shape))}")
+            self.mask_shape_selected.emit("")
+
+    def _set_mask_start(self, value: Any) -> None:
+        """Start with: Shown everywhere (the default, so it's left out of the file) or Hidden everywhere."""
+        element = self.current_element()
+        if element is None or self._updating or self.show_data.read_only:
+            return
+        hidden = value == "hidden"
+        if hidden == (get_path(element, MASK_START.path, MASK_START.default) == "hidden"):
+            return
+        self._apply(set_element_value(self.show_data, self.input_id, self.element_id, MASK_START.path, "hidden" if hidden else None),
+                    f"{element_name(element)}: mask starts {'hidden' if hidden else 'shown'} everywhere")
 
     def _split_background(self) -> None:
         element = self.current_element()

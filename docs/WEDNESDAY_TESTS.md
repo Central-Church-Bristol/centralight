@@ -245,8 +245,8 @@ then on Worship blue (since M14, clicking the tile itself does nothing).
       as you let go (if Warm white is on Base). Ctrl+Z takes the stroke away; Ctrl+Shift+Z puts it back.
 - [ ] Try the **Eraser**, the **Bucket** (click an empty area), the **Gradient** (drag across) and **Light colour**
       (click a light's dot: just that light changes).
-- [ ] **Mask** (top of the Selected view) → **Hide**, paint over half the picture: that half of the element is gone
-      (red in the view). **Show** paints it back.
+- [ ] **Mask** (top of the Selected view) → the **Brush**, paint over half the picture: that half of the element is
+      gone (red in the view). The **Eraser** paints it back. (Since M14 Mask mode has the same tools as Layer mode.)
 - [ ] Click Follow screen's NDI element → **Select**: drag the picture, drag a corner to make it smaller, drag the
       knob to turn it. The lights follow. Ctrl+Z puts it back.
 
@@ -423,6 +423,17 @@ Close the app first (it's holding the dongle), then:
       Colour + Paint** a line saying whether it'll look exactly the same, or what would change. Split it: the new
       Colour element is on track 1 and the other elements have each moved up a track; the lights look the same
       (or change only as that line said). Ctrl+Z undoes it.
+- [ ] **Mask shapes**: put Warm white on Base, open it, click its Colour element, then **Mask** at the top of the
+      Selected view. The tools are Layer mode's: Select, Rectangle, Ellipse, Brush, Eraser and the Light bulb (no
+      Bucket, Gradient or eyedropper); hover each for what it does here.
+  - [ ] **Rectangle**, drag over the left half: the lights there go dark (it's a Hide shape, red in the view). The
+        details panel lists it under **Mask shapes** ("Hide · Rectangle M1").
+  - [ ] **Show** on that panel: the left half comes back. **Start with: Hidden everywhere**: now only the left half
+        shows ("only here").
+  - [ ] Drag the rectangle across slowly with **Select**: the lights come on one by one as it passes (try Softness
+        0 % and 60 %: switching vs fading).
+  - [ ] Untick a light in **Lights** that's inside the rectangle: it stays off whatever the shape says.
+  - [ ] Delete removes the selected mask shape; Ctrl+Z brings it back.
 
 ## 21. Afterwards: the commits
 

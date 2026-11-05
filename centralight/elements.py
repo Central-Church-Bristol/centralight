@@ -13,7 +13,9 @@ Kinds:
 - "video": arrives in M5 (draws nothing until then)
 
 Every element also has opacity, a blend mode, a transform (move, scale, rotate) and a
-mask: a painted mask, and lights it leaves alone ("exclude": only the lights see that).
+mask: where it starts (shown, or hidden everywhere), a painted mask (it hides), shapes that
+show or hide the element inside them (M14), and lights it leaves alone ("exclude": only the
+lights see that).
 Unknown kinds draw nothing, so a show from a newer CentraLight still plays.
 
 Elements that never change (no keyframes or expressions, not a live feed) are drawn once
@@ -506,16 +508,47 @@ def finish_layer(element: Mapping[str, Any], layer: np.ndarray, ctx: RenderConte
     return layer
 
 
+def mask_shapes(mask: Any) -> list[Mapping[str, Any]]:
+    """A mask's shapes (M14), in order: each shows or hides the element inside it."""
+    shapes = mask.get("shapes") if _is_map(mask) else None
+    if not isinstance(shapes, Sequence) or isinstance(shapes, str):
+        return []
+    return [shape for shape in shapes if _is_map(shape)]
+
+
+def mask_hides(shape: Mapping[str, Any]) -> bool:
+    """A mask shape hides the element inside it (the default), or shows it ("mode": "show")."""
+    return shape.get("mode", "hide") != "show"
+
+
 def element_keep(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | None:
-    """The element's painted mask in a picture (1 = show, 0 = hidden), or None for no mask. (The lights it leaves
-    alone are only left alone by the lights themselves: the light dots show that, not the picture.)"""
+    """The element's mask in a picture (1 = show, 0 = hidden), or None for no mask: where it starts (shown, or hidden
+    everywhere), then its painted strokes (they hide), then its shapes in order, each showing or hiding. (The lights it
+    leaves alone are only left alone by the lights themselves: the light dots show that, not the picture.)"""
     mask = element.get("mask")
     if not _is_map(mask):
         return None
+    hidden = mask.get("start") == "hidden"
+    shapes = mask_shapes(mask)
     painted = mask.get("paint")
-    if isinstance(painted, str) and painted:
-        return painted_mask(media_path(ctx.folder, painted), ctx)
-    return None
+    keep = None
+    if not hidden and isinstance(painted, str) and painted:  # (strokes only hide: on a hidden mask they change nothing)
+        keep = painted_mask(media_path(ctx.folder, painted), ctx)
+    if not hidden and not shapes:
+        return keep
+    if hidden:
+        keep = np.zeros((ctx.height, ctx.width), dtype=np.float32)
+    else:
+        keep = keep.copy() if keep is not None else np.ones((ctx.height, ctx.width), dtype=np.float32)
+    for shape in shapes:
+        cover, _rgb = shape_coverage(shape, ctx)
+        if cover is None:
+            continue
+        if mask_hides(shape):
+            keep *= 1.0 - cover
+        else:
+            keep += cover * (1.0 - keep)
+    return keep
 
 
 _painted: _LRU = _LRU(64, 64_000_000)

@@ -209,8 +209,9 @@ def new_element_id(inp: Input, prefix: str = "E") -> str:
     for track in inp.tracks:
         for element in track:
             used.add(str(element.get("id", "")))
-            for shape in element.get("shapes", ()) or ():
-                used.add(str(shape.get("id", "")))
+            for group in SHAPE_GROUPS:
+                for shape in _shape_list(element, group):
+                    used.add(str(shape.get("id", "")))
     n = 1
     while f"{prefix}{n}" in used:
         n += 1
@@ -527,26 +528,38 @@ def set_element_transition(show: Show, input_id: str, element_id: str, which: st
 # ---------------------------------------------------------------- keyframes
 
 
-def param_path(shape_id: str, path: str) -> str:
-    """Where a setting lives in an element: "opacity", "fill.colour", or a shape's "shapes:S1:x"."""
-    return f"shapes:{shape_id}:{path}" if shape_id else path
+def param_path(shape_id: str, path: str, group: str = "shapes") -> str:
+    """Where a setting lives in an element: "opacity", "fill.colour", a shape's "shapes:S1:x", or a mask shape's
+    "mask.shapes:M1:x"."""
+    return f"{group}:{shape_id}:{path}" if shape_id else path
+
+
+def _shape_path(where: str) -> tuple[str, str, str] | None:
+    """(the shapes' list, shape id, setting) for a shape's param_path(); None for an element's own setting."""
+    group, colon, rest = where.partition(":")
+    if not colon or group not in SHAPE_GROUPS or ":" not in rest:
+        return None
+    shape_id, path = rest.split(":", 1)
+    return group, shape_id, path
 
 
 def get_param(element: Any, where: str) -> Any:
     """The raw setting (a value, keyframes or an expression) at a param_path()."""
     from .schema import get_path
 
-    if where.startswith("shapes:"):
-        _prefix, shape_id, path = where.split(":", 2)
-        shape = next((s for s in element.get("shapes", ()) or () if s.get("id") == shape_id), None)
+    found = _shape_path(where)
+    if found is not None:
+        group, shape_id, path = found
+        shape = next((s for s in _shape_list(element, group) if s.get("id") == shape_id), None)
         return get_path(shape, path) if shape is not None else None
     return get_path(element, where)
 
 
 def set_param(show: Show, input_id: str, element_id: str, where: str, raw: Any) -> Show:
-    if where.startswith("shapes:"):
-        _prefix, shape_id, path = where.split(":", 2)
-        return set_shape_value(show, input_id, element_id, shape_id, path, raw)
+    found = _shape_path(where)
+    if found is not None:
+        group, shape_id, path = found
+        return set_shape_value(show, input_id, element_id, shape_id, path, raw, group)
     return set_element_value(show, input_id, element_id, where, raw)
 
 
@@ -592,10 +605,11 @@ def element_keys(element: Any) -> dict[str, list[tuple[float, Any, str]]]:
                     walk(v, f"{path}.{k}" if path else k)
 
     walk(element, "")
-    for shape in element.get("shapes", ()) or ():
-        for k, v in shape.items():
-            if hasattr(v, "get") and "keys" in v:
-                found[f"shapes:{shape.get('id')}:{k}"] = keys_of(v)
+    for group in SHAPE_GROUPS:  # (a Paint element's shapes, and its mask's)
+        for shape in _shape_list(element, group):
+            for k, v in shape.items():
+                if hasattr(v, "get") and "keys" in v:
+                    found[param_path(str(shape.get("id")), k, group)] = keys_of(v)
     return found
 
 
@@ -619,53 +633,81 @@ def set_excluded(show: Show, input_id: str, element_id: str, light_ids: list[str
 # ---------------------------------------------------------------- shapes
 
 NEW_SHAPE_SOFTNESS = 0.2  # a new shape's edge is a little soft, so a moving bar fades through a light (lights are points)
+SHAPE_GROUPS = ("shapes", "mask.shapes")  # a Paint element's shapes, and any element's mask shapes (M14)
+
+
+def _shape_list(element: Any, group: str) -> list:
+    """The shapes in an element's list ("shapes", or its mask's "mask.shapes"), as they are."""
+    from .schema import get_path
+
+    shapes = get_path(element, group, ()) if element is not None else ()
+    return [s for s in shapes if hasattr(s, "get")] if isinstance(shapes, (list, tuple)) else []
+
+
+def new_mask_shape_mode(element: Any) -> str:
+    """What a new mask shape does: something you can see. It hides the element, on a mask that starts shown; it shows
+    it, on a mask that starts hidden everywhere."""
+    mask = element.get("mask") if element is not None else None
+    return "show" if hasattr(mask, "get") and mask.get("start") == "hidden" else "hide"
 
 
 def add_shape(show: Show, input_id: str, element_id: str, shape_type: str = "rect",
-              x: float = 0.5, y: float = 0.5, w: float = 0.3, h: float = 0.4, colour: str = "#FFFFFF") -> tuple[Show, str]:
+              x: float = 0.5, y: float = 0.5, w: float = 0.3, h: float = 0.4, colour: str = "#FFFFFF",
+              group: str = "shapes", mode: str | None = None) -> tuple[Show, str]:
+    """A new shape, last in its list (on top): a Paint element's ("shapes", ids S1, S2 …), or a mask's ("mask.shapes",
+    ids M1, M2 …, showing or hiding the element: see new_mask_shape_mode)."""
     inp = show.inputs[input_id]
     found = find_element(inp, element_id)
     if found is None:
         return show, ""
-    shape_id = new_element_id(inp, "S")
-    shapes = thaw(found[2].get("shapes", [])) or []
-    shapes.append({"id": shape_id, "type": shape_type, "x": round(x, 4), "y": round(y, 4), "w": round(w, 4), "h": round(h, 4),
-                   "softness": NEW_SHAPE_SOFTNESS, "colour": colour})
-    return set_element_value(show, input_id, element_id, "shapes", shapes), shape_id
+    mask = group == "mask.shapes"
+    shape_id = new_element_id(inp, "M" if mask else "S")
+    shapes = thaw(_shape_list(found[2], group))
+    shape = {"id": shape_id, "type": shape_type}
+    if mask:
+        shape["mode"] = mode if mode in ("show", "hide") else new_mask_shape_mode(found[2])
+    shape.update({"x": round(x, 4), "y": round(y, 4), "w": round(w, 4), "h": round(h, 4), "softness": NEW_SHAPE_SOFTNESS})
+    if not mask:
+        shape["colour"] = colour
+    shapes.append(shape)
+    return set_element_value(show, input_id, element_id, group, shapes), shape_id
 
 
-def _shapes(show: Show, input_id: str, element_id: str) -> list[dict]:
+def _shapes(show: Show, input_id: str, element_id: str, group: str = "shapes") -> list[dict]:
     found = find_element(show.inputs[input_id], element_id)
     if found is None:
         return []
-    return thaw(found[2].get("shapes", [])) or []
+    return thaw(_shape_list(found[2], group))
 
 
-def set_shape_value(show: Show, input_id: str, element_id: str, shape_id: str, path: str, value: Any) -> Show:
-    shapes = _shapes(show, input_id, element_id)
+def set_shape_value(show: Show, input_id: str, element_id: str, shape_id: str, path: str, value: Any,
+                    group: str = "shapes") -> Show:
+    shapes = _shapes(show, input_id, element_id, group)
     for i, shape in enumerate(shapes):
         if shape.get("id") == shape_id:
             shapes[i] = thaw(set_path(shape, path, value))
-            return set_element_value(show, input_id, element_id, "shapes", shapes)
+            return set_element_value(show, input_id, element_id, group, shapes)
     return show
 
 
-def set_shape_values(show: Show, input_id: str, element_id: str, shape_id: str, values: dict[str, Any]) -> Show:
+def set_shape_values(show: Show, input_id: str, element_id: str, shape_id: str, values: dict[str, Any],
+                     group: str = "shapes") -> Show:
     """Several settings of one shape at once (a drag moves x and y together)."""
-    shapes = _shapes(show, input_id, element_id)
+    shapes = _shapes(show, input_id, element_id, group)
     for i, shape in enumerate(shapes):
         if shape.get("id") == shape_id:
             for path, value in values.items():
                 shape = thaw(set_path(shape, path, round(value, 4) if isinstance(value, float) else value))
             shapes[i] = shape
-            return set_element_value(show, input_id, element_id, "shapes", shapes)
+            return set_element_value(show, input_id, element_id, group, shapes)
     return show
 
 
-def set_shape_values_at(show: Show, input_id: str, element_id: str, shape_id: str, values: dict[str, Any], t: float) -> Show:
+def set_shape_values_at(show: Show, input_id: str, element_id: str, shape_id: str, values: dict[str, Any], t: float,
+                        group: str = "shapes") -> Show:
     """A drag in the Selected view: settings that have keyframes get a key at element time t; the others
     change (keeping an expression, whose `value` they are)."""
-    shapes = _shapes(show, input_id, element_id)
+    shapes = _shapes(show, input_id, element_id, group)
     for i, shape in enumerate(shapes):
         if shape.get("id") == shape_id:
             for path, value in values.items():
@@ -673,7 +715,7 @@ def set_shape_values_at(show: Show, input_id: str, element_id: str, shape_id: st
                 raw = shape.get(path)
                 shape = thaw(set_path(shape, path, with_key(raw, t, value) if is_keyframed(raw) else with_base_value(raw, value)))
             shapes[i] = shape
-            return set_element_value(show, input_id, element_id, "shapes", shapes)
+            return set_element_value(show, input_id, element_id, group, shapes)
     return show
 
 
@@ -692,19 +734,23 @@ def set_element_values_at(show: Show, input_id: str, element_id: str, values: di
     return show
 
 
-def remove_shape(show: Show, input_id: str, element_id: str, shape_id: str) -> Show:
-    shapes = [s for s in _shapes(show, input_id, element_id) if s.get("id") != shape_id]
-    return set_element_value(show, input_id, element_id, "shapes", shapes or None)
+def remove_shape(show: Show, input_id: str, element_id: str, shape_id: str, group: str = "shapes") -> Show:
+    shapes = [s for s in _shapes(show, input_id, element_id, group) if s.get("id") != shape_id]
+    show = set_element_value(show, input_id, element_id, group, shapes or None)
+    found = find_element(show.inputs[input_id], element_id)
+    if group == "mask.shapes" and found is not None and found[2].get("mask") == {}:
+        show = set_element_value(show, input_id, element_id, "mask", None)  # (nothing left in the mask)
+    return show
 
 
-def move_shape(show: Show, input_id: str, element_id: str, shape_id: str, step: int) -> Show:
-    """Move a shape up (+1, drawn later, on top) or down (-1) in its element's list."""
-    shapes = _shapes(show, input_id, element_id)
+def move_shape(show: Show, input_id: str, element_id: str, shape_id: str, step: int, group: str = "shapes") -> Show:
+    """Move a shape up (+1, drawn later, on top) or down (-1) in its element's list (or its mask's)."""
+    shapes = _shapes(show, input_id, element_id, group)
     index = next((i for i, s in enumerate(shapes) if s.get("id") == shape_id), None)
     if index is None or not 0 <= index + step < len(shapes):
         return show
     shapes[index], shapes[index + step] = shapes[index + step], shapes[index]
-    return set_element_value(show, input_id, element_id, "shapes", shapes)
+    return set_element_value(show, input_id, element_id, group, shapes)
 
 
 # ---------------------------------------------------------------- media

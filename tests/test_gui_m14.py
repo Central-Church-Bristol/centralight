@@ -195,15 +195,33 @@ class DeleteKeyTests(EditorTestCase):
         process(self.app)
         self.assertEqual(self.shapes(window), ["S1", "S2"])
 
-    def test_not_in_mask_mode(self) -> None:
+    def test_in_mask_mode_it_removes_the_selected_mask_shape(self) -> None:
+        """Mask mode has shapes of its own (item 8): Delete removes the selected one there, never a Paint shape."""
         window, _engine, page = self.open_stage()
         page._shape_from_viewport("S2")
         QTest.mouseClick(page.selected_panel.mask, Qt.MouseButton.LeftButton)
         page.selected_canvas.setFocus()
         process(self.app)
-        QTest.keyClick(page.selected_canvas, Qt.Key.Key_Delete)
+        QTest.keyClick(page.selected_canvas, Qt.Key.Key_Delete)  # (no mask shape selected: nothing goes)
         process(self.app)
         self.assertEqual(self.shapes(window), ["S1", "S2"])
+        page.selected_panel.rect_tool.setChecked(True)
+        canvas = page.selected_canvas
+        QTest.mousePress(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, canvas.to_widget(0.1, 0.2).toPoint())
+        QTest.mouseMove(canvas, canvas.to_widget(0.3, 0.8).toPoint())
+        QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, canvas.to_widget(0.3, 0.8).toPoint())
+        process(self.app)
+        element = next(e for track in window.document.show.inputs["stage-shapes"].tracks for e in track if e["id"] == "E2")
+        mask_ids = [s["id"] for s in element["mask"]["shapes"]]
+        self.assertEqual(len(mask_ids), 1)
+        self.assertEqual(page.mask_shape_id, mask_ids[0])
+        canvas.setFocus()
+        QTest.keyClick(canvas, Qt.Key.Key_Delete)
+        process(self.app)
+        element = next(e for track in window.document.show.inputs["stage-shapes"].tracks for e in track if e["id"] == "E2")
+        self.assertNotIn("shapes", element["mask"])
+        self.assertEqual(self.shapes(window), ["S1", "S2"])
+        self.assertEqual(window.document.undo_stack.undoText(), f"Remove mask rectangle {mask_ids[0]}")
 
 
 def find_shapes(engine, element_id: str) -> list:

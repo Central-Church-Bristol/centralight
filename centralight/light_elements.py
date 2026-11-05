@@ -12,8 +12,9 @@ the colours shown in the Editor and on the Dashboard's tiles.
   left out; parts on the screen that the picture doesn't cover count as transparent.
   Then Colour boost (more saturation, the same hue) and, for Video and NDI, Smoothing (each
   light glides to its new colour, with separate times for getting brighter and darker).
-- Then the element's opacity, and its mask: the painted mask read at each dot, and the
-  lights it leaves alone (0 there).
+- Then the element's opacity, and its mask: where it starts (shown, or hidden everywhere),
+  the painted mask read at each dot, the mask's shapes in order (each shows or hides, by its
+  softness at the dot), and the lights it leaves alone (0 there) on top.
 
 The element's transform (move, scale, rotate) is undone at the dots: each dot is looked up
 where it falls in the element's own, unmoved picture (outside it, the element is
@@ -39,6 +40,8 @@ from .elements import (
     element_is_dynamic,
     fill_kind,
     load_image,
+    mask_hides,
+    mask_shapes,
     media_path,
     ndi_source_name,
     param,
@@ -473,23 +476,33 @@ def _frame_table(element: Mapping[str, Any], ctx: RenderContext) -> AreaTable | 
 
 
 def light_mask(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | None:
-    """The element's mask at each light (1 = show, 0 = hidden), or None for no mask: 0 for the lights it leaves
-    alone, times the mask painted in the Editor read at each dot."""
+    """The element's mask at each light (1 = show, 0 = hidden), or None for no mask: where it starts (shown, or hidden
+    everywhere), the mask painted in the Editor read at each dot (it hides), the mask's shapes in order (each shows or
+    hides, by its softness at the dot), and on top, 0 for the lights it leaves alone (M14)."""
     mask = element.get("mask")
     if not _is_map(mask):
         return None
     lights = ctx.lights
-    keep = None
+    hidden = mask.get("start") == "hidden"
+    keep = np.zeros(len(lights.ids), dtype=np.float64) if hidden else None
+    painted = mask.get("paint")
+    if not hidden and isinstance(painted, str) and painted:  # (strokes only hide: on a hidden mask they change nothing)
+        grey = mask_picture(media_path(ctx.folder, painted))
+        if grey is not None:
+            keep = bilinear(grey, lights.x, lights.y)[0].astype(np.float64)
+    shapes = mask_shapes(mask)
+    if shapes:
+        if keep is None:
+            keep = np.ones(len(lights.ids), dtype=np.float64)
+        for shape in shapes:
+            cover, _colour = shape_cover(shape, ctx.time, lights.x, lights.y)
+            if cover is not None:
+                keep = keep * (1.0 - cover) if mask_hides(shape) else keep + cover * (1.0 - keep)
     excluded = mask.get("exclude")
     if isinstance(excluded, Sequence) and not isinstance(excluded, str) and excluded:
         left_alone = {str(e) for e in excluded}
-        keep = np.array([0.0 if light_id in left_alone else 1.0 for light_id in lights.ids], dtype=np.float64)
-    painted = mask.get("paint")
-    if isinstance(painted, str) and painted:
-        grey = mask_picture(media_path(ctx.folder, painted))
-        if grey is not None:
-            values = bilinear(grey, lights.x, lights.y)[0]
-            keep = values if keep is None else keep * values
+        ticks = np.array([0.0 if light_id in left_alone else 1.0 for light_id in lights.ids], dtype=np.float64)
+        keep = ticks if keep is None else keep * ticks
     return keep
 
 
