@@ -46,9 +46,10 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — a check where 5 and 10 meet: the default show at PC start and the last show's variables | **done** (5 Nov, 02:45; it can't happen in the app, and a test checks it) |
 | — 11 the colour picker updates live (Preview, one undo step, Enter / Esc) | **done** (5 Nov, 02:45; 914 tests pass) |
 | — the Clean-up: no compatibility with what you never had (old Overlay links, old file conversions) | **done** (5 Nov, 03:00; 911 tests pass) |
-| A look at M14 (three reviewers, 21 findings): the default show's nine | **done** (5 Nov, 03:15) |
-| — and the Overlay and Dashboard's six (one went with the clean-up) | **done** (5 Nov, 03:30) |
-| — and Colour, Split and mask shapes' six | **done** (5 Nov, 03:45) |
+| A look at M14 (three reviewers, 21 findings): the default show's nine | **done** (5 Nov, 03:05) |
+| — and the Overlay and Dashboard's six (one went with the clean-up) | **done** (5 Nov, 03:10) |
+| — and Colour, Split and mask shapes' six | **done** (5 Nov, 03:15) |
+| A second look (two reviewers: item 11, the clean-up and those fixes; 16 findings) | **done** (5 Nov, 04:10; 945 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -235,7 +236,7 @@ The small ones first (3, 1, 2, 7):
 remove all the legacy stuff to keep it clean"). A commit of its own, so it's easy to see and undo.
 - **Removed:**
   - the Overlay 1–4 links: `/api/input/<id>/overlay/<n>` with `?state=on / off`, `/api/overlay/<n>/off` and
-    `/opacity`, and the POST forms with `slot` or `overlay_off` (they get "not found" now). Send to Overlay's toggle
+    `/opacity`, and the POST forms with `slot` or `overlay_off` (refused now). Send to Overlay's toggle
     and once went with them, as nothing else used them;
   - the conversions of older automation files: Blackout (condition and action), a show's own "The PC starts",
     "CentraLight starts" and "The PC wakes" (they became "When this show loads" in M12), and Overlay slots;
@@ -332,6 +333,47 @@ folders). 21 findings. Fixed, each with a test:
 - **After undoing a drawn mask shape,** the Editor still thought it was selected; after a redo, its handles showed with
   nothing selected in the details. Nothing stays selected now.
 - **The note about going back to the version before M14** also says it doesn't know mask shapes or Start with.
+
+**A second look** (two more reviewers: item 11, the clean-up, and the fixes above), each fix with a test:
+- **Sending a video input to the Overlay again and again** (to the beat, say) opened a new video reader each time,
+  inside the engine's tick: tapping twice a second for ten seconds reached 20 readers, 940 threads and nearly 5 GB of
+  memory, and the lights hitched at each send; clearing the copies later stalled a tick too. Now:
+  - a new copy takes over a reader another copy of that video has finished with (the same tapping peaks at 3 readers,
+    33 threads and about 100 MB more);
+  - videos are decoded in software with two threads: for these small pictures it's as quick as the graphics card,
+    and a reader costs about 15 MB instead of 170, and opens in a few ms instead of about 90;
+  - a reader closes on a thread of its own, and a new one shows its first picture straight away (no blank moment
+    when a video input is sent again).
+- **A waiting "longer schedule's show comes back"** (Wait 10 min pressed on it) still loaded after that schedule had
+  ended too, over the default show. Now when a schedule ends, whatever was waiting from before goes first.
+- **A PC restart with the default show** ran every schedule that had been under way again, even one that had ended
+  meanwhile (so its "When it stops matching" was lost), and even after someone had loaded a show by hand. Now only the
+  automation that had loaded the last show runs again, and only if it's still under way.
+- **An automation that loads a show and is about the loaded show or the lights being black** (not a schedule, for
+  the default show) was overridden by the default show when a schedule ended at the same moment. Its load wins now,
+  like a person's choice.
+- **With two longer schedules** (November, and Sundays), the one higher in the list came back after an inner one ended,
+  rather than the one that had been on. The one that was on comes back now (CentraLight keeps track, over restarts
+  too).
+- **Split's line** missed random() in an element's move / size, opacity or mask formulas (the Colour element gets those
+  too). It says so now.
+- **An input written with "shapes" that isn't a list** made the Editor raise an error at every change. It copes now.
+- **The AI check refused a Paint element written with "fill": null,** which is fine (see-through).
+- **Cancel on a colour with keyframes left a keyframe behind** (with an undo step), so the input played a little
+  differently. A pick with Preview now works like dragging a slider: each change shows at once, on the lights too, but
+  isn't a step yet. Cancel puts the input back exactly as it was (nothing left behind, and Redo still works); OK makes
+  the colour one ordinary step, keyframe and all.
+- **Two separate picks of an input's own colour variable became one undo step** after its row had been redrawn. Each
+  pick is its own step now.
+- **A colour typed into the box without pressing Enter, then the swatch clicked:** the picker started from the old
+  colour, so Cancel threw the typed one away. The typed colour counts first now.
+- **Preview's "until the PC restarts"** didn't reset after a shut down and power on with Windows' Fast Startup (this PC
+  has it on), as Windows' running time carries on. It's ticked again whenever CentraLight counts the PC as just started
+  (which includes Windows starting it at sign-in).
+- **An old "slot" Overlay action or POST** from before M14 wasn't refused: it was read as Send to Overlay (even an old
+  "out of Overlay 1"). They're refused now, with a note (none of your files has one).
+- **Not fixed (drawing only):** the week schedule doesn't always draw the default show the way it would load around a
+  "When it stops matching" load (one whose show isn't there, or that waits a few minutes). It's noted as a follow-up.
 
 ## The overnight soaks (4 Nov, early morning)
 
@@ -1467,8 +1509,9 @@ Problems the tests found and that are fixed:
   - **Split is offered even when it wouldn't look exactly the same,** with a line under the button saying what would
     change (the plan allowed either). The colour and the painting are then worked out one after the other, so they
     match exactly only at full opacity, with Normal blend, without a fade in or out, and with a mask that's either
-    on or off at each light. Your two shows' painted inputs have their own opacity setting, so check the line on
-    those. When nothing would change, the line says it looks exactly the same.
+    on or off at each light. When nothing would change, the line says it looks exactly the same: as it does for your
+    two shows' painted inputs (track 1 of "new-input" in Central Church and "default" in Evening are at full opacity,
+    with Normal blend and only ticked lights in their masks; checked on copies of both).
   - **An input saved with a Colour element shows nothing for that element in the version before M14** (it doesn't
     know Colour), in case you ever go back to it. Nor does it know mask shapes or Start with: a mask that starts hidden
     everywhere with a Show shape ("only here") shows everywhere there.
@@ -1514,8 +1557,16 @@ Problems the tests found and that are fixed:
   - **A schedule inside a longer one** (Sunday 18:00–20:00 inside "all Sunday"): when the inner one ends, the longer
     one's show loads again (with the countdown), and the default show comes when that one ends. The plan only covered
     back-to-back schedules, where the next one's show is already loading.
-  - **When the PC restarts mid-service and the default show opens,** the schedule under way runs again from the top,
-    as a catch-up does: its show loads, and its other actions (an input sent to Base, say) happen too.
+  - **When the PC restarts mid-service and the default show opens,** the automation that had loaded the last show
+    runs again from the top if it's still under way, as a catch-up does: its show loads, and its other actions (an
+    input sent to Base, say) happen too. If someone had loaded a show by hand, nothing runs again: the default show
+    stays.
+  - **Which longer schedule's show comes back** when an inner one ends: the one that was on before it, if it still
+    matches; else the lowest in the list that matches. An automation that loads a show and is about the loaded show or
+    the lights being black is like a person's choice: its show stays, and nothing comes back over it.
+  - **Videos are decoded in software now** (two threads per video), not by the graphics card: for pictures this small it
+    was no quicker, and each video took far more memory and time to open. Each copy of a playing video input has its
+    own reader, and a new copy takes over one another copy has finished with.
   - **Run now** on a global automation that loads a show is a person's choice (the default show doesn't replace it);
     **Now** on a countdown that started early is still the schedule's own run.
 - **M13 choices** (all easy to change):
@@ -1679,5 +1730,12 @@ Problems the tests found and that are fixed:
 
 ## Next
 
-Everything in the plan is built, and the review's fixes are in. What's left is Wednesday's checklist on the real
-lights (`docs/WEDNESDAY_TESTS.md`).
+M14 is built (all eleven items, the two extras and the clean-up), reviewed twice, and its fixes are in; see the
+status table for the tests and the soak. What's left:
+- **Your checks on the lights:** section 20b of `docs/WEDNESDAY_TESTS.md`, and the "M14, to check" decisions above.
+- **Moving the main folder to M14** (with your OK): copy `Documents\CentraLight Shows` first. Once this version saves
+  an input with a Colour element, the version you ran on Wednesday shows that element as nothing.
+- **M15, the Console page** (in the plan) is on hold until you say go.
+- **Follow-ups, not urgent:** a drawn icon that Qt copies to change it would crash (nothing does that today); a tile
+  dragged while a show load replaces the tiles could, in theory, be freed mid-drag (couldn't be made to happen); the
+  week schedule's drawing of the default show around a "When it stops matching" load.

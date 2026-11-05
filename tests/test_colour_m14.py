@@ -224,6 +224,8 @@ class OlderInputTests(unittest.TestCase):
         notes = split_changes(lucky)
         self.assertEqual(len(notes), 1)
         self.assertIn("random()", notes[0])
+        wandering = {**painted, "transform": {"x": {"value": 0.5, "expr": "random(1)"}}}  # (the Colour element gets it too)
+        self.assertEqual(len(split_changes(wandering)), 1)
 
     def test_a_fill_that_isnt_an_object(self) -> None:
         """(Review: an AI wrote "fill": "#FF0000"; the timeline's bar text raised an error and the check said nothing.)"""
@@ -238,6 +240,9 @@ class OlderInputTests(unittest.TestCase):
                 "tracks": [[{"id": "E1", "kind": "colour", "fill": "#FF0000"}], [], [], []]}
         _inp, problems, _notes = check_input_data(data, self.show)
         self.assertTrue(any('"fill" must be an object' in p for p in problems), problems)
+        for fill in (None, "none"):  # (a Paint element written so is see-through, as the app draws it: fine)
+            see_through = dict(data, tracks=[[{"id": "E1", "kind": "paint", "fill": fill}], [], [], []])
+            self.assertFalse(any('"fill"' in p for p in check_input_data(see_through, self.show)[1]), fill)
 
     def test_the_type_row_says_fill(self) -> None:
         """(Review: a Colour element had two rows called "Colour", and its undo step said "colour Colour → …".)"""

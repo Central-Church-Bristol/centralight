@@ -411,6 +411,11 @@ Close the app first (it's holding the dongle), then:
   - [ ] With 4 boxes, **Send to Overlay** greys out until you clear one.
   - [ ] **Hold** Send to Overlay: the pillars come on at once and go when you let go (a flash). A quick click stays.
   - [ ] A **timed** input sent to the Overlay: its box fills as it plays, and it leaves by itself at the end.
+  - [ ] Click its box while it plays: it fades out from where it was (it doesn't jump back to its start).
+  - [ ] An input with a **video**: Send to Overlay twice, a few seconds apart. Both copies play smoothly, each at
+        its own moment, and the other lights don't stutter. Then tap Send to Overlay quickly, ten times: no stutter,
+        and Diagnostics shows nothing unusual.
+  - [ ] Delete an input that's on the Overlay (Ctrl+Z afterwards): its copies fade away with it.
   - [ ] The **Overlay** row's switch off: the Overlay hides but its boxes stay (dimmed); switch on: it's back.
         **Clear all** empties it.
   - [ ] Drag a tile to another place: a pale-blue line shows where it'll go. Ctrl+Z puts it back.
@@ -448,6 +453,7 @@ Close the app first (it's holding the dongle), then:
 - [ ] **The colour picker updates live**: put Warm white on Base, open it in the Editor, click its Colour element, then
       the colour's swatch. Drag in the colour square: the lights follow as you drag.
   - [ ] **Cancel**: they go back. Again, then **OK**: they keep it, and one Ctrl+Z puts the old colour back.
+  - [ ] Type a hex value in the colour window and press Enter: it's OK. Pick again and press Esc: it's Cancel.
   - [ ] Untick **Preview**: nothing changes until OK. Pick again: it's still unticked (after a PC restart it's ticked
         again).
   - [ ] An input that isn't on the lights: picking its colour changes nothing on the lights.

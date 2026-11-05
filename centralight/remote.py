@@ -304,6 +304,8 @@ def command_from_json(payload: Any, show: Show, frame: Any = None, black_fade: f
         if op == "cut":
             parts.append("cut")
         elif op == "overlay":
+            if "slot" in payload or "state" in payload:  # (Overlays 1-4, before M14: refused rather than misread)
+                raise BadRequest(400, 'there is one Overlay now: send {"op": "overlay", "id": ...} (no "slot" or "state")')
             parts.append("overlay")
     elif op == "overlay_clear":  # {"op": "overlay_clear", "id": optional: that input's copies, else every copy}
         parts = ["input", str(payload["id"]), "overlay", "clear"] if payload.get("id") else ["overlay", "clear"]

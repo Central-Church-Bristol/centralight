@@ -29,6 +29,7 @@ import queue
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -318,6 +319,9 @@ class ShowDocument(QObject):
         self._save_timer.timeout.connect(self.flush)
         self._saving_paused = False
         self._held = 0  # colour pickers open with Preview (M14): saving waits for them to close
+        self._pick_start: Show | None = None  # a colour pick with Preview under way (M14): the show as it began
+        self._pick_open = False
+        self._picking = False  # its picker's own change is being made (shown at once, with no undo step)
         self._asked_input: str | None = None  # the input "Load the changed file?" is about, while it's up
         self._newest_undone: list[QUndoStack] = []  # the histories the Dashboard's undo took steps from, in order
         self._retry_show = False  # show.json couldn't be written: write it again next time
@@ -448,8 +452,40 @@ class ShowDocument(QObject):
         it by itself (a linked file's update): the Dashboard's Ctrl+Z skips it."""
         if self.read_only or show == self._show or self._other_show(show, text):
             return False
+        if self._pick_start is not None:
+            if self._picking:  # (an open colour picker's Preview: shown now, with no undo step: see begin_pick)
+                self._set(show)
+                return True
+            # anything else meanwhile (a file changed on disk, say) stays when the pick ends: it's done to its start too
+            self._pick_start = Change(self._show, show).apply(self._pick_start, True)
         self._push(self._show, show, text, merge_key, applied=False, automatic=automatic)
         return True
+
+    def begin_pick(self) -> None:
+        """A colour picker with Preview has opened (M14). While it's open, its changes show at once, on the lights too,
+        as a drag's do, with no undo step and nothing saved. end_pick() then puts the show back as it began, so Cancel
+        leaves nothing behind (not even a keyframe) and Redo is kept; OK's colour is then made as one ordinary step."""
+        if self._pick_start is None:
+            self._pick_start = self._show
+            self._pick_open = True
+            self.hold_saving(True)
+
+    @contextmanager
+    def pick_change(self):
+        """The open picker's own change: apply() shows it without an undo step (between begin_pick and end_pick)."""
+        self._picking = True
+        try:
+            yield
+        finally:
+            self._picking = False
+
+    def end_pick(self) -> None:
+        start, self._pick_start = self._pick_start, None
+        if start is not None and start is not self._show and folder_key(start.folder) == folder_key(self._show.folder):
+            self._set(start)  # (back as it began: still held, so nothing's saved)
+        if self._pick_open:
+            self._pick_open = False
+            self.hold_saving(False)
 
     def begin_drag(self) -> None:
         self._drag_start = self._show
@@ -517,6 +553,7 @@ class ShowDocument(QObject):
                 self._leave_on_disk(self._asked_input)
         self._settle_saves()
         self._drag_start = None
+        self._pick_start = None  # (another show: a pick under way has nothing to put back)
         self._save_timer.stop()
         self._retry_timer.stop()
         old_key, new_key = folder_key(self._show.folder), folder_key(show.folder)

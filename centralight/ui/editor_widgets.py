@@ -123,17 +123,21 @@ class _Swatch(QToolButton):
 
 
 class ColourField(QWidget):
-    edited = Signal(object, bool)  # "#RRGGBB", final (False while a pick with Preview is under way: one undo step)
+    edited = Signal(object, bool)  # "#RRGGBB", final (False: a change while its picker is open with Preview, M14)
 
     def __init__(self, parent: QWidget | None = None, live: bool = True) -> None:
         """live: the picker's Preview applies each change at once (M14). Off for colours that don't change the lights
         (a tile's colour, a show variable's starting value): OK applies it, as before."""
         super().__init__(parent)
         self.live = live
-        self.picks = 0  # counts each pick (and each typed colour): changes that belong to one undo step share it
-        # hold(True) as a live pick's picker opens and hold(False) as it closes (a document's hold_saving: it saves once
-        # the picker has closed). A plain function, not a signal: it's called even if this field was rebuilt away
-        self.hold: Callable[[bool], None] | None = None
+        # The ShowDocument the colour is kept in, for a live pick (M14): it's then like a drag. Each change shows at once
+        # with no undo step, Cancel puts the show back as it was, and OK makes one ordinary step. None (a Dashboard
+        # show variable, which only the engine keeps): Cancel sends the colour it started with.
+        self.drag = None
+        # called once a live pick's picker has closed, OK or Cancel (the details panel ends its gesture there). Plain
+        # Python, not signals: they work even if this field was rebuilt away while the picker was open
+        self.picked: Callable[[], None] | None = None
+        self._picking = None  # the document, while its picker is open
         self.swatch = _Swatch()
         self.text = QLineEdit()
         self.text.setMaxLength(7)
@@ -171,42 +175,49 @@ class ColourField(QWidget):
         undo step), OK ends it (edited(colour, True)), and Cancel puts the colour back (merging back to nothing)."""
         from .colour_picker import LiveColourDialog, preview_choice
 
-        self.picks += 1
-        start, live = self._value, self.live
-        hold = self.hold if live else None
+        if self.text.hasFocus():  # (a colour typed but not entered yet counts first: the picker starts from it)
+            self._typed()
+        start, live, picked = self._value, self.live, self.picked
+        document = self.drag if live else None
         # The window is the dialog's parent: the details panel can rebuild (deleting this field) while it's open
         dialog = LiveColourDialog(start, preview_choice.wanted() if live else False, live, self.window())
         dialog.changed.connect(self._live)
-        if hold is not None:
-            hold(True)
+        if document is not None:
+            document.begin_pick()
+            self._picking = document
+        accepted, chosen, tried = False, start, False
         try:
-            try:
-                accepted = dialog.exec() == QDialog.DialogCode.Accepted
-                if live:
-                    preview_choice.remember(dialog.preview.isChecked())
-                chosen, tried = dialog.colour(), dialog.tried()
-            finally:
-                dialog.deleteLater()
-            try:
-                if accepted and tried:
-                    self.set_value(chosen)
-                    self.edited.emit(chosen, True)  # (the last of the pick's changes: its one undo step ends here)
-                elif accepted:
-                    self._apply(chosen)
-                elif tried:
-                    self.set_value(start)
-                    self.edited.emit(start, True)  # (Cancel: back as it was, and the step goes with it)
-            except RuntimeError:  # this field was rebuilt away meanwhile
-                pass
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+            if live:
+                preview_choice.remember(dialog.preview.isChecked())
+            chosen, tried = dialog.colour(), dialog.tried()
         finally:
-            if hold is not None:
-                hold(False)
+            dialog.deleteLater()
+            self._picking = None
+            if document is not None:
+                document.end_pick()  # (the show as it was before the pick: Cancel leaves nothing behind)
+        try:
+            if accepted and (chosen != start or (tried and document is None)):
+                self.set_value(chosen)
+                self.edited.emit(chosen, True)  # (one ordinary undo step, from the colour the pick began with)
+            elif tried and not accepted:
+                self.set_value(start)
+                if document is None:
+                    self.edited.emit(start, True)  # (Cancel, for a show variable: back as it was)
+        except RuntimeError:  # this field was rebuilt away meanwhile
+            pass
+        if live and picked is not None:
+            picked()
 
     def _live(self, text: str) -> None:
-        """Preview: a colour picked in the open picker, applied now."""
+        """Preview: a colour picked in the open picker, shown now (in a show, with no undo step yet)."""
         try:
             self.set_value(text)
-            self.edited.emit(text, False)
+            if self._picking is not None:
+                with self._picking.pick_change():
+                    self.edited.emit(text, False)
+            else:
+                self.edited.emit(text, False)
         except RuntimeError:  # this field was rebuilt away meanwhile
             pass
 
@@ -221,7 +232,6 @@ class ColourField(QWidget):
 
     def _apply(self, text: str) -> None:
         if text != self._value:
-            self.picks += 1  # (a change of its own: its own undo step)
             self.set_value(text)
             self.edited.emit(text, True)
 

@@ -439,7 +439,9 @@ class EditorPage(QWidget):
             self.shape_id = ""
             self.mask_shape_id = ""
         else:  # (a shape undone away: nothing stays selected, here or in the details)
-            if self.shape_id and not any(str(s.get("id")) == self.shape_id for s in element.get("shapes", ()) or ()):
+            shapes = element.get("shapes")
+            shapes = [s for s in shapes if hasattr(s, "get")] if isinstance(shapes, (list, tuple)) else []
+            if self.shape_id and not any(str(s.get("id")) == self.shape_id for s in shapes):
                 self.shape_id = ""
             if self.mask_shape_id and not any(str(s.get("id")) == self.mask_shape_id for s in mask_shapes(element.get("mask"))):
                 self.mask_shape_id = ""

@@ -190,6 +190,54 @@ class RunnerTests(unittest.TestCase):
         self.assertIsNone(self.runner.loader)
         self.assertEqual(self.check(shows, "12:31"), [])  # (Morning ends: Evening, chosen by a person, stays)
 
+    def test_a_waiting_hand_back_goes_when_its_schedule_ends_too(self) -> None:
+        """(Review: Wait 10 min on "Loading Sunday" after an inner schedule ended; Sunday then ended too, so the default
+        loaded, and then Sunday's show loaded over it and stayed.)"""
+        sunday = automation("sunday", [{"type": "days", "days": ["sun"]}], [{"do": "load_show", "show": "sunday"}])
+        late = automation("late", [{"type": "days", "days": ["sun"]}, {"type": "time", "from": "22:00", "to": "23:55"}],
+                          [{"do": "load_show", "show": "late"}])
+        shows = container(sunday, late)
+        self.check(shows, "10:00")
+        self.check(shows, "22:00")
+        self.runner.countdown = 600.0
+        self.runner.counted = lambda action: action.get("do") == "load_show"
+        self.assertEqual(self.check(shows, "23:55"), [])  # ("Loading sunday" waits for its countdown, or Wait 10 min)
+        self.assertTrue(any(p[3].get("show") == "sunday" for p in self.runner.pending))
+        self.check(shows, "00:01", SUNDAY + timedelta(days=1))  # (Sunday ends meanwhile)
+        waiting = [p[3].get("show") for p in self.runner.pending if p[3].get("_default")]
+        self.assertEqual(waiting, ["central-church"])  # (only the default now: Sunday's own has gone)
+
+    def test_a_load_by_an_automation_about_the_loaded_show_wins(self) -> None:
+        """(Review: "colour lights black, 12:30-14:00 → Load Lunch" started as Morning ended: Lunch loaded, and then the
+        default show over it.)"""
+        lunch = automation("lunch", [{"type": "colour_black"}, {"type": "time", "from": "12:30", "to": "14:00"}],
+                           [{"do": "load_show", "show": "lunch"}])
+        for shows in (container(morning(), lunch), container(lunch, morning())):
+            self.setUp()
+            self.check(shows, "10:00")
+            local = datetime.combine(SUNDAY, datetime.min.time()) + timedelta(hours=12, minutes=30)
+            self.mono += 60.0
+            actions = self.runner.check(shows, Situation(now=local.timestamp(), local=local, colour_black=True), self.mono)
+            self.assertEqual(self.loads([a for _who, a in actions]), ["lunch"])
+            self.assertIsNone(self.runner.loader)  # (like a person's choice: nothing comes back over it)
+
+    def test_the_longer_schedule_that_was_on_comes_back(self) -> None:
+        """(Review: with two longer schedules, the first in the list came back, not the one that had been on.)"""
+        november = automation("november", [{"type": "dates", "from": "11-01", "to": "11-30"}], [{"do": "load_show", "show": "advent"}])
+        sunday = automation("sunday", [{"type": "days", "days": ["sun"]}], [{"do": "load_show", "show": "sunday"}])
+        evening = automation("evening", [{"type": "days", "days": ["sun"]}, {"type": "time", "from": "18:00", "to": "20:00"}],
+                             [{"do": "load_show", "show": "evening"}])
+        for shows in (container(sunday, november, evening), container(november, sunday, evening)):
+            self.setUp()
+            self.check(shows, "10:00", SUNDAY - timedelta(days=1))  # (Saturday: November is on)
+            self.assertEqual(self.loads(self.check(shows, "10:00")), ["sunday"])  # (Sunday starts: its show replaces it)
+            self.check(shows, "18:00")
+            self.assertEqual(self.loads(self.check(shows, "20:00")), ["sunday"])  # (the one that was on before Evening)
+            saved = self.runner.to_dict()
+            again = AutomationRunner()
+            again.restore(saved, 0.0)
+            self.assertEqual((again.loader, again._before), ("sunday", ["november"]))  # (kept over a restart)
+
     def test_a_restart_remembers_which_automation_loaded_it(self) -> None:
         shows = container(morning())
         self.check(shows, "10:00")
@@ -258,6 +306,30 @@ class RestartTests(AutomationEngineTestCase):
         self.clocks.uptime_value = 60.0
         self.assertEqual(self.reopen(live, 15, pc_start=True, default_show="central-church"), [])  # (the last show opened)
 
+    def test_a_restart_after_it_ended_keeps_its_when_it_stops_matching(self) -> None:
+        """(Review: Morning, with "when it stops matching → Load afternoon", ended while the PC was off at 12:30; with
+        the default show opening, its "when it stops" was lost.)"""
+        self.MORNING = automation("sunday-morning", [{"type": "days", "days": ["sun"]}, {"type": "time", "from": "09:00", "to": "12:30"}],
+                                  [{"do": "load_show", "show": "morning"}], on_end=[{"do": "load_show", "show": "afternoon"}])
+        live = self.until("12:25")
+        self.clocks.uptime_value = 60.0  # (the PC restarted)
+        self.assertEqual(self.reopen(live, 8, pc_start=True, default_show="evening", default_opened=True), ["afternoon"])
+
+    def test_a_restart_after_a_show_loaded_by_hand_runs_nothing_again(self) -> None:
+        """(Review: someone had loaded a show by hand during Morning; after the restart Morning came back over it.)"""
+        from centralight.commands import LoadShow
+
+        self.make(datetime(2026, 11, 8, 8, 59), [], global_automations=[self.MORNING])
+        self.run_until(datetime(2026, 11, 8, 10, 0))
+        self.engine.submit(LoadShow(self.engine.show))  # (a person loads a show: the loader goes)
+        self.engine.tick()
+        import json
+
+        live = LiveState.from_dict(json.loads(json.dumps(self.engine.live_state().to_dict())))
+        live.saved_at = self.clocks.wall
+        self.clocks.uptime_value = 60.0
+        self.assertEqual(self.reopen(live, 15, pc_start=True, default_show="evening", default_opened=True), [])
+
     def test_a_quick_reopen_after_a_crash_knows_the_default_at_once(self) -> None:
         """(Review: the window told the engine the default show only after its first check, so a crash at 12:25 and a
         reopen at 12:33, after Morning ended, left Morning on.)"""
@@ -278,6 +350,16 @@ class StartTests(FilesCase):
         self.assertEqual(show_to_open(Settings(), live, root=self.root, pc_start=True).name, "Evening")  # (none: as before)
         gone = Settings(default_show="christmas")
         self.assertEqual(show_to_open(gone, live, root=self.root, pc_start=True).name, "Evening")
+
+    def test_a_pc_start_ticks_preview_again(self) -> None:
+        """(Review: with Fast Startup, Windows' running time carries on over a shut down and power on, so Preview's
+        "until the PC restarts" didn't reset; CentraLight's own "the PC starts" counts Windows starting it at sign-in.)"""
+        from centralight.app import forget_after_pc_start
+
+        settings = Settings()
+        settings.ui["colour_preview"] = {"on": False, "boot": 1}
+        forget_after_pc_start(settings)
+        self.assertNotIn("colour_preview", settings.ui)
 
     def test_settings(self) -> None:
         settings = Settings()

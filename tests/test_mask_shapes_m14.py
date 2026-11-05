@@ -252,6 +252,18 @@ class EditorTests(unittest.TestCase):
 
         return next(b for b in self.page.details.findChildren(QPushButton) if b.text() == text and b.isVisible())
 
+    def test_shapes_that_arent_a_list_dont_stop_the_editor(self) -> None:
+        """(Review: an input written with "shapes": {...} made the Editor raise an error at every change.)"""
+        from centralight.input_edit import set_element_value
+        from tests.qt_support import process
+
+        document = self.window.document
+        self.page.shape_id = "S1"
+        document.apply(set_element_value(document.show, self.page.input_id, self.page.element_id, "shapes", {"S1": {}}), "Odd")
+        process(self.app)
+        self.assertEqual(self.page.shape_id, "")
+        self.assertIsNone(self.page.details.current_shape())
+
     def test_undoing_a_drawn_mask_shape_leaves_nothing_selected(self) -> None:
         """(Review: the Editor kept "M1" selected after its undo, while the details had none; after a redo the Selected
         view showed its handles with nothing selected in the details.)"""

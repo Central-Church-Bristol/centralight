@@ -350,8 +350,8 @@ def split_changes(element: Any, inp: Input | None = None) -> list[str]:
     if inp is not None and not inp.infinite and _crosses(inp, element):
         changes.append("while it crosses the element next to it on its track, the Background would stay full and then "
                        "stop, rather than crossing with it")
-    if _uses_random(element.get("fill")):
-        changes.append("the Background's formula uses random(), which picks again for the new Colour element")
+    if any(_uses_random(element.get(part)) for part in ("fill", "transform", "opacity", "mask")):
+        changes.append("a formula it uses has random() in it, which picks again for the new Colour element")
     return changes
 
 

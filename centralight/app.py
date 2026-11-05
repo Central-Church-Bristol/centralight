@@ -49,6 +49,13 @@ def pc_just_started(live: LiveState | None, started_by_windows: bool) -> bool:
     return bool(started_by_windows) or (uptime < STARTUP_WINDOW and not saved_at > time.time() - uptime)
 
 
+def forget_after_pc_start(settings: Settings) -> None:
+    """The PC has just started (as CentraLight counts it: Windows starting it at sign-in too, as Fast Startup needs,
+    where Windows' running time carries on): choices kept only until then go. The colour picker's Preview is ticked
+    again (M14)."""
+    settings.ui.pop("colour_preview", None)
+
+
 def show_to_open(settings: Settings, live: LiveState | None, root: Path | None = None, pc_start: bool = False) -> Path:
     """The show that was loaded last (live.json says which), else the one Settings names, else Central Church; if
     none of those is there any more (deleted, say), the first show there is; only with no show at all is Central
@@ -140,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
     settings = Settings.load()
     live = LiveState.load()
     pc_start = pc_just_started(live, "--minimized" in argv)  # (worked out once: the engine is told, so both agree)
+    if pc_start:
+        forget_after_pc_start(settings)
     show, problem = open_show(settings, show_to_open(settings, live, pc_start=pc_start))
     # the default show opened instead of the last one (M14): schedules under way run again, so their show comes back
     default_opened = (pc_start and bool(settings.default_show) and live is not None and bool(live.show)

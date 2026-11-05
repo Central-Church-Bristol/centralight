@@ -768,7 +768,9 @@ def check_input_data(data: Any, show: Show, existing_id: str | None = None) -> t
             label = f"track {track_number}, {element.get('kind')} {element.get('id', '')}".strip()
             if element.get("kind") not in kinds:
                 notes.append(f'{label}: "{element.get("kind")}" isn\'t an element kind CentraLight knows, so it draws nothing.')
-            if element.get("kind") in ("colour", "paint") and "fill" in element and not hasattr(element.get("fill"), "get"):
+            fill = element.get("fill")
+            if "fill" in element and not hasattr(fill, "get") and (
+                    element.get("kind") == "colour" or (element.get("kind") == "paint" and fill not in (None, "none"))):
                 problems.append(f'{label}: "fill" must be an object, e.g. {{"type": "colour", "colour": "#FF6F59"}}.')
             mask = element.get("mask")
             excluded = mask.get("exclude", ()) if isinstance(mask, Mapping) else ()

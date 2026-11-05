@@ -188,6 +188,72 @@ class EditorTests(unittest.TestCase):
         self.assertEqual(seen, [before, before])
         self.assertEqual(self.colour_in(self.engine.show), "#00FF00")
 
+    def test_cancel_on_a_keyframed_colour_leaves_no_keyframe(self) -> None:
+        """(Review: Cancel left the key the live changes had added, with an undo step, and the input played differently.)"""
+        from centralight.input_edit import set_element_value
+
+        document = self.window.document
+        keys = {"keys": [[0.0, "#FF0000", "linear"], [4.0, "#0000FF"]]}
+        document.apply(set_element_value(document.show, "warm-white", "E1", "fill.colour", keys), "Keyframes")
+        process(self.app)
+        self.page.seek(2.0)
+        process(self.app)
+        self.field = self.page.details._fields["element:fill.colour"]
+        before = self.engine.show.inputs["warm-white"].tracks[0][0]["fill"]["colour"]
+        steps = document.undo_stack.count()
+        self.pick(["#00FF00", "#FFFF00"], accept=False)
+        self.assertEqual(self.engine.show.inputs["warm-white"].tracks[0][0]["fill"]["colour"], before)
+        self.assertEqual(document.show.inputs["warm-white"].tracks[0][0]["fill"]["colour"], before)
+        self.assertEqual(document.undo_stack.count(), steps)
+        self.pick(["#00FF00"], accept=True)  # (OK: one keyframe at the playhead, one step)
+        colour = document.show.inputs["warm-white"].tracks[0][0]["fill"]["colour"]
+        self.assertEqual([round(k[0], 3) for k in colour["keys"]], [0.0, 2.0, 4.0])
+        self.assertEqual(document.undo_stack.count(), steps + 1)
+
+    def test_a_cancelled_pick_keeps_redo(self) -> None:
+        """(Review: the first live change cleared Redo, and Cancel then dropped its step, so Redo was gone.)"""
+        document = self.window.document
+        self.pick(["#FF0000"], accept=True)
+        self.window.undo()
+        self.assertTrue(document.undo_stack.canRedo())
+        self.pick(["#00FF00", "#0000FF"], accept=False)
+        self.assertTrue(document.undo_stack.canRedo())
+
+    def test_a_colour_typed_but_not_entered_counts_first(self) -> None:
+        """(Review: the picker started from the old colour, so Cancel threw the typed one away.)"""
+        self.field.text.setFocus()
+        self.field.text.setText("#FF0000")
+        process(self.app)
+        started = []
+
+        def run(dialog: LiveColourDialog) -> int:
+            started.append(dialog.colour())
+            return QDialog.DialogCode.Rejected
+
+        with mock.patch.object(LiveColourDialog, "exec", run):
+            self.field.swatch.clicked.emit()
+            process(self.app)
+        self.assertEqual(started, ["#FF0000"])
+        self.assertEqual(self.colour_in(self.window.document.show), "#FF0000")
+
+    def test_two_picks_of_an_inputs_own_colour_are_two_steps(self) -> None:
+        """(Review: the picks of a local colour variable merged into one undo step once its row had been rebuilt.)"""
+        details, document = self.page.details, self.window.document
+        self.page.select_element("")  # (the Input tab, with its local variables)
+        process(self.app)
+        panel = details.locals_panel
+        self.assertIsNotNone(panel)
+        name = panel.add("colour")
+        process(self.app)
+        steps = document.undo_stack.count()
+        for colour in ("#00FF00", "#0000FF"):
+            details.refresh(document.show)  # (its row may be rebuilt between picks)
+            details._rebuild()
+            process(self.app)
+            self.field = details.locals_panel.rows[name].value
+            self.pick([colour], accept=True)
+        self.assertEqual(document.undo_stack.count(), steps + 2)
+
     def test_saving_waits_for_the_picker_to_close(self) -> None:
         document = self.window.document
         held = []

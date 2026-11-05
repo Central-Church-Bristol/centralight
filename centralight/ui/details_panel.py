@@ -180,8 +180,9 @@ class DetailsPanel(QScrollArea):
         element = self.current_element()
         if element is None or not self.shape_id:
             return None
-        for shape in element.get("shapes", ()) or ():
-            if shape.get("id") == self.shape_id:
+        shapes = element.get("shapes")
+        for shape in shapes if isinstance(shapes, (list, tuple)) else ():
+            if hasattr(shape, "get") and shape.get("id") == self.shape_id:
                 return shape
         return None
 
@@ -319,7 +320,8 @@ class DetailsPanel(QScrollArea):
             field = NumberField(spec.minimum, spec.maximum, spec.step, spec.unit)
         elif spec.type == "colour":
             field = ColourField()
-            field.hold = self.document.hold_saving  # (a pick with Preview saves once its picker closes)
+            field.drag = self.document  # (a pick with Preview is like a drag: one undo step on OK, none on Cancel)
+            field.picked = self._end_gestures
         elif spec.type == "choice":
             field = ChoiceField(spec.choices)
         elif spec.type == "source":
@@ -1073,6 +1075,12 @@ class DetailsPanel(QScrollArea):
         """The element time a drag of this setting began at (a keyframe goes there, not wherever the playing
         playhead has got to by each step of the drag)."""
         return self._gesture_t.setdefault(key, self.element_time())
+
+    def _end_gestures(self) -> None:
+        """A colour picker has closed (M14), OK or Cancel: whatever it showed, the next change is a step of its own (and
+        a keyframe goes where the playhead is then)."""
+        self._gesture_t.clear()
+        self._gesture += 1
 
     def _gesture_done(self, key: str, final: bool) -> None:
         if final:  # released, or Enter: the next change is a new undo step

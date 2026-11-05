@@ -102,6 +102,8 @@ class RouteTests(RemoteTestCase):
                      "/api/overlay/3/off", "/api/overlay/1/opacity?value=0.25"):
             self.assertEqual(self.request(path)[0], 404, path)
         self.assertEqual(self.request("/api/command", "POST", {"op": "overlay_off"})[0] // 100, 4)
+        for old in ({"op": "overlay", "id": "pillars-purple", "slot": 2}, {"op": "overlay", "id": "pillars-purple", "state": "off"}):
+            self.assertEqual(self.request("/api/command", "POST", old)[0], 400, old)  # (refused, not misread)
         self.assertEqual(self.engine.commands, [])
 
     def test_overlays_master_house_black_identify(self) -> None:

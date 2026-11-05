@@ -413,7 +413,7 @@ class Engine:
         self._global_runner.restore(live.global_automations, wall(), saved_at=live.saved_at)
         self._global_runner.default_show = str(default_show or "").strip()
         if default_opened and self._pc_start:
-            self._global_runner.rerun_show_loads(self.global_automations)
+            self._global_runner.rerun_loader()
         self._global_runner.paused, self._global_runner.paused_since = self._runner.paused, self._runner.paused_since
         self._first_check = True
         # the countdown before an automatic show load or Cut / Fade to black (countdown.py); none just after starting

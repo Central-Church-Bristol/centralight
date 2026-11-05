@@ -3,7 +3,11 @@
 Each file in use has a VideoClip. Its reader thread decodes a little ahead of where playback is (LEAD
 seconds), at most 320x180 and 25 pictures a second, and then waits, so decoding is paced by the playback and
 the engine never waits for it: it takes the newest picture that's due. A jump (a loop back to the start, or
-the Editor's playhead moving) makes the reader seek. Hardware decoding is used where Windows offers it.
+the Editor's playhead moving) makes the reader seek. Decoding is in software, with two threads: for pictures this
+small it's as quick as the graphics card's, and a reader costs a tenth of the memory and opens in a few ms (M14).
+
+The engine's running copies of an input each have a reader of their own (so two copies at different moments don't
+make one reader jump back and forth); a new copy takes over a reader another copy of that video has finished with.
 
 clip.frame_at(t) gives the picture for t seconds into the clip (wrapping round at its end). With
 threaded=False it decodes on the spot instead, which is what tests and the Editor's exact frames use.
@@ -17,6 +21,7 @@ import threading
 import time
 from bisect import bisect_right
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -27,6 +32,8 @@ MAX_FPS = 25.0
 LEAD = 0.5  # seconds decoded ahead of playback
 JUMP = 2.0  # seconds: further ahead than this, the reader seeks instead of decoding its way there
 IDLE_CLOSE = 10.0
+DECODE_THREADS = 2  # FFmpeg's threads per reader (its own default is one per core: about 31 here, idle mostly)
+REUSE_IDLE = 0.5  # seconds: a copy's reader nobody has asked for this long can be another copy's (M14)
 
 
 class VideoClip:
@@ -55,8 +62,10 @@ class VideoClip:
         import cv2
 
         cap = None
+        threads = [cv2.CAP_PROP_N_THREADS, DECODE_THREADS] if hasattr(cv2, "CAP_PROP_N_THREADS") else []
         try:
-            cap = cv2.VideoCapture(str(self.path), cv2.CAP_FFMPEG, [cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY])
+            cap = cv2.VideoCapture(str(self.path), cv2.CAP_FFMPEG,
+                                   [cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_NONE, *threads])
             if not cap.isOpened():
                 cap.release()
                 cap = cv2.VideoCapture(str(self.path), cv2.CAP_FFMPEG)
@@ -94,7 +103,17 @@ class VideoClip:
                 self._running = True
                 self._thread = threading.Thread(target=self._run, name=f"video-{self.path.name}", daemon=True)
                 self._thread.start()
+            if not self._times:  # (a new reader, or one just taken over: its first picture now, not a blank moment)
+                self._decode_towards(t, ahead=0.0, limit=4)
             return self._best(t)
+
+    def take_over(self) -> None:
+        """Another copy of the video plays from this reader now (M14): what it kept is for the other one's moment."""
+        with self._lock:
+            self._frames.clear()
+            self._times.clear()
+            self._last = None
+            self._next_keep = 0.0
 
     def _best(self, t: float) -> np.ndarray | None:
         """The newest picture that's due at t (or the last one shown, while the reader catches up)."""
@@ -193,26 +212,41 @@ class VideoLibrary:
     def clip(self, path: Path, threaded: bool = True, player: Any = None) -> VideoClip:
         """The clip for a file (opened the first time; opened again if the file has been replaced). player: who plays
         it, for the engine's running copies of an input (M14): each has a clip of its own, so two copies of one video
-        at different moments (on the Overlay, say) don't make one reader seek back and forth every tick. None: shared."""
+        at different moments (on the Overlay, say) don't make one reader seek back and forth every tick. A new copy
+        takes over a reader another copy of the video has finished with, so sending a video again and again (to the
+        beat, say) doesn't open one each time. None: shared."""
         path = Path(path)
-        key = (str(path.resolve()).lower(), threaded, player)
+        name = str(path.resolve()).lower()
+        key = (name, threaded, player)
         try:
             stamp = path.stat().st_mtime_ns
         except OSError:
             stamp = 0
         old = None
+        taken = False
         with self._lock:
             clip = self._clips.get(key)
             if clip is not None and clip.stamp != stamp:
                 old, clip = self._clips.pop(key), None
+            if clip is None and player is not None:
+                now = time.monotonic()
+                spare = next((k for k, c in self._clips.items() if k[:2] == (name, threaded) and k[2] is not None
+                              and c.stamp == stamp and now - c.last_used > REUSE_IDLE), None)
+                if spare is not None:
+                    clip = self._clips.pop(spare)
+                    clip.last_used = now  # (so another new copy at the same moment doesn't take it too)
+                    self._clips[key] = clip
+                    taken = True
             if clip is None:
                 clip = VideoClip(path, threaded)
                 clip.stamp = stamp
                 self._clips[key] = clip
                 if clip.error:
                     log_info(f"Video {path.name}: {clip.error}", key=f"video-{key[0]}")
+        if taken:
+            clip.take_over()
         if old is not None:
-            old.close()
+            _close_later(old)
         return clip
 
     def tidy(self, idle: float = IDLE_CLOSE) -> None:
@@ -222,7 +256,7 @@ class VideoLibrary:
             stale = [key for key, clip in self._clips.items() if now - clip.last_used > idle]
             clips = [self._clips.pop(key) for key in stale]
         for clip in clips:
-            clip.close()
+            _close_later(clip)
 
     def close(self) -> None:
         with self._lock:
@@ -230,6 +264,11 @@ class VideoLibrary:
             self._clips.clear()
         for clip in clips:
             clip.close()
+
+
+def _close_later(clip: VideoClip) -> None:
+    """Close a reader on a thread of its own, so the engine's tick doesn't wait for it."""
+    threading.Thread(target=clip.close, name=f"video-close-{clip.path.name}", daemon=True).start()
 
 
 videos = VideoLibrary()

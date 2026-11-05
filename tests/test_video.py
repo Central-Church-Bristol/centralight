@@ -197,6 +197,50 @@ class CopiesTests(unittest.TestCase):
         editor_ctx.memory = a
         self.assertIsNone(video_player(editor_ctx))  # (exact frames: one shared reader, as before)
 
+    def test_a_new_copy_takes_over_a_reader_another_has_finished_with(self) -> None:
+        """(Review: sending a video to the Overlay again and again opened a reader each time: hundreds of threads and
+        gigabytes, and a hitch on the lights at each send.)"""
+        from unittest import mock
+
+        from centralight import video_source
+
+        library = VideoLibrary()
+        self.addCleanup(library.close)
+        with tempfile.TemporaryDirectory() as folder:
+            path = make_video(Path(folder) / "clip.avi")
+            first = library.clip(path, threaded=True, player=1)
+            self.assertIsNotNone(first.frame_at(1.5))  # (its first picture straight away: no blank moment)
+            self.assertIsNot(library.clip(path, threaded=True, player=2), first)  # (still in use: a reader of its own)
+            real = time.monotonic
+            with mock.patch.object(video_source.time, "monotonic", lambda: real() + 1.0):
+                again = library.clip(path, threaded=True, player=3)  # (both have been idle a while now)
+            self.assertIn(again, (first, library.clip(path, threaded=True, player=2)))
+            self.assertEqual(main_colour(again.frame_at(0.2)), "red")  # (from its own moment, not the other copy's)
+            library.close()
+
+    def test_closing_readers_doesnt_hold_up_the_engine(self) -> None:
+        from unittest import mock
+
+        library = VideoLibrary()
+        with tempfile.TemporaryDirectory() as folder:
+            path = make_video(Path(folder) / "clip.avi")
+            clip = library.clip(path, threaded=True, player=1)
+            clip.frame_at(0.5)
+            slow = clip.close
+
+            def close_slowly() -> None:
+                time.sleep(0.3)
+                slow()
+
+            clip.close = close_slowly
+            start = time.monotonic()
+            library.tidy(idle=-1.0)
+            self.assertLess(time.monotonic() - start, 0.2)  # (closed on a thread of its own)
+            deadline = time.monotonic() + 3.0
+            while clip._cap is not None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertIsNone(clip._cap)
+
     def test_the_engine_asks_for_each_copys_own_reader(self) -> None:
         from unittest import mock
 
