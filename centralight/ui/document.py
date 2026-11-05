@@ -655,6 +655,11 @@ class ShowDocument(QObject):
             self._autosaver.wait(timeout)
             self._autosaver.close()
             self._autosaver = None
+        # Nothing keeps running: a closed document can be freed later by Python's garbage collector (its undo history
+        # points back at it), on whichever thread that happens, and Qt can't stop a timer from another thread. One
+        # left running then fires at freed memory (a crash found in the M14 tests).
+        for timer in (self._save_timer, self._retry_timer, self._results):
+            timer.stop()
 
     def _leave_on_disk(self, input_id: str) -> None:
         """Count an input as saved as it was, so the last save leaves its file alone (CentraLight is closing)."""

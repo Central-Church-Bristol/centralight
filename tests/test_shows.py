@@ -866,7 +866,7 @@ class M12ReviewWindowTests(WindowCase):
         morning = create_show(self.root / "Morning", "Morning")
         create_show(self.root / "Evening", "Evening")
         window, engine = self.make(morning)
-        dialog = QWidget()
+        dialog = QWidget(window)  # (the window's: freed with it, never by Python's tidying up on another thread)
         engine.gui_requests.put(("Stream Deck", {"do": "load_show", "folder": str(self.root / "Evening")}))
         with mock.patch.object(QApplication, "activeModalWidget", return_value=dialog):
             window._do_engine_requests()

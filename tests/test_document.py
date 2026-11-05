@@ -111,6 +111,16 @@ class DocumentTests(DocumentTestCase):
         self.saved_show()
         self.assertFalse((self.folder / "inputs" / "follow-screen.json").exists())
 
+    def test_nothing_keeps_running_once_closed(self) -> None:
+        """A closed document can be freed by Python's garbage collector on any thread (its undo history points back at
+        it), and Qt can't stop a timer from another thread: one left running would fire at freed memory later."""
+        from PySide6.QtCore import QTimer
+
+        self.doc.apply(rename_light(self.show, "slimpar-101", "Drum light"), "Rename")
+        self.assertTrue(any(timer.isActive() for timer in self.doc.findChildren(QTimer)))
+        self.doc.close()
+        self.assertEqual([timer for timer in self.doc.findChildren(QTimer) if timer.isActive()], [])
+
     def test_read_only_shows_refuse_changes(self) -> None:
         locked = replace(self.show, read_only=True)
         doc = ShowDocument(locked, self.engine)
