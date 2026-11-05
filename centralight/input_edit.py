@@ -323,10 +323,11 @@ def split_background(show: Show, input_id: str, element_id: str) -> tuple[Show, 
     return _set_tracks(show, inp, tracks), colour_id
 
 
-def split_changes(element: Any) -> list[str]:
+def split_changes(element: Any, inp: Input | None = None) -> list[str]:
     """What Split into Colour + Paint would change on the lights ([]: nothing, it looks exactly the same). The two
     parts are then see-through and blended one after the other, so they match exactly only at full opacity, with
-    Normal blend, and with a mask that's either on or off at each light."""
+    Normal blend, and with a mask that's either on or off at each light. inp: the input it's in (in a timed one, it may
+    cross the element next to it on its track, which the Colour element on its own track wouldn't)."""
     if not (element.get("shapes") or element.get("strokes")):
         return []  # (nothing painted over the Background)
     changes = []
@@ -346,7 +347,32 @@ def split_changes(element: Any) -> list[str]:
     mask = element.get("mask")
     if hasattr(mask, "get") and (mask.get("paint") or mask.get("shapes")):
         changes.append("where its mask fades softly, the painting would look a little different")
+    if inp is not None and not inp.infinite and _crosses(inp, element):
+        changes.append("while it crosses the element next to it on its track, the Background would stay full and then "
+                       "stop, rather than crossing with it")
+    if _uses_random(element.get("fill")):
+        changes.append("the Background's formula uses random(), which picks again for the new Colour element")
     return changes
+
+
+def _crosses(inp: Input, element: Any) -> bool:
+    """Does another element on its track overlap it in time (a crossing between them)?"""
+    found = find_element(inp, str(element.get("id")))
+    if found is None:
+        return False
+    start, end = element_span(element, inp)
+    return any(other is not found[2] and s < end - 1e-9 and e > start + 1e-9
+               for other, (s, e) in ((o, element_span(o, inp)) for o in inp.tracks[found[0]]))
+
+
+def _uses_random(value: Any) -> bool:
+    if isinstance(value, str):
+        return "random(" in value.replace(" ", "")
+    if hasattr(value, "values"):
+        return any(_uses_random(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_uses_random(v) for v in value)
+    return False
 
 
 def _number(value: Any) -> float:

@@ -61,6 +61,7 @@ from ..input_edit import (
     split_element,
     trim_element,
 )
+from ..elements import fill_kind
 from ..model import TRACK_COUNT, Input, element_span
 from ..schema import TRANSITION_CHOICES
 from ..step_names import element_name
@@ -84,12 +85,12 @@ def summary(element) -> str:
     kind = str(element.get("kind"))
     title = KIND_TITLES.get(kind, kind.title())
     if kind in ("paint", "colour"):
-        fill = element.get("fill") or {}
-        fill_type = fill.get("type", "colour") if hasattr(fill, "get") else ("colour" if kind == "colour" else "none")
+        fill = element.get("fill")
+        fill_type = fill_kind(element)  # (a new Paint element has none: it's see-through)
         parts = []
         if fill_type == "colour":
-            colour = fill.get("colour")
-            parts.append(colour if isinstance(colour, str) else "colour (moving)")
+            colour = fill.get("colour") if hasattr(fill, "get") else None
+            parts.append(colour if isinstance(colour, str) else "colour" if colour is None else "colour (moving)")
         elif fill_type in ("linear", "radial"):
             parts.append("gradient")
         shapes = element.get("shapes") or ()

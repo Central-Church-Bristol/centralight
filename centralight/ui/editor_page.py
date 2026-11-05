@@ -31,7 +31,7 @@ from ..commands import SendToBase, SetSolo
 from ..editor_render import EditorRenderer
 from ..engine import EngineFrame
 from ..assets import MASKS_DIR, PAINT_DIR, load_mask, load_strokes, save_asset
-from ..elements import media_path
+from ..elements import mask_shapes, media_path
 from ..input_edit import (
     add_shape,
     find_element,
@@ -433,10 +433,16 @@ class EditorPage(QWidget):
             self.solo_button.setChecked(False)
             if self._entered:
                 self.document.set_scope(self.undo_scope())
-        if self._element() is None:
+        element = self._element()
+        if element is None:
             self.element_id = ""
             self.shape_id = ""
             self.mask_shape_id = ""
+        else:  # (a shape undone away: nothing stays selected, here or in the details)
+            if self.shape_id and not any(str(s.get("id")) == self.shape_id for s in element.get("shapes", ()) or ()):
+                self.shape_id = ""
+            if self.mask_shape_id and not any(str(s.get("id")) == self.mask_shape_id for s in mask_shapes(element.get("mask"))):
+                self.mask_shape_id = ""
         self.selected_canvas.set_show(show)
         self.result_canvas.set_show(show)
         self.result_panel.strip.set_show(show)

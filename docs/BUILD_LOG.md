@@ -48,6 +48,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — the Clean-up: no compatibility with what you never had (old Overlay links, old file conversions) | **done** (5 Nov, 03:00; 911 tests pass) |
 | A look at M14 (three reviewers, 21 findings): the default show's nine | **done** (5 Nov, 03:15) |
 | — and the Overlay and Dashboard's six (one went with the clean-up) | **done** (5 Nov, 03:30) |
+| — and Colour, Split and mask shapes' six | **done** (5 Nov, 03:45) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -314,6 +315,23 @@ folders). 21 findings. Fixed, each with a test:
 - **Not fixed, a follow-up:** dragging a tile runs Qt's drag from inside the tile's own mouse handler. If a show load (an
   automation, the Stream Deck) replaced the tiles during the drag, the tile could be freed while its handler runs. The
   reviewer couldn't make it happen, and neither could I; it's noted to look at.
+
+**Colour, Split and mask shapes (items 9 and 8)**
+- **Split's line said "It looks exactly the same" when it wouldn't:** in a timed input where the Paint element crosses
+  the element next to it on its track (the Colour element, on its own track, wouldn't take part in the crossing), and
+  when the Background's colour uses random() (it picks again for the new element). The line says so now.
+- **A Colour element whose "fill" isn't an object** (an AI writing `"fill": "#FF0000"`) showed the default colour without
+  a word, and the timeline's bar text raised an error each time it was drawn. The AI check says what's wrong now, and
+  the bar copes.
+- **Every new Paint element's bar said "Paint · colour (moving)":** it says "Paint · empty" until something's on it.
+- **In Mask mode, while you paint,** the preview showed the strokes alone, so the red of Hide shapes and of "Hidden
+  everywhere" went for a moment (and on a hidden mask a stroke looked as if it hid something; strokes only hide on a
+  mask that starts shown). The preview has the shapes and the start too now.
+- **A Colour element had two rows called "Colour"** (its undo step read "colour Colour → Straight gradient"): the first
+  is "Fill" now, as on an older Paint element's Background.
+- **After undoing a drawn mask shape,** the Editor still thought it was selected; after a redo, its handles showed with
+  nothing selected in the details. Nothing stays selected now.
+- **The note about going back to the version before M14** also says it doesn't know mask shapes or Start with.
 
 ## The overnight soaks (4 Nov, early morning)
 
@@ -1452,7 +1470,8 @@ Problems the tests found and that are fixed:
     on or off at each light. Your two shows' painted inputs have their own opacity setting, so check the line on
     those. When nothing would change, the line says it looks exactly the same.
   - **An input saved with a Colour element shows nothing for that element in the version before M14** (it doesn't
-    know Colour), in case you ever go back to it.
+    know Colour), in case you ever go back to it. Nor does it know mask shapes or Start with: a mask that starts hidden
+    everywhere with a Show shape ("only here") shows everywhere there.
   - **A new mask shape does something you can see:** it's a Hide shape on a mask that starts shown, and a Show shape on
     one that starts hidden everywhere (a Show shape on a shown mask would change nothing). Show / Hide changes it.
   - **The mask's painting can only hide** (as before: the Brush hides, the Eraser rubs that out), and it comes before

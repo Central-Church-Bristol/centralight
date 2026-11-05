@@ -604,8 +604,15 @@ class SelectedViewport(ViewportCanvas):
             return
         canvas = session["canvas"]
         self._preview_is_mask = session["what"] == "mask"
-        if session["what"] == "mask":
-            self._preview = mask_tint(np.clip(canvas.data * 255.0 + 0.5, 0, 255).astype(np.uint8))
+        if session["what"] == "mask":  # (with the mask's shapes and Start with, as the renderer's tint has them)
+            from ..elements import RenderContext, element_keep
+
+            height, width = canvas.data.shape[:2]
+            ctx = RenderContext(width, height)
+            ctx.folder = self.folder
+            ctx.time = self.time
+            keep = element_keep(self.element, ctx, painting=canvas.data)
+            self._preview = mask_tint(np.clip((canvas.data if keep is None else keep) * 255.0 + 0.5, 0, 255).astype(np.uint8))
         else:
             from ..elements import RenderContext, finish_layer, render_paint
 

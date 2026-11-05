@@ -207,6 +207,43 @@ class OlderInputTests(unittest.TestCase):
             self.assertEqual(len(notes), 1, changed)
             self.assertIn(word, notes[0])
 
+    def test_split_says_what_a_crossing_or_random_would_change(self) -> None:
+        """(Review: in a timed input the Paint element crosses the one after it on its track, but the Colour element on
+        its own track wouldn't cross; and random() picks again for the new element. Both said "exactly the same".)"""
+        painted = {"id": "E1", "kind": "paint", "fill": {"type": "colour", "colour": "#0000FF"}, "shapes": [{"id": "S1"}],
+                   "start": 0.0, "end": 5.0}
+        after = {"id": "E2", "kind": "colour", "fill": {"type": "colour", "colour": "#FF0000"}, "start": 4.0, "end": 8.0}
+        crossing = Input(id="x", name="X", infinite=False, length=8.0, tracks=(freeze([]), freeze([painted, after]), (), ()))
+        notes = split_changes(crossing.tracks[1][0], crossing)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("crosses", notes[0])
+        apart = Input(id="x", name="X", infinite=False, length=10.0,
+                      tracks=(freeze([]), freeze([painted, {**after, "start": 5.0, "end": 9.0}]), (), ()))
+        self.assertEqual(split_changes(apart.tracks[1][0], apart), [])  # (one after the other: no crossing)
+        lucky = {**painted, "fill": {"type": "colour", "colour": {"value": "#FFFFFF", "expr": "hsv(random(1))"}}}
+        notes = split_changes(lucky)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("random()", notes[0])
+
+    def test_a_fill_that_isnt_an_object(self) -> None:
+        """(Review: an AI wrote "fill": "#FF0000"; the timeline's bar text raised an error and the check said nothing.)"""
+        from centralight.ai_guide import check_input_data
+        from centralight.ui.timeline_view import summary
+
+        self.assertEqual(summary({"id": "E1", "kind": "colour", "fill": "#FF0000"}), "Colour · colour")
+        self.assertEqual(summary({"id": "E1", "kind": "paint"}), "Paint · empty")  # (a new Paint element: see-through)
+        self.assertEqual(summary({"id": "E1", "kind": "colour", "fill": {"type": "colour", "colour": "#FF0000"}}),
+                         "Colour · #FF0000")
+        data = {"format": "centralight-input", "version": 1, "id": "red", "name": "Red",
+                "tracks": [[{"id": "E1", "kind": "colour", "fill": "#FF0000"}], [], [], []]}
+        _inp, problems, _notes = check_input_data(data, self.show)
+        self.assertTrue(any('"fill" must be an object' in p for p in problems), problems)
+
+    def test_the_type_row_says_fill(self) -> None:
+        """(Review: a Colour element had two rows called "Colour", and its undo step said "colour Colour → …".)"""
+        labels = {s.path: s.label for s in element_specs("colour")}
+        self.assertEqual((labels["fill.type"], labels["fill.colour"]), ("Fill", "Colour"))
+
     def test_no_free_track_no_split(self) -> None:
         busy = [[{"id": f"E{i}", "kind": "colour", "fill": {"type": "colour", "colour": "#101010"}}] for i in (1, 3)]
         element = {"id": "E2", "kind": "paint", "fill": {"type": "colour", "colour": "#FFFFFF"}, "shapes": [{"id": "S1"}]}

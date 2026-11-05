@@ -262,7 +262,7 @@ class DetailsPanel(QScrollArea):
 
     def _split_state(self, inp: Input, element) -> tuple[bool, tuple[str, ...]]:
         """Split into Colour + Paint: (is there room, what it would change on the lights)."""
-        return background_track(inp, self.element_id) is not None, tuple(split_changes(element))
+        return background_track(inp, self.element_id) is not None, tuple(split_changes(element, inp))
 
     # ------------------------------------------------------------ building
 

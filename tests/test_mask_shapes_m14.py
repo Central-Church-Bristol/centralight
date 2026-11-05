@@ -56,6 +56,26 @@ class MaskShapeTests(unittest.TestCase):
         grey[:, :320] = 0  # the left half hidden
         return save_asset(self.folder.name, MASKS_DIR, grey)
 
+    def test_the_brushs_preview_has_the_shapes_and_start_too(self) -> None:
+        """(Review: in Mask mode, while painting, the preview showed the strokes alone: the red of Hide shapes and of
+        "Hidden everywhere" went, and a stroke on a hidden mask looked as if it hid something.)"""
+        ctx = RenderContext(160, 90)
+        ctx.folder = self.folder.name
+        stroke = np.ones((90, 160), dtype=np.float32)
+        stroke[:, 120:] = 0.0  # (the right quarter painted over: hidden)
+        hide_left = {"id": "M1", "type": "rect", "mode": "hide", "x": 0.125, "y": 0.5, "w": 0.25, "h": 1.0}
+        keep = element_keep(freeze({"id": "E1", "kind": "colour", "mask": {"shapes": [hide_left]}}), ctx, painting=stroke)
+        self.assertLess(float(keep[45, 10]), 0.1)  # (the Hide shape's left quarter)
+        self.assertGreater(float(keep[45, 80]), 0.9)  # (the middle shows)
+        self.assertLess(float(keep[45, 150]), 0.1)  # (the stroke)
+        show_left = {**hide_left, "mode": "show"}
+        hidden = element_keep(freeze({"id": "E1", "kind": "colour", "mask": {"start": "hidden", "shapes": [show_left]}}),
+                              ctx, painting=np.ones((90, 160), dtype=np.float32))
+        self.assertGreater(float(hidden[45, 10]), 0.9)  # (only there...)
+        self.assertLess(float(hidden[45, 80]), 0.1)  # (...and a stroke changes nothing on a hidden mask)
+        plain = element_keep(freeze({"id": "E1", "kind": "colour"}), ctx, painting=stroke)
+        np.testing.assert_array_equal(plain, stroke)  # (no mask yet: the first strokes are the mask)
+
     def test_old_masks_are_unchanged(self) -> None:
         self.assertIsNone(self.at_lights(None))
         self.assertIsNone(self.at_lights({}))
@@ -231,6 +251,23 @@ class EditorTests(unittest.TestCase):
         from PySide6.QtWidgets import QPushButton
 
         return next(b for b in self.page.details.findChildren(QPushButton) if b.text() == text and b.isVisible())
+
+    def test_undoing_a_drawn_mask_shape_leaves_nothing_selected(self) -> None:
+        """(Review: the Editor kept "M1" selected after its undo, while the details had none; after a redo the Selected
+        view showed its handles with nothing selected in the details.)"""
+        from tests.qt_support import process
+
+        panel, document = self.page.selected_panel, self.window.document
+        panel.mask.setChecked(True)
+        panel.rect_tool.setChecked(True)
+        self.draw(0.1, 0.2, 0.4, 0.8)
+        self.assertEqual(self.page.mask_shape_id, "M1")
+        document.undo()
+        process(self.app)
+        self.assertEqual(self.page.mask_shape_id, "")
+        document.redo()
+        process(self.app)
+        self.assertEqual(self.page.mask_shape_id, "")  # (as in the details: nothing selected)
 
     def test_drawing_show_hide_order_and_remove(self) -> None:
         from PySide6.QtWidgets import QListWidget

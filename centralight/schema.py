@@ -79,7 +79,7 @@ def _fill(choices: tuple[tuple[str, str], ...], group: str = "", label: str = "F
 
 
 # A Colour element (M14): a solid colour or a gradient across the screen (what a Paint element's fill was)
-COLOUR = _fill(COLOUR_TYPES, label="Colour", help_text="A solid colour, or a straight or round gradient across the screen")
+COLOUR = _fill(COLOUR_TYPES, help_text="A solid colour, or a straight or round gradient across the screen")
 # An older Paint element that has a fill under its painting: its "Background" (setting it to None makes it an ordinary
 # Paint element; Split into Colour + Paint moves it to a Colour element of its own)
 BACKGROUND = _fill(FILL_TYPES, group="Background", label="Fill",

@@ -528,18 +528,23 @@ def mask_hides(shape: Mapping[str, Any]) -> bool:
     return shape.get("mode", "hide") != "show"
 
 
-def element_keep(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | None:
+def element_keep(element: Mapping[str, Any], ctx: RenderContext, painting: np.ndarray | None = None) -> np.ndarray | None:
     """The element's mask in a picture (1 = show, 0 = hidden), or None for no mask: where it starts (shown, or hidden
     everywhere), then its painted strokes (they hide), then its shapes in order, each showing or hiding. (The lights it
-    leaves alone are only left alone by the lights themselves: the light dots show that, not the picture.)"""
+    leaves alone are only left alone by the lights themselves: the light dots show that, not the picture.) painting:
+    the strokes as they're being painted (the Selected view's preview), instead of the mask's file."""
     mask = element.get("mask")
     if not _is_map(mask):
-        return None
+        if painting is None:
+            return None
+        mask = {}  # (the first strokes of a mask that isn't there yet)
     hidden = mask.get("start") == "hidden"
     shapes = mask_shapes(mask)
     painted = mask.get("paint")
     keep = None
-    if not hidden and isinstance(painted, str) and painted:  # (strokes only hide: on a hidden mask they change nothing)
+    if not hidden and painting is not None:  # (strokes only hide: on a hidden mask they change nothing)
+        keep = painting
+    elif not hidden and isinstance(painted, str) and painted:
         keep = painted_mask(media_path(ctx.folder, painted), ctx)
     if not hidden and not shapes:
         return keep
