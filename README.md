@@ -173,4 +173,4 @@ MagicQ setup for Art-Net in:
 
 ## Assets
 
-`Assets/` has the CentraLight logo (PNG plus GIMP `.xcf` source). It is branding only; the scripts do not load it.
+`Assets/` has the CentraLight logo: `CentraLight Logo.svg` (its source) and PNGs at 1024 and 4096 pixels. The app uses the 1024 one for its window, taskbar and tray icon (and draws the same circles itself if it's missing), and `launcher\icon.ico` (CentraLight.exe's icon) and `launcher\clshow.ico` (.clshow files' icon) are made from it.

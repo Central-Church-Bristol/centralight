@@ -21,23 +21,31 @@ DrawFn = Callable[[QPainter, QRectF, QColor, bool], None]
 _APP_ICON_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 
 
+# The logo ("soft light", the user's choice of 5 Nov), as Assets\CentraLight Logo.svg draws it in a 1024 square: three
+# circles, coral on top, lime bottom-left and blue bottom-right, with the overlaps mixed like light (a screen blend)
+LOGO_CIRCLES = ((512.5, 334.17, theme.LOGO_CORAL), (335.17, 666.83, theme.LOGO_LIME), (689.83, 666.83, theme.LOGO_SKY))
+LOGO_RADIUS = 284.17
+LOGO_MIXES = (((0, 1), "#FFFFA8"), ((0, 2), "#FFD6FF"), ((1, 2), "#D6FFFF"))  # coral + lime, coral + blue, lime + blue
+LOGO_CENTRE = "#FFFFFF"  # all three
+
+
 def draw_logo(painter: QPainter, rect: QRectF) -> None:
-    """The three logo circles (coral, lime, sky) inside rect."""
+    """The logo inside rect (the fallback when its picture is missing): the three circles, then each overlap in its
+    mixed colour and the white centre, as the SVG has them. Drawn as they are, so it looks the same on any background."""
     size = min(rect.width(), rect.height())
-    r = size * 0.275
-    cx, cy = rect.center().x(), rect.center().y()
-    centres = (
-        (QPointF(cx, cy - size * 0.17), theme.LOGO_CORAL),
-        (QPointF(cx - size * 0.18, cy + size * 0.16), theme.LOGO_LIME),
-        (QPointF(cx + size * 0.18, cy + size * 0.16), theme.LOGO_SKY),
-    )
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Screen)
-    for centre, colour in centres:
-        painter.setBrush(QColor(colour))
-        painter.drawEllipse(centre, r, r)
+    painter.translate(rect.center().x() - size / 2, rect.center().y() - size / 2)
+    painter.scale(size / 1024.0, size / 1024.0)  # (in the SVG's units, so the overlaps' edges are worked out finely)
+    circles = []
+    for cx, cy, colour in LOGO_CIRCLES:
+        path = QPainterPath()
+        path.addEllipse(QPointF(cx, cy), LOGO_RADIUS, LOGO_RADIUS)
+        painter.fillPath(path, QColor(colour))
+        circles.append(path)
+    for (a, b), colour in LOGO_MIXES:
+        painter.fillPath(circles[a].intersected(circles[b]), QColor(colour))
+    painter.fillPath(circles[0].intersected(circles[1]).intersected(circles[2]), QColor(LOGO_CENTRE))
     painter.restore()
 
 

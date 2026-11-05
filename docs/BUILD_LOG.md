@@ -55,6 +55,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — your change of 5 Nov: masks as black-and-white pictures (Paint's tools in greys, White, Black, Invert) | **done** (5 Nov, 09:50) |
 | — your change of 5 Nov: the Default show's **Last loaded** and **None (lights off)** (no show loaded) | **done** (5 Nov, 11:07) |
 | — a 1-hour soak going to no show and back (15 times), and three small fixes made meanwhile | **done** (5 Nov, 12:57; no errors; 981 tests pass twice) |
+| — your new logo of 5 Nov ("soft light"): in the app, and in CentraLight.exe's and .clshow files' icons | **done** (5 Nov, 13:02) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -1852,6 +1853,10 @@ status table for the tests and the soak. What's left:
 - **Moving the main folder to M14** (with your OK): copy `Documents\CentraLight Shows` first. Once this version saves
   an input with a Colour element, the version you ran on Wednesday shows that element as nothing.
 - **M15, the Console page** (in the plan) is on hold until you say go.
+- **The new logo** (5 Nov) shows in the app's window, taskbar and tray straight away, and on the "No show loaded"
+  card. CentraLight.exe keeps its old icon until it's built again (`.venv\Scripts\python.exe tools\build_launcher.py`,
+  at the main-folder update), and Windows may show .clshow files' old icon until it next refreshes its icons. GitHub's
+  main has the old 1024 PNG (6ccfe9d): when main and this branch meet, keep the branch's new logo.
 - **Follow-ups, not urgent:** a drawn icon that Qt copies to change it would crash (nothing does that today); a tile
   dragged while a show load replaces the tiles could, in theory, be freed mid-drag (couldn't be made to happen); the
   week schedule's drawing of the default show around a "When it stops matching" load.
