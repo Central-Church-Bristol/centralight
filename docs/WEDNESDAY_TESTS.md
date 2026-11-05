@@ -444,6 +444,13 @@ Close the app first (it's holding the dongle), then:
   - [ ] The same again, but load another show from the Show menu while Evening is on: when the automation ends,
         nothing changes (manual wins).
   - [ ] Restart the PC: Central Church opens. (Quitting and reopening CentraLight carries on with the show that was on.)
+- [ ] **The colour picker updates live**: put Warm white on Base, open it in the Editor, click its Colour element, then
+      the colour's swatch. Drag in the colour square: the lights follow as you drag.
+  - [ ] **Cancel**: they go back. Again, then **OK**: they keep it, and one Ctrl+Z puts the old colour back.
+  - [ ] Untick **Preview**: nothing changes until OK. Pick again: it's still unticked (after a PC restart it's ticked
+        again).
+  - [ ] An input that isn't on the lights: picking its colour changes nothing on the lights.
+  - [ ] Dashboard → a colour show variable: the lights follow as you pick, and Cancel puts it back.
 - [ ] **Which week of the month**: Automation tab → a global automation with Days of the week → tick **Wed**, then
       **1st** beside "weeks:". Its summary says "1st Wed". The **Week schedule** tab shows its block on the first
       Wednesday only: step on with the arrows (the first Wednesday of December is the 2nd). **Every week** puts it

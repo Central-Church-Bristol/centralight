@@ -319,6 +319,7 @@ class DetailsPanel(QScrollArea):
             field = NumberField(spec.minimum, spec.maximum, spec.step, spec.unit)
         elif spec.type == "colour":
             field = ColourField()
+            field.hold = self.document.hold_saving  # (a pick with Preview saves once its picker closes)
         elif spec.type == "choice":
             field = ChoiceField(spec.choices)
         elif spec.type == "source":
@@ -378,7 +379,7 @@ class DetailsPanel(QScrollArea):
         name.editingFinished.connect(lambda: self._rename_input(name.text()))
         self._fields["input:name"] = name
         form.addRow(self._label("Name"), name)
-        colour = ColourField()
+        colour = ColourField(live=False)  # (a tile's colour doesn't change the lights: OK applies it, as before)
         colour.setToolTip("The colour of its tile on the Dashboard")
         colour.edited.connect(lambda value, _f: self._set_tile_colour(value))
         self._fields["input:colour"] = colour

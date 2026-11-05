@@ -149,7 +149,7 @@ class GlobalCard(QFrame):
             layout.addLayout(_row(_label("Starting value"), self.default, stretch_index=1))
             layout.addLayout(_row(_label("From"), self.low, to, self.high, stretch_index=-1))
         elif var.type == "colour":
-            self.default = ColourField()
+            self.default = ColourField(live=False)  # (the starting value doesn't change the lights now: OK applies it)
             self.default.edited.connect(lambda value, _f: panel.change(self.name, default=str(value)))
             layout.addLayout(_row(_label("Starting value"), self.default, stretch_index=1))
         else:
@@ -340,7 +340,9 @@ class LocalRow(QFrame):
         self.kind.edited.connect(lambda value, _f: panel.change_type(self.name, value))
         if self.kind_value == "colour":
             self.value = ColourField()
-            self.value.edited.connect(lambda value, _f: panel.change_value(self.name, str(value)))
+            # (a pick with Preview: each change at once, all one undo step, saved when the picker closes)
+            self.value.edited.connect(lambda value, _f: panel.change_value(self.name, str(value), merge=f"pick{self.value.picks}"))
+            self.value.hold = panel.document.hold_saving
         else:
             self.value = QDoubleSpinBox()
             self.value.setObjectName("NumberSpin")
@@ -455,7 +457,9 @@ class LocalsPanel(Panel):
     def change_type(self, name: str, kind: str) -> None:
         self.document.apply(update_local(self.document.show, self.input_id, name, type=kind), f"Local {name}: type → {kind}")
 
-    def change_value(self, name: str, value: Any, merge: bool = False) -> None:
+    def change_value(self, name: str, value: Any, merge: bool | str = False) -> None:
+        """merge: True merges into the last change of this value (a spin box's steps); a text merges only with changes
+        given the same text (one colour pick: M14)."""
         item = self._item(name)
         if item is None:
             return
@@ -463,8 +467,9 @@ class LocalsPanel(Panel):
         old = base_value(raw, 0.0, 0.0, "colour" if item.get("type") == "colour" else "number")
         old_text = describe_value(old) if type(old) is tuple or isinstance(old, float) else str(old)
         new_text = value if isinstance(value, str) else f"{value:g}"
+        key = f"{self.input_id}/local/{name}" + (f"/{merge}" if isinstance(merge, str) else "") if merge else None
         self.document.apply(update_local(self.document.show, self.input_id, name, value=with_base_value(raw, value)),
-                            f"Local {name}: {old_text} → {new_text}", f"{self.input_id}/local/{name}" if merge else None)
+                            f"Local {name}: {old_text} → {new_text}", key)
 
     def remove(self, name: str) -> None:
         self.document.apply(remove_local(self.document.show, self.input_id, name), f"Remove local {name}")

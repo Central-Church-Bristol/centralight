@@ -100,6 +100,7 @@ from ..shows import (
 )
 from . import icons
 from .bridge import EngineBridge
+from .colour_picker import preview_choice
 from .dashboard import DashboardPage
 from ..ai_guide import AIReplyError, parse_reply, write_global_guide, write_guide_files
 from .ai_dialog import AIDialog
@@ -257,6 +258,9 @@ class MainWindow(QWidget):
         self.dashboard.import_requested.connect(lambda: self.import_from_show(INPUTS))
         self.dashboard.notes_panel.set_folded(bool(settings.ui.get("notes_folded", False)))  # (as it was left)
         self.dashboard.notes_panel.folded.connect(lambda folded: self.settings.ui.__setitem__("notes_folded", folded))
+        # the colour picker's Preview tick box (M14): kept with the PC's start time, so a restart ticks it again
+        preview_choice.load = lambda: settings.ui.get("colour_preview")
+        preview_choice.store = lambda data: settings.ui.__setitem__("colour_preview", data)
         self.layout_page = LayoutPage(self.document, engine, notes_path=notes_path, shows_provider=self.list_shows)
         self.editor_page = EditorPage(self.document, engine, settings, sources=sources)
         self.editor_page.done.connect(lambda: self.show_page("dashboard"))

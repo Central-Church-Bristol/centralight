@@ -34,7 +34,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | M13 Show extras (your six extras of 3 Nov, evening) | **done** (4 Nov, 00:20; reviewed by three, about 45 findings fixed; 805 tests pass; all 38 deliberate breakages caught) |
 | A 10-hour soak (after M12, loading a show every 2 minutes) | **done** (4 Nov, 03:10; 300 loads, no errors; memory up about 0.8 MB an hour, from NDI itself) |
 | A 3-hour soak of M13 (show loads, a linked video replaced while it plays, countdowns) | **done** (4 Nov, 04:16; 90 loads, no errors; it found a video cache with no limit: fixed, 806 tests pass twice) |
-| M14, your nine changes after the rig test (4 Nov), in a separate copy of the code: | |
+| M14, your changes after the rig test (4 Nov), in a separate copy of the code: | |
 | — 3 tick boxes, 1 rename, 2 Editor opens paused, 7 Delete removes a shape | **done** (4 Nov, 22:15) |
 | — 4 one Overlay (copies, red boxes, hold for a flash, drag tiles to move them) | **done** (4 Nov, 23:30) |
 | — 9 a Colour element, and Paint without a fill | **done** (5 Nov, 01:05; a test-suite crash found on the way was fixed first; 853 tests pass twice) |
@@ -44,6 +44,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — 10 remember or reset each show variable when its show loads | **done** (5 Nov, 02:15; 901 tests pass) |
 | — the two extras: every quit in the session log; the soak tool's own folders | **done** (5 Nov, 02:20) |
 | — a check where 5 and 10 meet: the default show at PC start and the last show's variables | **done** (5 Nov, 02:45; it can't happen in the app, and a test checks it) |
+| — 11 the colour picker updates live (Preview, one undo step, Enter / Esc) | **done** (5 Nov, 02:45; 914 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -68,7 +69,7 @@ Run all the tests (about five minutes, including the layout check at every scali
 - `dmx_output.py` got one small change: `close(blackout=True)` now takes an optional flag, so the app can quit
   with "leave the lights as they are". The console scripts don't pass it, so they still black out as before.
 
-## M14: your nine changes after the rig test (4 Nov, night)
+## M14: your changes after the rig test (4 Nov, night)
 
 Built in a separate copy of the code (`.claude\worktrees\m14`, the same branch), so the main folder keeps the version
 that ran tonight's prayer meeting. Everything was tried with Simulated output and temporary settings only.
@@ -190,6 +191,24 @@ The small ones first (3, 1, 2, 7):
   variable as the show loads. The Dashboard's Variables panel shows the new value straight away.
 - **Files:** show.json has `"on_load": "reset"` only on the ones that reset; older files load as Keep. Import / export
   carry it, and the AI guide's table of show variables says which reset.
+
+**11. The colour picker updates live.**
+- **While the colour window is open,** each change (dragging in the square, the hue slider, typing a hex value)
+  applies at once: the viewports follow, and if the input is on the lights (on Base, in the Overlay, or Show on
+  lights), the lights follow in real time. If it isn't, nothing changes on the lights, as before.
+- **"Preview"** under the picker, ticked. Unticked, the colour applies only on OK, as before (and unticking it
+  mid-pick puts the colour back until OK). CentraLight remembers the choice until the PC restarts; after a restart
+  it's ticked again.
+- **One undo step** for the whole pick. **Cancel** (or Esc) puts the colour back with no step left behind; **OK** (or
+  Enter) keeps it.
+- **At most about 20 changes a second** reach the show and the lights, and the show saves once the window closes.
+- **The same for every colour that changes the lights:** element and shape colours, an input's colour variables, and
+  the Dashboard's show-variable colours (Cancel puts the variable back). A tile's colour and a show variable's starting
+  value don't change the lights, so they keep the plain picker (OK applies it).
+- **Two things found on the way (fixed):** Qt's picker, used inside another window, closed just itself on Esc (leaving
+  an empty window) and made Enter start "Pick Screen Color"; and if the Editor's settings were rebuilt while the
+  window was open (a global automation loading another show, say), saving would have stayed off until CentraLight
+  restarted. Tests check both.
 
 **The two small extras.**
 - **Every quit is in the session log** now, before CentraLight stops, with the choice made: e.g. "Quit by closing the
@@ -1395,6 +1414,14 @@ Problems the tests found and that are fixed:
     restart.
   - **A show variable's "Starts at" is now "Starting value"** (the plan asked for it to be labelled clearly, as it's
     what Go back to its starting value uses), and its undo steps say "starting value" too.
+  - **The colour window is CentraLight's own** (Qt's picker with Preview, OK and Cancel under it), as Windows' own
+    colour window can't show changes while it's open. Enter is OK and Esc is Cancel anywhere in it.
+  - **Preview's choice is kept with the PC's start time** (within two minutes) in CentraLight's settings, saved as it
+    quits. After a restart, or if CentraLight crashed before saving it, Preview is ticked again.
+  - **The brush colour** (a Paint element's Brush, Bucket and Gradient) keeps the plain picker too: it changes nothing
+    until you paint with it.
+  - **If the show changes under an open colour window** (a global automation loads another show, say), the colour
+    picked isn't applied to the new show.
 - **M13 choices** (all easy to change):
   - **The week schedule is a tab beside the automation's editor** (Automation | Week schedule) rather than squeezed
     in beside the Coming up list: at 1280×720 that panel is too short for a week, and the left column too narrow.

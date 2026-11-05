@@ -6,13 +6,14 @@ being dragged and True when it's let go (or a number is typed).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QColorDialog,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QHBoxLayout,
     QLineEdit,
@@ -122,10 +123,17 @@ class _Swatch(QToolButton):
 
 
 class ColourField(QWidget):
-    edited = Signal(object, bool)  # "#RRGGBB", final
+    edited = Signal(object, bool)  # "#RRGGBB", final (False while a pick with Preview is under way: one undo step)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, live: bool = True) -> None:
+        """live: the picker's Preview applies each change at once (M14). Off for colours that don't change the lights
+        (a tile's colour, a show variable's starting value): OK applies it, as before."""
         super().__init__(parent)
+        self.live = live
+        self.picks = 0  # counts each pick (and each typed colour): changes that belong to one undo step share it
+        # hold(True) as a live pick's picker opens and hold(False) as it closes (a document's hold_saving: it saves once
+        # the picker has closed). A plain function, not a signal: it's called even if this field was rebuilt away
+        self.hold: Callable[[bool], None] | None = None
         self.swatch = _Swatch()
         self.text = QLineEdit()
         self.text.setMaxLength(7)
@@ -159,11 +167,46 @@ class ColourField(QWidget):
             self.text.setText(text)
 
     def _choose(self) -> None:
+        """The colour picker (M14): with Preview, each change applies at once (edited(colour, False), merged into one
+        undo step), OK ends it (edited(colour, True)), and Cancel puts the colour back (merging back to nothing)."""
+        from .colour_picker import LiveColourDialog, preview_choice
+
+        self.picks += 1
+        start, live = self._value, self.live
+        hold = self.hold if live else None
         # The window is the dialog's parent: the details panel can rebuild (deleting this field) while it's open
-        colour = QColorDialog.getColor(QColor(self._value), self.window(), "Choose a colour")
+        dialog = LiveColourDialog(start, preview_choice.wanted() if live else False, live, self.window())
+        dialog.changed.connect(self._live)
+        if hold is not None:
+            hold(True)
         try:
-            if colour.isValid():
-                self._apply(colour.name().upper())
+            try:
+                accepted = dialog.exec() == QDialog.DialogCode.Accepted
+                if live:
+                    preview_choice.remember(dialog.preview.isChecked())
+                chosen, tried = dialog.colour(), dialog.tried()
+            finally:
+                dialog.deleteLater()
+            try:
+                if accepted and tried:
+                    self.set_value(chosen)
+                    self.edited.emit(chosen, True)  # (the last of the pick's changes: its one undo step ends here)
+                elif accepted:
+                    self._apply(chosen)
+                elif tried:
+                    self.set_value(start)
+                    self.edited.emit(start, True)  # (Cancel: back as it was, and the step goes with it)
+            except RuntimeError:  # this field was rebuilt away meanwhile
+                pass
+        finally:
+            if hold is not None:
+                hold(False)
+
+    def _live(self, text: str) -> None:
+        """Preview: a colour picked in the open picker, applied now."""
+        try:
+            self.set_value(text)
+            self.edited.emit(text, False)
         except RuntimeError:  # this field was rebuilt away meanwhile
             pass
 
@@ -178,6 +221,7 @@ class ColourField(QWidget):
 
     def _apply(self, text: str) -> None:
         if text != self._value:
+            self.picks += 1  # (a change of its own: its own undo step)
             self.set_value(text)
             self.edited.emit(text, True)
 

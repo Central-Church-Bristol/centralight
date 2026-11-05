@@ -146,6 +146,11 @@ class Change:
             self.edited[input_id] = (old, other.edited[input_id][1])
         return True
 
+    def empty(self) -> bool:
+        """Nothing left to undo: a drag (or a colour pick, Cancelled) that ended where it began."""
+        return (not self.added and not self.removed and all(old == new for old, new in self.edited.values())
+                and all(part is None or part[0] == part[1] for part in (self.layout, self.show, self.automations)))
+
 
 def merged_text(first: str, second: str) -> str:
     """'Opacity 80 % → 70 %' then 'Opacity 70 % → 60 %' makes 'Opacity 80 % → 60 %'."""
@@ -187,6 +192,8 @@ class ChangeCommand(QUndoCommand):
             return False
         self.setText(merged_text(self.text(), other.text()))
         self.seq = other.seq
+        if self.change.empty():
+            self.setObsolete(True)  # (back where it began: Qt drops the step, so none is left behind)
         return True
 
 
@@ -310,6 +317,7 @@ class ShowDocument(QObject):
         self._save_timer.setInterval(save_delay_ms)
         self._save_timer.timeout.connect(self.flush)
         self._saving_paused = False
+        self._held = 0  # colour pickers open with Preview (M14): saving waits for them to close
         self._asked_input: str | None = None  # the input "Load the changed file?" is about, while it's up
         self._newest_undone: list[QUndoStack] = []  # the histories the Dashboard's undo took steps from, in order
         self._retry_show = False  # show.json couldn't be written: write it again next time
@@ -485,8 +493,19 @@ class ShowDocument(QObject):
         self._show = show
         self._engine.submit(SetGlobalAutomations(show) if self.kind == KIND_GLOBAL else SwapShow(show))
         self.changed.emit(show)
-        if self._autosaver is not None and not self._saving_paused:
+        if self._autosaver is not None and not self._saving_paused and not self._held:
             self._save_timer.start()
+
+    def hold_saving(self, held: bool) -> None:
+        """A colour being picked with Preview (M14): its changes are saved once the picker closes, not while it's open."""
+        self._held = max(0, self._held + (1 if held else -1))
+        if self._held:
+            self._save_timer.stop()
+        elif self._autosaver is not None and not self._saving_paused and self._show is not self._saved:
+            self._save_timer.start()
+
+    def saving_held(self) -> bool:
+        return bool(self._held)
 
     def load(self, show: Show, automation: bool = False) -> None:
         """Another show: the old one's changes are saved first, and its histories kept for when it's loaded again
