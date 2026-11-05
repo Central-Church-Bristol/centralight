@@ -163,12 +163,13 @@ def add_global(show: Show, kind: str = "number") -> tuple[Show, str]:
 
 
 def update_global(show: Show, name: str, **changes: Any) -> Show:
-    """Change a global's type, default, range or "show on dashboard". A new type resets the default."""
+    """Change a global's type, default, range, "show on dashboard" or what happens when the show loads ("keep" its last
+    value, or "reset" to its starting value). A new type resets the default."""
     found = next((g for g in show.globals if g.name == name), None)
     if found is None:
         return show
-    var = replace(found, **{k: v for k, v in changes.items() if k in ("type", "default", "min", "max", "dashboard")})
-    if var.type not in GLOBAL_DEFAULTS:
+    var = replace(found, **{k: v for k, v in changes.items() if k in ("type", "default", "min", "max", "dashboard", "on_load")})
+    if var.type not in GLOBAL_DEFAULTS or var.on_load not in ("keep", "reset"):
         return show
     if var.type != found.type:
         var = replace(var, default=GLOBAL_DEFAULTS[var.type])

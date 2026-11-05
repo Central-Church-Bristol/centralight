@@ -83,11 +83,14 @@ def coerce_global(var: GlobalVar, raw: Any, current: Value | None = None) -> Val
     return None
 
 
-def initial_globals(show: Show, saved: Mapping[str, Any] | None = None) -> dict[str, Value]:
-    """Each global's value: the saved one (from live.json) if it still fits, else its default."""
+def initial_globals(show: Show, saved: Mapping[str, Any] | None = None, loading: bool = False) -> dict[str, Value]:
+    """Each global's value: the saved one (from live.json) if it still fits, else its default. loading: the show is
+    being loaded (by a person or a global automation, or the PC has just started), so the ones that go back to their
+    starting value when it loads (M14) do: not when CentraLight reopens and carries on."""
     values: dict[str, Value] = {}
     for var in show.globals:
-        value = coerce_global(var, (saved or {}).get(var.name)) if saved and var.name in saved else None
+        keep = not (loading and var.on_load == "reset")
+        value = coerce_global(var, (saved or {}).get(var.name)) if keep and saved and var.name in saved else None
         values[var.name] = value if value is not None else global_default(var)
     return values
 

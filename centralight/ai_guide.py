@@ -303,6 +303,8 @@ def _globals_text(show: Show) -> str:
     rows = [["Name", "Type", "Range / default"]]
     for g in show.globals:
         detail = f"{g.min:g} to {g.max:g}, starts at {g.default}" if g.type == "number" else f"starts at {g.default}"
+        if g.on_load == "reset":  # (M14; the default keeps its last value: show.json's "on_load": "reset" is this)
+            detail += ", and goes back to it each time the show loads"
         rows.append([f"`{g.name}`", g.type, detail])
     return _table(rows)
 

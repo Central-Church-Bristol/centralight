@@ -386,7 +386,9 @@ class Engine:
         self._lights = lights_for(show.fixtures, None)
         self._ctx = RenderContext(0, 0, self.sources, folder=show.folder, lights=self._lights, per_light=True)
         self._picture_ctx = RenderContext(CANVAS_W, CANVAS_H, self.sources, folder=show.folder, lights=self._lights)
-        self._globals = initial_globals(show, live.globals)
+        # (the PC having just started counts as the show loading: variables set to go back to their starting value do;
+        # reopening after a quit or a crash carries on with them as they were)
+        self._globals = initial_globals(show, live.globals, loading=self._pc_start)
         self._ctx.globals = frozen_map(self._globals)
         self._show_globals: dict[str, dict] = {_folder_key(k): dict(v) for k, v in live.show_globals.items()}  # other shows' variables
         # automations: the loaded show's, and the global ones (app-wide; they're checked first)
@@ -1251,7 +1253,8 @@ class Engine:
         if old.folder:
             self._show_globals[_folder_key(old.folder)] = saveable(self._globals)
         self._swap_show(show)
-        self._globals = initial_globals(show, self._show_globals.pop(_folder_key(show.folder), {}))
+        # (before its "When this show loads" automations run, so one of them can still set a variable as it loads)
+        self._globals = initial_globals(show, self._show_globals.pop(_folder_key(show.folder), {}), loading=True)
         self._ctx.globals = frozen_map(self._globals)
         # the new show's automations start afresh, every time it loads: checked straight away, with catch-up (so a
         # time range that's under way runs: automations override the freeze)

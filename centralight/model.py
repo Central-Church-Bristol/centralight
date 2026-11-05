@@ -188,10 +188,11 @@ class HouseLight:
 class GlobalVar:
     name: str
     type: str = "number"
-    default: Any = 0.0
+    default: Any = 0.0  # its starting value
     min: float = 0.0
     max: float = 1.0
     dashboard: bool = False
+    on_load: str = "keep"  # when the show loads (M14): "keep" its last value, or "reset" to its starting value
 
 
 @dataclass(frozen=True)

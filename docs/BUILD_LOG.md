@@ -41,6 +41,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — 8 shapes in masks (Show / Hide rectangles and ellipses, Start with, Mask mode with Layer mode's tools) | **done** (5 Nov, 01:25; 866 tests pass) |
 | — 6 which week of the month (1st, 2nd, 3rd, 4th, Last) in Days of the week | **done** (5 Nov, 01:35; 875 tests pass) |
 | — 5 a default show (opens when the PC starts, comes back after a schedule) | **done** (5 Nov, 01:50; 889 tests pass) |
+| — 10 remember or reset each show variable when its show loads | **done** (5 Nov, 02:15; 901 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -175,6 +176,18 @@ The small ones first (3, 1, 2, 7):
   to open).
 - **Two shows asked for in the same second** (your "When CentraLight starts → Load a show" at the top, and a schedule
   that's under way): a test checks both load, in the automations' order, and the second stays.
+
+**10. Remember or reset each show variable.**
+- **Each show variable's card** (Editor → Show variables) has **When the show loads: Keep its last value / Go back to
+  its starting value**. Keep is the default, as before, so your shows behave the same. The value it goes back to is
+  the card's **Starting value** (it said "Starts at" before).
+- **"The show loads"** means what the "When this show loads" automations mean: a person or a global automation loading
+  it, or the PC having just started. Not CentraLight reopening after a quit or a crash and carrying on, so a crash
+  restart doesn't change the lights.
+- **The reset comes first,** before the show's "When this show loads" automations run, so one of them can still set a
+  variable as the show loads. The Dashboard's Variables panel shows the new value straight away.
+- **Files:** show.json has `"on_load": "reset"` only on the ones that reset; older files load as Keep. Import / export
+  carry it, and the AI guide's table of show variables says which reset.
 
 **A crash the tests found (fixed).** With item 9's tests added, the whole test suite crashed part-way through. The
 cause was older than M14's changes (tests had just never lined up to show it):
@@ -1359,6 +1372,8 @@ Problems the tests found and that are fixed:
   - **The default show waits for the countdown** after a schedule ends (its banner starts then, rather than early), and
     a show that's loaded already isn't loaded again. CentraLight remembers which automation loaded the show over a
     restart.
+  - **A show variable's "Starts at" is now "Starting value"** (the plan asked for it to be labelled clearly, as it's
+    what Go back to its starting value uses), and its undo steps say "starting value" too.
 - **M13 choices** (all easy to change):
   - **The week schedule is a tab beside the automation's editor** (Automation | Week schedule) rather than squeezed
     in beside the Coming up list: at 1280×720 that panel is too short for a week, and the left column too narrow.

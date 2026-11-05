@@ -44,6 +44,7 @@ from .expression_edit import Evaluator, ExprButton, ExpressionDialog
 from .widgets import Panel, discard
 
 GLOBAL_TYPES = (("number", "Number"), ("colour", "Colour"), ("switch", "Switch"))
+ON_LOAD_CHOICES = (("keep", "Keep its last value"), ("reset", "Go back to its starting value"))  # (M14)
 LOCAL_TYPES = (("number", "Number"), ("colour", "Colour"))
 
 
@@ -145,16 +146,24 @@ class GlobalCard(QFrame):
             self.low.valueChanged.connect(lambda value: panel.change(self.name, min=value))
             self.high.valueChanged.connect(lambda value: panel.change(self.name, max=value))
             to = QLabel("to")
-            layout.addLayout(_row(_label("Starts at"), self.default, stretch_index=1))
+            layout.addLayout(_row(_label("Starting value"), self.default, stretch_index=1))
             layout.addLayout(_row(_label("From"), self.low, to, self.high, stretch_index=-1))
         elif var.type == "colour":
             self.default = ColourField()
             self.default.edited.connect(lambda value, _f: panel.change(self.name, default=str(value)))
-            layout.addLayout(_row(_label("Starts as"), self.default, stretch_index=1))
+            layout.addLayout(_row(_label("Starting value"), self.default, stretch_index=1))
         else:
-            self.default = QCheckBox("Starts on")
+            self.default = QCheckBox("Starting value: on")
             self.default.toggled.connect(lambda on: panel.change(self.name, default=bool(on)))
             layout.addWidget(self.default)
+        # when the show loads (M14): it keeps its last value (as before), or goes back to its starting value
+        self.on_load = ChoiceField(ON_LOAD_CHOICES)
+        self.on_load.setToolTip("When this show is loaded (by you, the Stream Deck or a global automation, or as the PC "
+                                "starts): keep the value it had, or go back to the starting value above. Reopening "
+                                "CentraLight after a quit or a crash always keeps it.")
+        self.on_load.edited.connect(lambda value, _f: panel.change(self.name, on_load=str(value)))
+        layout.addWidget(_label("When the show loads"))  # (above it: side by side, it's too wide for the panel)
+        layout.addWidget(self.on_load)
 
         self.dashboard = QCheckBox("On the dashboard")
         self.dashboard.setToolTip("Put a control for it in the Dashboard's Variables panel")
@@ -178,9 +187,10 @@ class GlobalCard(QFrame):
         return spin
 
     def show_values(self, var: GlobalVar) -> None:
-        widgets = [self.dashboard, self.default] + ([self.low, self.high] if var.type == "number" else [])
+        widgets = [self.dashboard, self.default, self.on_load] + ([self.low, self.high] if var.type == "number" else [])
         blocked = [w.blockSignals(True) for w in widgets]
         self.dashboard.setChecked(var.dashboard)
+        self.on_load.set_value(var.on_load)
         if var.type == "number":
             self.default.set_value(float(var.default))
             self.low.setValue(var.min)
@@ -271,8 +281,13 @@ class GlobalsPanel(QWidget):
             text = f"Show variable {name}: type {old.type} → {new.type}"
         elif "dashboard" in changes:
             text = f"Show variable {name}: {'show on' if new.dashboard else 'hide from'} the dashboard"
+        elif "on_load" in changes:
+            if new.on_load == old.on_load:
+                return
+            text = (f"Show variable {name}: when the show loads, "
+                    + ("go back to its starting value" if new.on_load == "reset" else "keep its last value"))
         elif "default" in changes:
-            text = f"Show variable {name}: starts at {self._describe(old)} → {self._describe(new)}"
+            text = f"Show variable {name}: starting value {self._describe(old)} → {self._describe(new)}"
         else:
             text = f"Show variable {name}: range {old.min:g}–{old.max:g} → {new.min:g}–{new.max:g}"
         self.document.apply(show, text, f"global/{name}/default" if merge else None)

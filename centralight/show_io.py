@@ -717,6 +717,8 @@ def _global_to_dict(g: GlobalVar) -> dict[str, Any]:
         data["max"] = g.max
     if g.dashboard:
         data["dashboard"] = True
+    if g.on_load == "reset":  # (left out at the default, "keep")
+        data["on_load"] = "reset"
     return data
 
 
@@ -853,7 +855,8 @@ def _global_from_dict(item: Any) -> GlobalVar:
             default = "#FFFFFF"
     else:
         default = bool(default)
-    return GlobalVar(name=name, type=kind, default=default, min=low, max=high, dashboard=bool(item.get("dashboard")))
+    return GlobalVar(name=name, type=kind, default=default, min=low, max=high, dashboard=bool(item.get("dashboard")),
+                     on_load="reset" if item.get("on_load") == "reset" else "keep")
 
 
 def migrate_show(data: dict) -> tuple[dict, bool]:

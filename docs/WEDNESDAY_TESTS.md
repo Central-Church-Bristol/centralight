@@ -434,6 +434,9 @@ Close the app first (it's holding the dongle), then:
         0 % and 60 %: switching vs fading).
   - [ ] Untick a light in **Lights** that's inside the rectangle: it stays off whatever the shape says.
   - [ ] Delete removes the selected mask shape; Ctrl+Z brings it back.
+- [ ] **Show variables, keep or reset**: Editor → Show variables → a number variable on the Dashboard → **When the show
+      loads: Go back to its starting value**. Set it to something else on the Dashboard, load another show, then load
+      this one again: it's back at its starting value. One left on **Keep its last value** keeps what you set.
 - [ ] **Default show**: Settings → Starting and quitting → **Default show: Central Church** → OK.
   - [ ] Automation tab → **Week schedule**: Central Church fills the gaps between the scheduled shows, lighter.
   - [ ] Make a global automation "Days: today, from now+1 min to now+3 min → Load a show: Evening". When it starts,
