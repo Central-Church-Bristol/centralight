@@ -48,6 +48,26 @@ class ResetTests(unittest.TestCase):
         self.assertEqual(self.values(FakeEngine(church, live=reopened, pc_start=True)), {"level": 0.7, "mood": 0.9})
         self.assertEqual(self.values(FakeEngine(church, live=before_the_start)), {"level": 0.7, "mood": 0.9})  # (the PC's been up a day)
 
+    def test_the_default_show_at_pc_start_never_takes_the_last_shows_values(self) -> None:
+        """Where items 5 and 10 meet: the PC starts and the default show opens, but live.json was saved with another show
+        loaded. The default show starts from its own saved values (Keep) or its starting values (Reset), never the last
+        show's, and loading the last show again brings its own back. (app.main hands the engine live.for_show(folder),
+        which moves the last show's values to the other shows' and takes out the opened show's own.)"""
+        church = show_with("church", KEPT, RESET)
+        evening = show_with("evening", replace(KEPT, default=0.3), replace(RESET, default=0.4))
+        saved = LiveState(show=evening.folder, globals={"level": 0.8, "mood": 0.95},
+                          show_globals={church.folder: {"level": 0.7, "mood": 0.9}},
+                          base={"input": "warm-white", "time": 5.0}, saved_at=time.time() - 3600)
+        live = saved.for_show(church.folder)
+        self.assertIsNone(live.base)  # (the last show's Base, Overlay and automations' state stay with it)
+        engine = FakeEngine(church, live=live, pc_start=True)
+        self.assertEqual(self.values(engine), {"level": 0.7, "mood": 0.1})  # (its own, and its starting value)
+        engine.submit(SetVariable("level", 0.6))
+        engine.submit(LoadShow(evening))
+        self.assertEqual(self.values(engine), {"level": 0.8, "mood": 0.4})  # (the last show's own; reset as it loads)
+        engine.submit(LoadShow(church))
+        self.assertEqual(self.values(engine), {"level": 0.6, "mood": 0.1})
+
     def test_an_automation_as_the_show_loads_sets_it_after_the_reset(self) -> None:
         on_load = Automation("set-mood", "Set the mood", True, "all", freeze([{"type": "show_loads"}]),
                              freeze([{"do": "variable", "name": "mood", "value": 0.6}]))

@@ -342,6 +342,8 @@ class Engine:
         global_automations: Show | None = None,
     ) -> None:
         """output: a DmxOutputThread (anything with submit(bytes) and status()).
+        live: what to carry on with, for this show: if live.json was saved with another show loaded, pass
+        live.for_show(show.folder), as app.main does, so that show's Base and variables stay with it.
         sources: a SourceManager (NDI feeds), or None for no video.
         audio: an audio.AudioCapture (anything with latest() -> {"level": ..., ...}, state and detail), or None.
         initial_base: an input to put on Base when there's no live state (the very first run).

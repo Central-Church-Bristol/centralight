@@ -43,6 +43,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — 5 a default show (opens when the PC starts, comes back after a schedule) | **done** (5 Nov, 01:50; 889 tests pass) |
 | — 10 remember or reset each show variable when its show loads | **done** (5 Nov, 02:15; 901 tests pass) |
 | — the two extras: every quit in the session log; the soak tool's own folders | **done** (5 Nov, 02:20) |
+| — a check where 5 and 10 meet: the default show at PC start and the last show's variables | **done** (5 Nov, 02:45; it can't happen in the app, and a test checks it) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -197,6 +198,17 @@ The small ones first (3, 1, 2, 7):
   told from a crash even if stopping gets stuck ("CentraLight closed" still follows once it's done).
 - **The soak tool's own lines** (making its shows, allowing its linked video) now go to the soak's own temporary
   session log, like the app it runs: never your real one.
+
+**A check where 5 and 10 meet: the default show at PC start, and the last show's variables.**
+- **The worry** (the supervising session's, 5 Nov 02:25): when the PC starts and the default show opens, live.json
+  still holds the last show's variables. The engine starts the show it's given from those, so the default show could
+  start from the last show's values (where both have a variable of that name), and the last show's own be lost.
+- **What happens:** it doesn't. Since M12, CentraLight gives the engine the saved state *for the show it opens*: the
+  last show's variables join the other shows' saved values, the opened show's own come out, and the last show's Base,
+  Overlay and automation state stay with it. Nothing else makes an engine from another show's state.
+- **A test now checks it,** with Keep and Reset variables of the same names in both shows: the default show starts
+  from its own values (or its starting value), and loading the last show again brings that show's own back. The
+  engine's description says what it must be given.
 
 **A crash the tests found (fixed).** With item 9's tests added, the whole test suite crashed part-way through. The
 cause was older than M14's changes (tests had just never lined up to show it):
