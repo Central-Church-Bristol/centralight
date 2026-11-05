@@ -141,14 +141,17 @@ def week_schedule(automations: Show | Iterable[Automation], shows: Mapping[str, 
     found.sort(key=lambda item: (item[1].start, item[1].on_end, item[0]))
     blocks = _mark_clashes([block for _order, block in found])
     if default_show:
-        blocks = _default_blocks(blocks, default_show, names, first, last) + blocks
+        dark = {a.id for a in ordered if a.enabled and any(isinstance(x, Mapping) and x.get("do") in ("cut_black", "fade_black")
+                                                         for x in a.on_end)}
+        blocks = _default_blocks(blocks, default_show, names, first, last, dark) + blocks
     return blocks, unplaced
 
 
 def _default_blocks(blocks: list[Block], default_show: str, names: Mapping[str, str], first: datetime,
-                    last: datetime) -> list[Block]:
+                    last: datetime, dark: set[str] | frozenset[str] = frozenset()) -> list[Block]:
     """The default show (M14) in the gaps: the time no automation's block covers (a show that isn't there loads
-    nothing, so it leaves a gap too). It's what loads at the PC's start and when a schedule ends."""
+    nothing, so it leaves a gap too). It's what loads at the PC's start and when a schedule ends. dark: automations
+    whose own "when it stops matching" cuts or fades to black: nothing loads after them, until the next block."""
     spans = sorted((b.start, b.end) for b in blocks if not b.moment and not b.missing)
     gaps, at = [], first
     for start, end in spans:
@@ -158,7 +161,8 @@ def _default_blocks(blocks: list[Block], default_show: str, names: Mapping[str, 
     if at < last:
         gaps.append((at, last))
     # a "When it stops matching" load wins over the default: its show stays until the next block
-    stops = sorted(b.start for b in blocks if b.moment and b.on_end and not b.missing)
+    stops = sorted([b.start for b in blocks if b.moment and b.on_end and not b.missing]
+                   + [b.end for b in blocks if b.automation_id in dark and not b.moment])
     gaps = [(start, min([s for s in stops if start <= s < end], default=end)) for start, end in gaps]
     known = default_show in names
     return [Block("", "The default show", default_show, names.get(default_show, default_show), start, end,

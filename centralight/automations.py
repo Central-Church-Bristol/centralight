@@ -463,6 +463,13 @@ def _skipped_start(start: int, previous: datetime | None, local: datetime, wall_
     return False
 
 
+def ends_on_its_own(automation: Automation) -> bool:
+    """Does its own "when it stops matching" load a show, or Cut / Fade to black (with any delay)? Then nothing is loaded
+    after it when it stops (M14): not the default show, and not a longer schedule's show either (loading one runs its
+    "When this show loads" automations, which would light the room again)."""
+    return any(isinstance(a, Mapping) and a.get("do") in ("load_show", "cut_black", "fade_black") for a in automation.on_end)
+
+
 def schedules_a_show(automation: Automation) -> bool:
     """Does this automation load a show for as long as it matches (a schedule, a feed being lost …)? Not one that runs
     at a moment ("When CentraLight starts"): that never "stops matching" in a way that means anything. Nor one with a
@@ -1058,12 +1065,14 @@ class AutomationRunner:
 
     def _hand_back(self, ended: Automation, container: Show, mono_now: float, wall_now: float) -> list[tuple[str, dict]]:
         """The automation that loaded the show has stopped matching (M14). What loads now: nothing if its own "when it
-        stops matching" loads a show (that wins). Else a longer schedule that still matches gets its show back: the one
+        stops matching" loads a show or sends the lights to black (that wins, and nothing comes back over it later
+        either). Else a longer schedule that still matches gets its show back: the one
         whose show it had replaced, or failing that the lowest in the list (as when several start together, the lowest
         one's load comes last); the default show then waits for that one. Else the default show, if there is one. (An
         automation that started loading a show in this check wins over all of these: see check.)"""
         self._drop_defaults()  # (one still waiting, for a schedule that's ended since, doesn't load after this)
-        if any(isinstance(a, Mapping) and a.get("do") == "load_show" for a in ended.on_end):
+        if ends_on_its_own(ended):
+            self._before = []
             return []
         matching = [a for a in container.ordered_automations()
                     if a.id != ended.id and a.enabled and schedules_a_show(a) and self.states.get(a.id, AutomationState()).matched]

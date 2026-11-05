@@ -447,6 +447,8 @@ Close the app first (it's holding the dongle), then:
         Evening loads (after its countdown); when it ends, the countdown says "Loading Central Church" and it loads.
   - [ ] The same again, but load another show from the Show menu while Evening is on: when the automation ends,
         nothing changes (manual wins).
+  - [ ] The same again, with **When it stops matching: Cut to black**: when it ends the lights go black and stay
+        black (no countdown for Central Church, and Start Up doesn't light anything).
   - [ ] Restart the PC: Central Church opens. (Quitting and reopening CentraLight carries on with the show that was on.)
   - [ ] Restart the PC while a global automation that loads another show is under way (one for the next hour, say):
         Central Church opens, then that automation's show loads straight after.

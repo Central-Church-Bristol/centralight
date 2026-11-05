@@ -51,6 +51,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — and Colour, Split and mask shapes' six | **done** (5 Nov, 03:15) |
 | A second look (two reviewers: item 11, the clean-up and those fixes; 16 findings) | **done** (5 Nov, 04:10; 945 tests pass twice) |
 | A 3-hour soak of M14 (show loads, video copies on the Overlay, countdowns, a linked video) | **done** (5 Nov, 07:16; no errors; memory level after the first hour, threads flat) |
+| — your rule of 5 Nov: a schedule that ends by going black keeps the default show away | **done** (5 Nov, 09:05) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -177,6 +178,8 @@ The small ones first (3, 1, 2, 7):
   - someone has loaded a show by hand since (the Show menu, the Stream Deck, the phone page): **manual wins**, and a
     show loaded by hand during the default's countdown stops it;
   - that automation's own "When it stops matching" loads a show: **that wins**;
+  - that automation's own "When it stops matching" is Cut or Fade to black (your choice, 5 Nov): **the lights stay
+    off**, and nothing loads (not a longer schedule's show either, nor the default show later);
   - another automation that loads a show matches then (back-to-back schedules): its show stays, and the default comes
     when that one ends.
 - **The week schedule** shows the default show in the gaps, drawn lighter (hover for what it is; it has no automation
@@ -1589,6 +1592,11 @@ Problems the tests found and that are fixed:
     own reader, and a new copy takes over one another copy has finished with.
   - **Run now** on a global automation that loads a show is a person's choice (the default show doesn't replace it);
     **Now** on a countdown that started early is still the schedule's own run.
+  - **A schedule that ends by going black** (your choice, 5 Nov: its own "When it stops matching" has Cut or Fade to
+    black, with any delay) has nothing loaded after it: not the default show, and not a longer schedule's show (loading
+    either runs its "When this show loads" automations, and both your shows' "Start Up" would light the church again,
+    at midnight for "Dioscesioan Event"). Nothing comes back over it later either: the next show to load is the next
+    schedule's, or one you choose. The week schedule draws no default show after such a schedule's block.
 - **M13 choices** (all easy to change):
   - **The week schedule is a tab beside the automation's editor** (Automation | Week schedule) rather than squeezed
     in beside the Coming up list: at 1280×720 that panel is too short for a week, and the left column too narrow.

@@ -238,6 +238,30 @@ class RunnerTests(unittest.TestCase):
             again.restore(saved, 0.0)
             self.assertEqual((again.loader, again._before), ("sunday", ["november"]))  # (kept over a restart)
 
+    def test_a_schedule_that_ends_by_going_black_keeps_the_default_away(self) -> None:
+        """(The user, 5 Nov: when a schedule's own "when it stops matching" is Cut or Fade to black, nothing loads after
+        it, so the lights stay off.)"""
+        for ending in ({"do": "cut_black"}, {"do": "fade_black", "fade": 3}, {"do": "cut_black", "delay": 30}):
+            self.setUp()
+            event = automation("event", [{"type": "days", "days": ["sat"]}], [{"do": "load_show", "show": "event"}],
+                               on_end=[ending])
+            shows = container(event)
+            self.assertEqual(self.loads(self.check(shows, "10:00", SUNDAY - timedelta(days=1))), ["event"])
+            after = self.check(shows, "00:01") + self.check(shows, "00:02")  # (a delayed one comes a minute later)
+            self.assertEqual([a["do"] for a in after], [ending["do"]], ending)  # (it goes black, and nothing loads)
+            self.assertFalse(any(p[3].get("_default") for p in self.runner.pending))
+            self.assertIsNone(self.runner.loader)
+
+    def test_going_black_inside_a_longer_schedule_brings_nothing_back(self) -> None:
+        weekend = automation("weekend", [{"type": "days", "days": ["sat", "sun"]}], [{"do": "load_show", "show": "weekend"}])
+        event = automation("event", [{"type": "days", "days": ["sun"]}, {"type": "time", "from": "18:00", "to": "22:00"}],
+                           [{"do": "load_show", "show": "event"}], on_end=[{"do": "fade_black", "fade": 3}])
+        shows = container(weekend, event)
+        self.check(shows, "10:00")
+        self.assertEqual(self.loads(self.check(shows, "18:00")), ["event"])
+        self.assertEqual(self.loads(self.check(shows, "22:00")), [])  # (not the weekend's show: it stays black)
+        self.assertEqual(self.check(shows, "00:01", SUNDAY + timedelta(days=1)), [])  # (nor the default, later)
+
     def test_a_restart_remembers_which_automation_loaded_it(self) -> None:
         shows = container(morning())
         self.check(shows, "10:00")
@@ -337,6 +361,32 @@ class RestartTests(AutomationEngineTestCase):
         self.assertEqual(self.reopen(live, 8, default_show="evening"), ["evening"])  # (the test's show is Central Church)
 
 
+class BlackEndingTests(AutomationEngineTestCase):
+    def test_the_lights_stay_black_after_a_schedule_that_ends_so(self) -> None:
+        """The user's own case: the global "Diocesan Event" (Days → Load a show; when it stops matching, Cut to black),
+        and a default show. Both shows have "Start Up" (When this show loads → Base), so loading the default show at
+        midnight would light the church again."""
+        from centralight.commands import SendToBase, SetDefaultShow
+
+        event = automation("diocesan-event", [{"type": "days", "days": ["sat"]}], [{"do": "load_show", "show": "evening"}],
+                           on_end=[{"do": "cut_black"}])
+        start_up = automation("start-up", [{"type": "show_loads"}], [{"do": "base", "input": "warm-welcome"}])
+        self.make(datetime(2026, 11, 7, 23, 50), [start_up], global_automations=[event])
+        self.engine.submit(SetDefaultShow("morning"))
+        self.engine.submit(SendToBase("warm-welcome", cut=True))
+        self.run_until(datetime(2026, 11, 7, 23, 59))
+        while not self.engine.gui_requests.empty():
+            self.engine.gui_requests.get()  # (the event's own load, at the start)
+        self.assertEqual(self.base(), "warm-welcome")
+        self.run_until(datetime(2026, 11, 8, 0, 3))  # (midnight: the event ends; its cut waits for the countdown)
+        asked = []
+        while not self.engine.gui_requests.empty():
+            asked.append(self.engine.gui_requests.get()[1])
+        self.assertEqual([a.get("show") for a in asked if a.get("do") == "load_show"], [])  # (no show loads)
+        self.assertEqual(self.base(), "")  # (black)
+        self.assertEqual(self.runs("start-up"), [])  # (and nothing lit it again)
+
+
 class StartTests(FilesCase):
     def test_the_default_show_opens_when_the_pc_starts(self) -> None:
         from centralight.app import show_to_open
@@ -384,6 +434,10 @@ class ScheduleTests(unittest.TestCase):
         stops, _unplaced = week_schedule([morning(on_end=[{"do": "load_show", "show": "evening"}])],
                                          dict(shows, evening="Evening"), monday, default_show="central-church")
         self.assertEqual([(b.start, b.end) for b in stops if b.default],  # (a "when it stops" load wins: none after it)
+                         [(datetime(2026, 11, 2), datetime(2026, 11, 8, 9, 0))])
+        dark, _unplaced = week_schedule([morning(on_end=[{"do": "cut_black", "delay": 5}])], shows, monday,
+                                        default_show="central-church")
+        self.assertEqual([(b.start, b.end) for b in dark if b.default],  # (nor after one that goes black)
                          [(datetime(2026, 11, 2), datetime(2026, 11, 8, 9, 0))])
         plain, _unplaced = week_schedule([morning()], shows, monday)
         self.assertEqual(len(plain), 1)  # (no default show: as before)
