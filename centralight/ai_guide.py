@@ -35,7 +35,6 @@ from .schema import (
     COLOUR_TYPES,
     ELEMENT_KINDS,
     MASK_SHAPE,
-    MASK_STARTS,
     SHAPE,
     SHAPE_TYPES,
     TRANSITION,
@@ -129,12 +128,21 @@ def examples(show: Show) -> list[tuple[str, dict]]:
                                                                  "to": {"expr": "hsv(turn + 0.3)"}, "angle": 0}}], [], [], []],
         }),
         ("Warm white revealed light by light, a soft-edged band sweeping across the room every 8 seconds (a mask that "
-         "starts hidden everywhere, with a Show rectangle moving over it)", {
+         "a black rectangle covers, with a white rectangle moving over it)", {
             "format": FORMAT_INPUT, "version": INPUT_VERSION, "id": "reveal-sweep", "name": "Reveal sweep", "colour": "#FFD9A0",
             "tracks": [[{"id": "E1", "kind": "colour", "fill": {"type": "colour", "colour": "#FFD9A0"},
-                         "mask": {"start": "hidden", "shapes": [
-                             {"id": "M1", "type": "rect", "mode": "show", "x": {"expr": "saw(time, 1/8) * 1.6 - 0.3"},
+                         "mask": {"shapes": [
+                             {"id": "M1", "type": "rect", "grey": 0, "x": 0.5, "y": 0.5, "w": 1.2, "h": 1.2, "softness": 0},
+                             {"id": "M2", "type": "rect", "grey": 1, "x": {"expr": "saw(time, 1/8) * 1.6 - 0.3"},
                               "y": 0.5, "w": 0.35, "h": 1.2, "softness": 0.6}]}}], [], [], []],
+        }),
+        ("Deep blue that fades out across the room from left to right (a mask going from white on the left to black on "
+         "the right: a black rectangle with a fully soft edge)", {
+            "format": FORMAT_INPUT, "version": INPUT_VERSION, "id": "fade-across", "name": "Fade across", "colour": "#2040C0",
+            "tracks": [[{"id": "E1", "kind": "colour", "fill": {"type": "colour", "colour": "#2040C0"},
+                         "mask": {"shapes": [
+                             {"id": "M1", "type": "rect", "grey": 0, "x": 1.0, "y": 0.5, "w": 2.0, "h": 3.0,
+                              "softness": 1}]}}], [], [], []],
         }),
     ]
 
@@ -181,17 +189,15 @@ def input_schema(show: Show) -> dict[str, Any]:
         properties = {
             "id": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$", "description": "Unique within the input, e.g. E1"},
             "kind": {"const": kind, "description": label},
-            "mask": {"type": "object", "description": "What this element leaves alone: where it starts, a painted mask, "
-                                                      "shapes that show or hide it, and lights (on top)",
+            "mask": {"type": "object", "description": "A black-and-white picture over the element (white shows it, black "
+                                                      "hides it, grey shows it partly; white everywhere to start with): "
+                                                      "a painting, then shapes in order, then lights it leaves alone",
                      "properties": {"exclude": {"type": "array", "items": {"enum": lights}, "uniqueItems": True},
                                     "paint": {"type": "string", "pattern": "^masks/[0-9a-f]{12}\\.png$",
                                               "description": "A mask painted in the Editor (white shows, black hides)"},
-                                    "start": {"enum": [value for value, _label in MASK_STARTS],
-                                              "description": "Shown everywhere (\"shown\", the default) or hidden "
-                                                             "everywhere (\"hidden\"), before the painting and shapes"},
-                                    "shapes": {"type": "array", "description": "Mask shapes, in order: each shows or "
-                                                                               "hides the element inside it",
-                                               "items": {"type": "object", "required": ["id", "type", "mode"],
+                                    "shapes": {"type": "array", "description": "Mask shapes, in order: each puts its grey "
+                                                                               "over the mask inside it",
+                                               "items": {"type": "object", "required": ["id", "type"],
                                                          "properties": {"id": {"type": "string"}, **_nested(MASK_SHAPE)}}}}},
             "start": {"type": "number", "minimum": 0, "description": "Timed inputs: when it starts (seconds of the input)"},
             "end": {"type": "number", "minimum": 0, "description": "Timed inputs: when it ends"},
@@ -403,14 +409,17 @@ def guide_text(show: Show, full: bool = True) -> str:
         "### Leaving lights alone (masks)",
         "`\"mask\": {\"exclude\": [\"light-id\", ...]}` on any element: those lights ignore that element (they show the "
         "tracks below, or whatever is underneath on the Overlay). This is how \"only the pillars\" works.",
-        "A mask can also have mask shapes: rectangles and ellipses (`\"shapes\"`), each `\"mode\": \"show\"` or "
-        "`\"hide\"` (the element shows, or is hidden, inside it), with `x`, `y`, `w`, `h`, `rotation` and `softness` "
-        "like a Paint shape's (they can have keyframes or expressions). Each light works its mask out at its dot: where "
-        "the mask starts (`\"start\": \"hidden\"` for hidden everywhere; shown everywhere is the default), then the "
-        "painted mask (it hides), then the shapes in order, then `exclude` on top. With `\"start\": \"hidden\"`, a Show "
-        "shape means \"only here\"; a moving one reveals the lights as it passes:\n\n"
-        "```json\n\"mask\": {\"start\": \"hidden\", \"shapes\": [{\"id\": \"M1\", \"type\": \"rect\", \"mode\": \"show\", "
-        "\"x\": {\"expr\": \"saw(time, 1/8) * 1.6 - 0.3\"}, \"y\": 0.5, \"w\": 0.35, \"h\": 1.2, \"softness\": 0.6}]}\n```",
+        "A mask is a black-and-white picture over the element: white shows it, black hides it, and greys show it "
+        "partly. It's white everywhere to start with. Besides its painting it can have mask shapes: rectangles and "
+        "ellipses (`\"shapes\"`), each with a `grey` (0 black to 1 white) and `x`, `y`, `w`, `h`, `rotation`, `softness` and "
+        "`opacity` like a Paint shape's (any of them can have keyframes or expressions). Each light works its mask out at "
+        "its dot: white, then the painting, then the shapes in order (each putting its grey over what's under it, by its "
+        "softness), then `exclude` on top. A black rectangle over everything and a white one on top means \"only "
+        "there\"; a moving one reveals the lights as it passes, and a black rectangle with `softness` 1 fades the element "
+        "out across the room:\n\n"
+        "```json\n\"mask\": {\"shapes\": [{\"id\": \"M1\", \"type\": \"rect\", \"grey\": 0, \"x\": 0.5, \"y\": 0.5, "
+        "\"w\": 1.2, \"h\": 1.2},\n  {\"id\": \"M2\", \"type\": \"rect\", \"grey\": 1, \"x\": {\"expr\": \"saw(time, 1/8) * 1.6 - 0.3\"}, "
+        "\"y\": 0.5, \"w\": 0.35, \"h\": 1.2, \"softness\": 0.6}]}\n```",
         "## The lights",
         lights + "\n\nEach light is a point (its dot). Colour and Paint are read exactly at the dot, so a shape's `softness` decides "
         "whether a light fades or switches as an edge passes it; pictures are averaged around the dot (`area`).",

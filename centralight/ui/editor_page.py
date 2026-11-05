@@ -30,11 +30,12 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QStacked
 from ..commands import SendToBase, SetSolo
 from ..editor_render import EditorRenderer
 from ..engine import EngineFrame
-from ..assets import MASKS_DIR, PAINT_DIR, load_mask, load_strokes, save_asset
+from ..assets import ASSET_H, ASSET_W, MASKS_DIR, PAINT_DIR, load_mask, load_strokes, save_asset
 from ..elements import mask_shapes, media_path
 from ..input_edit import (
     add_shape,
     find_element,
+    invert_mask,
     set_element_value,
     set_element_values_at,
     set_excluded,
@@ -51,7 +52,7 @@ from .document import SCOPE_SHOW, ShowDocument, input_scope
 from .element_palette import ElementPalette
 from .timeline_view import TimelineView
 from .undo_bar import UndoBar
-from .viewports import ResultPanel, SelectedPanel, SelectedViewport, ViewportCanvas, mask_tint, rgb_image, rgba_image
+from .viewports import ResultPanel, SelectedPanel, SelectedViewport, ViewportCanvas, mask_image, rgb_image, rgba_image
 from .widgets import NameTitle, ResettableSplitter
 
 POLL_MS = 66  # pick up new pictures from the editor renderer ~15 times a second
@@ -202,6 +203,7 @@ class EditorPage(QWidget):
         self.selected_canvas.painted.connect(self._painted)
         self.selected_canvas.transform_changing.connect(self._picture_dragged)
         self.selected_panel.mode_changed.connect(self._mask_mode_changed)
+        self.selected_panel.invert_requested.connect(self.invert_mask)
         self.palette.element_clicked.connect(self.timeline.add_to_first_empty)
         self.palette.transition_clicked.connect(self.timeline.set_transition_kind)
         document.changed.connect(self._show_changed)
@@ -309,6 +311,7 @@ class EditorPage(QWidget):
 
     def _mask_mode_changed(self, _on: bool) -> None:
         self._sync_selected_view()  # (each mode has its own selected shape)
+        self._picture_version = -1  # (the Selected view shows the mask itself in Mask mode, the element in Layer mode)
         self._request()
 
     def _remove_shape_by_key(self, shape_id: str) -> None:
@@ -479,7 +482,8 @@ class EditorPage(QWidget):
             return
         group = self._shape_group()
         show, shape_id = add_shape(self.show_data, self.input_id, self.element_id, shape_type,
-                                   values["x"], values["y"], values["w"], values["h"], group=group)
+                                   values["x"], values["y"], values["w"], values["h"], group=group,
+                                   grey=self.selected_canvas.mask_grey)
         what = ("mask " if group == "mask.shapes" else "") + ("rectangle" if shape_type == "rect" else "ellipse")
         if shape_id and self.document.apply(show, f"Draw {what} {shape_id}"):
             self.selected_panel.select_tool.setChecked(True)
@@ -516,6 +520,30 @@ class EditorPage(QWidget):
         path = "mask.paint" if what == "mask" else "strokes"
         self.document.apply(set_element_value(self.show_data, self.input_id, self.element_id, path, name),
                             f"{element_name(element)}: {verb}")
+
+    def invert_mask(self) -> None:
+        """Invert, in Mask mode (M14): the selected element's whole mask turned round, white to black and black to
+        white (its painting as a new file, its shapes' greys, keyframes and formulas too; not the ticks). One undo step,
+        and again turns it back exactly (a painting that comes out white everywhere is no painting, as a mask starts)."""
+        import numpy as np
+
+        element = self._element()
+        folder = self.show_data.folder
+        if element is None or not self.input_id or self.show_data.read_only:
+            return
+        painted = self._picture_now("mask")
+        flipped = 255 - (painted if painted is not None else np.full((ASSET_H, ASSET_W), 255, dtype=np.uint8))
+        name = None
+        if int(flipped.min()) < 255:
+            if not folder:
+                return
+            try:
+                name = save_asset(folder, MASKS_DIR, np.ascontiguousarray(flipped, dtype=np.uint8))
+            except (OSError, ValueError) as exc:
+                log_exception("inverting a mask", exc)
+                return
+        self.document.apply(invert_mask(self.show_data, self.input_id, self.element_id, name),
+                            f"{element_name(element)}: invert the mask")
 
     def _picture_dragged(self, element_id: str, values: dict) -> None:
         """The gizmo on an Image, Video or NDI element (keyframed settings get a key at the playhead)."""
@@ -570,9 +598,13 @@ class EditorPage(QWidget):
         self.result_canvas.set_image(rgb_image(picture.result))
         self.result_panel.strip.set_colours(picture.colours)
         if self.element_id and picture.element_id == self.element_id:
-            tint = mask_tint(picture.keep) if (self.selected_canvas.mask_mode and picture.keep is not None) else None
-            # (no picture yet, e.g. an NDI feed with no signal: show nothing, not the last element's picture)
-            self.selected_canvas.set_image(rgba_image(picture.selected) if picture.selected is not None else None, tint)
+            if self.selected_canvas.mask_mode:  # (the mask itself, black and white: white everywhere with none yet)
+                import numpy as np
+
+                keep = picture.keep if picture.keep is not None else np.full((ASSET_H, ASSET_W), 255, dtype=np.uint8)
+                self.selected_canvas.set_image(mask_image(keep))
+            else:  # (no picture yet, e.g. an NDI feed with no signal: show nothing, not the last element's picture)
+                self.selected_canvas.set_image(rgba_image(picture.selected) if picture.selected is not None else None)
             self.selected_canvas.set_patches(picture.patches)
         elif not self.element_id:
             self.selected_canvas.set_image(None)

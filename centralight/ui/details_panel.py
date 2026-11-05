@@ -71,7 +71,7 @@ from ..input_edit import (
 from ..model import END_BEHAVIOURS, END_HOLD, END_LOOP, END_STOP, Input, Show, element_span
 from ..params import base_value, expression_of, is_keyframed, key_at, neighbour_key, with_base_value, with_expression
 from ..elements import mask_shapes
-from ..schema import MASK_SHAPE, MASK_START, SHAPE, TRANSITION, Spec, element_specs, get_path, has_background, visible
+from ..schema import MASK_SHAPE, SHAPE, TRANSITION, Spec, element_specs, get_path, has_background, visible
 from ..step_names import (
     change_name,
     describe,
@@ -257,7 +257,7 @@ class DetailsPanel(QScrollArea):
         shapes = tuple(str(s.get("id")) for s in element.get("shapes", ()) or ())
         lights = tuple((fx.id, fx.name, fx.group) for fx in self.show_data.colour_fixtures())
         split = self._split_state(inp, element) if has_background(element) else None  # (the Split button's note)
-        mask = tuple((str(s.get("id")), s.get("type", "rect"), s.get("mode", "hide")) for s in mask_shapes(element.get("mask")))
+        mask = tuple((str(s.get("id")), s.get("type", "rect")) for s in mask_shapes(element.get("mask")))
         return ("element", inp.id, self.element_id, element.get("kind"), rows, shapes, self.shape_id, lights, split,
                 mask, self.mask_shape_id)
 
@@ -598,19 +598,14 @@ class DetailsPanel(QScrollArea):
         return panel
 
     def _mask_panel(self, element) -> Panel:
-        """The mask's shapes (M14): where the mask starts, then rectangles and ellipses that show or hide the element,
-        in order (the painted mask comes before them, and the Lights ticks after, on top)."""
+        """The mask's shapes (M14): rectangles and ellipses, each a grey over the mask's painting, in order (the Lights
+        ticks come after, on top)."""
         panel = Panel("Mask shapes")
-        form = self._form(panel)
-        start = self._field_for(MASK_START, lambda value, _final: self._set_mask_start(value))
-        self._fields["mask:start"] = start
-        form.addRow(self._label(MASK_START.label), start)
         self.mask_shape_list = QListWidget()
         self.mask_shape_list.setObjectName("ShapeList")
         shapes = mask_shapes(element.get("mask"))
         for shape in shapes:
-            item = QListWidgetItem(f"{'Show' if shape.get('mode') == 'show' else 'Hide'} · "
-                                   f"{SHAPE_TITLES.get(shape.get('type', 'rect'), 'Shape')} {shape.get('id', '')}")
+            item = QListWidgetItem(f"{SHAPE_TITLES.get(shape.get('type', 'rect'), 'Shape')} {shape.get('id', '')}")
             item.setData(Qt.ItemDataRole.UserRole, shape.get("id"))
             self.mask_shape_list.addItem(item)
             if shape.get("id") == self.mask_shape_id:
@@ -620,8 +615,9 @@ class DetailsPanel(QScrollArea):
         self.mask_shape_list.currentItemChanged.connect(self._mask_shape_clicked)
         panel.body.addWidget(self.mask_shape_list)
         if not shapes:
-            panel.body.addWidget(hint("No mask shapes yet. Add one here, or draw it on the Selected view in Mask mode. "
-                                      "Each one shows or hides this element inside it; the Lights ticks still apply on top."))
+            panel.body.addWidget(hint("The mask is a black-and-white picture: white shows this element, black hides it, "
+                                      "grey shows it partly. Paint it on the Selected view in Mask mode, and add shapes "
+                                      "here or there (each in its grey). The Lights ticks still apply on top."))
         buttons = QWidget()
         flow = FlowLayout(buttons, spacing=6)  # wraps onto a second line when the panel is narrow
         add_rect = QPushButton("+ Rectangle")
@@ -629,16 +625,6 @@ class DetailsPanel(QScrollArea):
         add_ellipse = QPushButton("+ Ellipse")
         add_ellipse.clicked.connect(lambda: self._add_mask_shape("ellipse"))
         selected = self.current_mask_shape()
-        modes = []
-        for mode, label, tip in (("show", "Show", "The element shows inside this shape"),
-                                 ("hide", "Hide", "The element is hidden inside this shape")):
-            button = QPushButton(label)
-            button.setObjectName("ToolToggle")
-            button.setCheckable(True)
-            button.setChecked(selected is not None and selected.get("mode", "hide") == mode)
-            button.setToolTip(tip)
-            button.clicked.connect(lambda _checked=False, m=mode, b=button: self._set_mask_shape_mode(m, b))
-            modes.append(button)
         up = QPushButton("Forward")
         up.setToolTip("Work this shape out after the next one (it wins where they overlap)")
         up.clicked.connect(lambda: self._move_mask_shape(1))
@@ -647,9 +633,9 @@ class DetailsPanel(QScrollArea):
         down.clicked.connect(lambda: self._move_mask_shape(-1))
         delete = QPushButton("Remove")
         delete.clicked.connect(self._remove_mask_shape)
-        for button in (add_rect, add_ellipse, *modes, up, down, delete):
+        for button in (add_rect, add_ellipse, up, down, delete):
             flow.addWidget(button)
-        for button in (*modes, up, down, delete):
+        for button in (up, down, delete):
             button.setEnabled(selected is not None)
         panel.body.addWidget(buttons)
         return panel
@@ -764,9 +750,6 @@ class DetailsPanel(QScrollArea):
                     if field is not None:
                         self._show_value(field, spec, get_path(mask_shape, spec.path, spec.default), self._exprs.get(key),
                                          self._keys.get(key), t)
-            start = self._fields.get("mask:start")
-            if start is not None:
-                self._show_value(start, MASK_START, get_path(element, MASK_START.path, MASK_START.default))
             if self.lights_tree is not None:
                 excluded = set(get_path(element, "mask.exclude", ()) or ())
                 blocked = self.lights_tree.blockSignals(True)
@@ -1190,17 +1173,6 @@ class DetailsPanel(QScrollArea):
             self.mask_shape_selected.emit(shape_id)
             self.refresh()
 
-    def _set_mask_shape_mode(self, mode: str, button: QPushButton | None = None) -> None:
-        """Show or Hide: what the selected mask shape does to the element inside it (one undo step)."""
-        shape = self.current_mask_shape()
-        if shape is None or self.show_data.read_only or shape.get("mode", "hide") == mode:
-            if button is not None and shape is not None:
-                button.setChecked(shape.get("mode", "hide") == mode)  # (a click on the one that's already on keeps it on)
-            return
-        self._apply(set_shape_value(self.show_data, self.input_id, self.element_id, str(shape.get("id")), "mode", mode,
-                                    "mask.shapes"),
-                    f"{mask_shape_name(shape)}: {'show' if mode == 'show' else 'hide'} the element inside it")
-
     def _move_mask_shape(self, step: int) -> None:
         shape = self.current_mask_shape()
         if shape is not None and not self.show_data.read_only:
@@ -1218,17 +1190,6 @@ class DetailsPanel(QScrollArea):
             self.document.apply(remove_shape(self.show_data, self.input_id, self.element_id, shape_id, "mask.shapes"),
                                 f"Remove {lower_first(mask_shape_name(shape))}")
             self.mask_shape_selected.emit("")
-
-    def _set_mask_start(self, value: Any) -> None:
-        """Start with: Shown everywhere (the default, so it's left out of the file) or Hidden everywhere."""
-        element = self.current_element()
-        if element is None or self._updating or self.show_data.read_only:
-            return
-        hidden = value == "hidden"
-        if hidden == (get_path(element, MASK_START.path, MASK_START.default) == "hidden"):
-            return
-        self._apply(set_element_value(self.show_data, self.input_id, self.element_id, MASK_START.path, "hidden" if hidden else None),
-                    f"{element_name(element)}: mask starts {'hidden' if hidden else 'shown'} everywhere")
 
     def _split_background(self) -> None:
         element = self.current_element()

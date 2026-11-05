@@ -5,9 +5,10 @@ Brush dabs use a soft round kernel (remembered for each size and softness), spac
 along the pointer's path. When a stroke ends, the Editor saves the picture as a new file (assets.save_asset),
 so undo just goes back to the file before.
 
-Tools: brush and eraser (strokes); show and hide brushes (masks); bucket (fills the area of similar colour
-around a point); gradient (the brush colour fading to clear, straight or round); light colour (fills the
-patch of the picture one light follows).
+Tools: brush and eraser; bucket (fills the area of similar colour around a point); gradient (the brush colour
+fading to clear, straight or round); light colour (fills the patch of the picture one light follows). On a mask
+(M14: a black-and-white picture, white everywhere to start with) the colour is a grey, and the eraser paints white
+back in.
 """
 
 from __future__ import annotations
@@ -40,6 +41,16 @@ def brush_kernel(radius: float, softness: float) -> np.ndarray:
     return kernel
 
 
+def _grey(colour: RGB) -> float:
+    """A colour's grey (its brightness), 0-1: what a mask keeps of the element there."""
+    return min(1.0, max(0.0, 0.299 * float(colour[0]) + 0.587 * float(colour[1]) + 0.114 * float(colour[2])))
+
+
+def _mask_target(colour: RGB, mode: str) -> float:
+    """What a dab on a mask paints: the brush's grey; the eraser paints white back in (as a mask starts)."""
+    return {"erase": 1.0, "show": 1.0, "hide": 0.0}.get(mode, _grey(colour))
+
+
 class Canvas:
     """One picture being painted: strokes (mask=False) or a mask (mask=True)."""
 
@@ -64,7 +75,8 @@ class Canvas:
 
     def dab(self, x: float, y: float, radius: float, softness: float, colour: RGB = (1.0, 1.0, 1.0),
             strength: float = 1.0, mode: str = "paint") -> None:
-        """One dab at (x, y) in picture pixels. mode: "paint" / "erase" (strokes), "show" / "hide" (masks)."""
+        """One dab at (x, y) in picture pixels. mode: "paint" or "erase" ("show" and "hide": white and black, on a
+        mask)."""
         kernel = brush_kernel(radius, softness)
         size = kernel.shape[0]
         half = size // 2
@@ -80,10 +92,7 @@ class Canvas:
         self._touched[y0:y1, x0:x1] |= a > 0
         if self.mask:
             region = self.data[y0:y1, x0:x1]
-            if mode == "hide":
-                region *= 1.0 - a
-            else:
-                region += (1.0 - region) * a
+            region += (np.float32(_mask_target(colour, mode)) - region) * a
         else:
             region = self.data[y0:y1, x0:x1]
             if mode == "erase":
@@ -123,10 +132,16 @@ class Canvas:
         """Fill the area of similar colour (and see-through-ness) around (x, y) with the colour."""
         import cv2
 
-        if self.mask:
-            return
         cx, cy = int(round(x)), int(round(y))
         if not (0 <= cx < ASSET_W and 0 <= cy < ASSET_H):
+            return
+        if self.mask:  # (the area of about the same grey around the point)
+            similar = np.abs(self.data - self.data[cy, cx]) <= tolerance
+            _count, labels = cv2.connectedComponents(similar.astype(np.uint8), connectivity=4)
+            area = labels == labels[cy, cx]
+            self.data[area] = _grey(colour)
+            self._touched |= area
+            self.changed = True
             return
         alpha = self.data[..., 3]
         straight = self.data[..., :3] / np.maximum(alpha, 1e-4)[..., None]
@@ -144,8 +159,6 @@ class Canvas:
 
     def gradient(self, x0: float, y0: float, x1: float, y1: float, colour: RGB, radial: bool = False) -> None:
         """The colour at (x0, y0) fading to clear at (x1, y1): along the line, or round (x0, y0)."""
-        if self.mask:
-            return
         ys, xs = np.mgrid[0:ASSET_H, 0:ASSET_W].astype(np.float32)
         dx, dy = x1 - x0, y1 - y0
         length = max(1.0, math.hypot(dx, dy))
@@ -155,6 +168,10 @@ class Canvas:
             f = ((xs - x0) * dx + (ys - y0) * dy) / (length * length)
         a = 1.0 - np.clip(f, 0.0, 1.0)
         self._touched |= a > 0
+        if self.mask:  # (the grey fading into what's there)
+            self.data += (np.float32(_grey(colour)) - self.data) * a
+            self.changed = True
+            return
         keep = (1.0 - a)[..., None]
         self.data *= keep
         for plane in range(3):
@@ -164,9 +181,9 @@ class Canvas:
 
     def fill_area(self, area: np.ndarray, colour: RGB) -> None:
         """Fill an area (a (360, 640) bool map, e.g. one light's patch) with the colour."""
-        if self.mask or not area.any():
+        if not area.any():
             return
-        self.data[area] = (colour[0], colour[1], colour[2], 1.0)
+        self.data[area] = _grey(colour) if self.mask else (colour[0], colour[1], colour[2], 1.0)
         self._touched |= area
         self.changed = True
 
@@ -187,6 +204,13 @@ class Canvas:
     def premultiplied8(self) -> np.ndarray:
         """Premultiplied RGBA uint8, for showing while painting (strokes only)."""
         return np.clip(self.data * 255.0 + 0.5, 0, 255).astype(np.uint8)
+
+    def grey_at(self, x: float, y: float) -> float | None:
+        """The mask's grey at (x, y) in picture pixels (the eyedropper, in Mask mode)."""
+        cx, cy = int(round(x)), int(round(y))
+        if not self.mask or not (0 <= cx < ASSET_W and 0 <= cy < ASSET_H):
+            return None
+        return float(self.data[cy, cx])
 
     def is_empty(self) -> bool:
         return bool(np.all(self.data >= 0.999)) if self.mask else not bool(np.any(self.data[..., 3] > 1e-4))

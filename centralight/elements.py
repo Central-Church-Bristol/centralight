@@ -13,9 +13,9 @@ Kinds:
 - "video": arrives in M5 (draws nothing until then)
 
 Every element also has opacity, a blend mode, a transform (move, scale, rotate) and a
-mask: where it starts (shown, or hidden everywhere), a painted mask (it hides), shapes that
-show or hide the element inside them (M14), and lights it leaves alone ("exclude": only the
-lights see that).
+mask: a black-and-white picture (M14: white shows the element, black hides it, white
+everywhere to start with), painted, with shapes in greys over the painting, and lights it
+leaves alone ("exclude": only the lights see that).
 Unknown kinds draw nothing, so a show from a newer CentraLight still plays.
 
 Elements that never change (no keyframes or expressions, not a live feed) are drawn once
@@ -516,50 +516,48 @@ def finish_layer(element: Mapping[str, Any], layer: np.ndarray, ctx: RenderConte
 
 
 def mask_shapes(mask: Any) -> list[Mapping[str, Any]]:
-    """A mask's shapes (M14), in order: each shows or hides the element inside it."""
+    """A mask's shapes (M14), in order: each puts its grey over the mask inside it."""
     shapes = mask.get("shapes") if _is_map(mask) else None
     if not isinstance(shapes, Sequence) or isinstance(shapes, str):
         return []
     return [shape for shape in shapes if _is_map(shape)]
 
 
-def mask_hides(shape: Mapping[str, Any]) -> bool:
-    """A mask shape hides the element inside it (the default), or shows it ("mode": "show")."""
-    return shape.get("mode", "hide") != "show"
+def mask_grey(shape: Mapping[str, Any], t: float) -> float:
+    """A mask shape's grey at element time t, 0-1: 0 (black) hides the element inside it, 1 (white) shows it. One
+    written without "grey" (by hand, an AI tool, or before 5 Nov) is black, or white with "mode": "show"."""
+    default = 1.0 if shape.get("mode") == "show" else 0.0
+    try:
+        return min(1.0, max(0.0, float(param(shape, "grey", t, default))))
+    except (TypeError, ValueError):
+        return default
 
 
 def element_keep(element: Mapping[str, Any], ctx: RenderContext, painting: np.ndarray | None = None) -> np.ndarray | None:
-    """The element's mask in a picture (1 = show, 0 = hidden), or None for no mask: where it starts (shown, or hidden
-    everywhere), then its painted strokes (they hide), then its shapes in order, each showing or hiding. (The lights it
-    leaves alone are only left alone by the lights themselves: the light dots show that, not the picture.) painting:
-    the strokes as they're being painted (the Selected view's preview), instead of the mask's file."""
+    """The element's mask in a picture (1 = show, 0 = hidden), or None for no mask (M14: a black-and-white picture):
+    white everywhere to start with, then its painting (greys), then its shapes in order, each putting its grey over
+    what's under it, by its softness. (The lights it leaves alone are only left alone by the lights themselves: the
+    light dots show that, not the picture.) painting: the mask as it's being painted (the Selected view's preview),
+    instead of the mask's file."""
     mask = element.get("mask")
     if not _is_map(mask):
         if painting is None:
             return None
         mask = {}  # (the first strokes of a mask that isn't there yet)
-    hidden = mask.get("start") == "hidden"
     shapes = mask_shapes(mask)
     painted = mask.get("paint")
     keep = None
-    if not hidden and painting is not None:  # (strokes only hide: on a hidden mask they change nothing)
+    if painting is not None:
         keep = painting
-    elif not hidden and isinstance(painted, str) and painted:
+    elif isinstance(painted, str) and painted:
         keep = painted_mask(media_path(ctx.folder, painted), ctx)
-    if not hidden and not shapes:
+    if not shapes:
         return keep
-    if hidden:
-        keep = np.zeros((ctx.height, ctx.width), dtype=np.float32)
-    else:
-        keep = keep.copy() if keep is not None else np.ones((ctx.height, ctx.width), dtype=np.float32)
+    keep = keep.copy() if keep is not None else np.ones((ctx.height, ctx.width), dtype=np.float32)
     for shape in shapes:
         cover, _rgb = shape_coverage(shape, ctx)
-        if cover is None:
-            continue
-        if mask_hides(shape):
-            keep *= 1.0 - cover
-        else:
-            keep += cover * (1.0 - keep)
+        if cover is not None:
+            keep += (np.float32(mask_grey(shape, ctx.time)) - keep) * cover
     return keep
 
 

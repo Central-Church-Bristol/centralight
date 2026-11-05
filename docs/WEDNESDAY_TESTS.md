@@ -427,17 +427,22 @@ Close the app first (it's holding the dongle), then:
       Colour + Paint** a line saying whether it'll look exactly the same, or what would change. Split it: the new
       Colour element is on track 1 and the other elements have each moved up a track; the lights look the same
       (or change only as that line said). Ctrl+Z undoes it.
-- [ ] **Mask shapes**: put Warm white on Base, open it, click its Colour element, then **Mask** at the top of the
-      Selected view. The tools are Layer mode's: Select, Rectangle, Ellipse, Brush, Eraser and the Light bulb (no
-      Bucket, Gradient or eyedropper); hover each for what it does here.
-  - [ ] **Rectangle**, drag over the left half: the lights there go dark (it's a Hide shape, red in the view). The
-        details panel lists it under **Mask shapes** ("Hide · Rectangle M1").
-  - [ ] **Show** on that panel: the left half comes back. **Start with: Hidden everywhere**: now only the left half
-        shows ("only here").
-  - [ ] Drag the rectangle across slowly with **Select**: the lights come on one by one as it passes (try Softness
-        0 % and 60 %: switching vs fading).
-  - [ ] Untick a light in **Lights** that's inside the rectangle: it stays off whatever the shape says.
-  - [ ] Delete removes the selected mask shape; Ctrl+Z brings it back.
+- [ ] **Masks** (black and white now): put Warm white on Base, open it, click its Colour element, then **Mask** at the
+      top of the Selected view. The view shows the mask itself, white everywhere, with the light dots on top. The tools
+      are Paint's (Select, Rectangle, Ellipse, Brush, Eraser, Bucket, Gradient, the eyedropper) and the Light bulb;
+      hover each for what it does here. Beside them: **Grey**, **White**, **Black** and **Invert**.
+  - [ ] **Rectangle**, drag over the left half: that part of the view goes black and the lights there go dark. The
+        details panel lists it under **Mask shapes** ("Rectangle M1"), with its **Grey** at 0 %. Drag Grey to 50 %: the
+        lights there come back half way.
+  - [ ] **Brush** in black down the middle, then **White** and paint over part of it: dark where it's black, lit where
+        it's white. **Eraser** rubs painting back to white.
+  - [ ] **Bucket** in black on an empty mask: everything goes dark. Then paint in white: "only there".
+  - [ ] **Gradient** in black from the left to the right: the lights fade across the room.
+  - [ ] **Invert**: everything turns round (lit where it was dark). Invert again: back as it was. Ctrl+Z undoes it.
+  - [ ] Drag a rectangle across slowly with **Select**: the lights change one by one as it passes (try Softness 0 % and
+        60 %: switching vs fading).
+  - [ ] Untick a light in **Lights**: it stays off whatever the mask says.
+  - [ ] Your Evening input with a painted mask looks exactly as before.
 - [ ] **Show variables, keep or reset**: Editor → Show variables → a number variable on the Dashboard → **When the show
       loads: Go back to its starting value**. Set it to something else on the Dashboard, load another show, then load
       this one again: it's back at its starting value. One left on **Keep its last value** keeps what you set.

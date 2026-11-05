@@ -38,7 +38,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — 3 tick boxes, 1 rename, 2 Editor opens paused, 7 Delete removes a shape | **done** (4 Nov, 22:15) |
 | — 4 one Overlay (copies, red boxes, hold for a flash, drag tiles to move them) | **done** (4 Nov, 23:30) |
 | — 9 a Colour element, and Paint without a fill | **done** (5 Nov, 01:05; a test-suite crash found on the way was fixed first; 853 tests pass twice) |
-| — 8 shapes in masks (Show / Hide rectangles and ellipses, Start with, Mask mode with Layer mode's tools) | **done** (5 Nov, 01:25; 866 tests pass) |
+| — 8 shapes in masks (Show / Hide rectangles and ellipses, Start with, Mask mode with Layer mode's tools) | **done** (5 Nov, 01:25; 866 tests pass); rebuilt below |
 | — 6 which week of the month (1st, 2nd, 3rd, 4th, Last) in Days of the week | **done** (5 Nov, 01:35; 875 tests pass) |
 | — 5 a default show (opens when the PC starts, comes back after a schedule) | **done** (5 Nov, 01:50; 889 tests pass) |
 | — 10 remember or reset each show variable when its show loads | **done** (5 Nov, 02:15; 901 tests pass) |
@@ -52,6 +52,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | A second look (two reviewers: item 11, the clean-up and those fixes; 16 findings) | **done** (5 Nov, 04:10; 945 tests pass twice) |
 | A 3-hour soak of M14 (show loads, video copies on the Overlay, countdowns, a linked video) | **done** (5 Nov, 07:16; no errors; memory level after the first hour, threads flat) |
 | — your rule of 5 Nov: a schedule that ends by going black keeps the default show away | **done** (5 Nov, 09:05) |
+| — your change of 5 Nov: masks as black-and-white pictures (Paint's tools in greys, White, Black, Invert) | **done** (5 Nov, 09:50) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -137,27 +138,31 @@ The small ones first (3, 1, 2, 7):
     element.
 - The AI guide (and so the AI prompts) teaches Colour, its examples use it, and the input schema has it.
 
-**8. Shapes in masks.**
-- **Mask mode has Layer mode's tools now:** Select, Rectangle and Ellipse (the same buttons), the **Brush** (paints
-  where the element is hidden) and the **Eraser** (rubs that out, so it shows again) instead of Show and Hide, and the
-  **Light** bulb (click a light's dot to tick or untick it) instead of the Lights button. Each tooltip says what the
-  tool does in Mask mode. Bucket, Gradient and the eyedropper aren't there. Brush size and softness work as in Layer
-  mode.
-- **Mask shapes:** a rectangle or ellipse drawn in Mask mode (Shift: square, circle) is a shape of the mask, edited on
-  the Selected view like a Paint shape: position, size, rotation and softness, each with keyframes or a formula. Each
-  one **Shows** or **Hides** the element inside it (a Hide shape's outline is red). The details panel lists them under
-  **Mask shapes**, with + Rectangle, + Ellipse, Show / Hide, Forward / Back and Remove, and the selected one's
-  settings. Delete removes the selected one in the Selected view. Picking one in the list switches the Selected view
-  to Mask mode, so its handles show.
-- **Start with: Shown everywhere / Hidden everywhere** (on the Mask shapes panel). Shown everywhere is the default, as
-  before. With Hidden everywhere, a Show rectangle means "only here".
-- **How a light works out its mask, at its dot:** where the mask starts, then the painted strokes, then the shapes in
-  list order, each showing or hiding by its softness, and the per-light ticks on top (an unticked light is left alone,
-  whatever the shapes say). A mask with no strokes or shapes shows everywhere, as before. The red tint in Mask mode
-  shows the same thing across the picture.
-- **An animated mask works:** a rectangle sliding across reveals the lights one by one (the AI guide has this as an
-  example, and explains mask shapes; the input schema has them).
-- Masks from before look exactly the same, and files keep mask shapes as they are (tests check both).
+**8. Masks: black-and-white pictures** *(rebuilt 5 Nov, morning, as you described: "in my head masks should
+essentially just look like black and white images")*.
+- **A mask is a black-and-white picture over the element:** white shows it, black hides it, and greys show it partly.
+  Every mask starts white everywhere. Each light reads the mask at its dot, and the Lights ticks still go on top (an
+  unticked light is left alone, whatever the mask says).
+- **Mask mode has Paint's tools,** in greys: Select, Rectangle, Ellipse, Brush, Eraser (it rubs painting out, back to
+  white), Bucket, Gradient and the eyedropper (it picks a grey from the mask), plus the Light bulb for the ticks. Brush
+  size and softness work as in Layer mode.
+- **Greys only:** a **Grey** button (0 % black to 100 % white) for the brush, the bucket, the gradient and new shapes,
+  with quick **White** and **Black** buttons beside it. It starts on black, which is what does something on a white
+  mask.
+- **Invert** turns the whole mask round: white becomes black and black white, the greys in between too. That's its
+  painting and its shapes, keyframes and formulas included; the ticks stay as they are. It's one undo step, and
+  pressing it again puts everything back exactly.
+- **Mask shapes:** a rectangle or ellipse drawn in Mask mode (Shift: square, circle), in the current grey, edited on the
+  Selected view like a Paint shape: position, size, rotation, softness, its **Grey** and its opacity, each with
+  keyframes or a formula. They go over the painting, in the order of the **Mask shapes** list on the details panel
+  (+ Rectangle, + Ellipse, Forward / Back, Remove). Delete removes the selected one in the Selected view.
+- **The Selected view in Mask mode shows the mask itself,** black and white, with the light dots on top; the Result view
+  shows what it does.
+- **Masks from before look exactly the same:** checked on copies of both your shows (every light, at 0, 1 and 5
+  seconds: no difference at all), including Evening's painted mask and ticks.
+- **An animated mask works:** a black rectangle over everything with a white one sliding across reveals the lights one
+  by one, and a black rectangle with a fully soft edge fades an element out across the room (both are AI guide
+  examples; the guide and the input schema explain the greys).
 
 **6. Which week of the month.**
 - **"Days of the week" has "weeks:" now:** **Every week** (the default, as before), or any of **1st**, **2nd**,
@@ -1538,16 +1543,26 @@ Problems the tests found and that are fixed:
   - **An input saved with a Colour element shows nothing for that element in the version before M14** (it doesn't
     know Colour), in case you ever go back to it. Nor does it know mask shapes or Start with: a mask that starts hidden
     everywhere with a Show shape ("only here") shows everywhere there.
-  - **A new mask shape does something you can see:** it's a Hide shape on a mask that starts shown, and a Show shape on
-    one that starts hidden everywhere (a Show shape on a shown mask would change nothing). Show / Hide changes it.
-  - **The mask's painting can only hide** (as before: the Brush hides, the Eraser rubs that out), and it comes before
-    the shapes, as the plan says. So on a mask that starts hidden everywhere, the Brush and Eraser change nothing:
-    Show shapes say where it shows.
+  - **Masks are black-and-white pictures** (your change of 5 Nov, replacing Show / Hide shapes, Start with, and the
+    Brush that only hid). So the question about the Brush on a "Hidden everywhere" mask doesn't arise any more: for
+    "only here", Bucket the mask black (or draw a black rectangle over it all, or press Invert), then paint or draw in
+    white.
+  - **Proposed:** in Mask mode the Selected view shows the mask itself, black and white, with the light dots on top,
+    instead of the red tint; the Result view shows its effect.
+  - **A mask shape's grey is a slider** (Grey, 0 % to 100 %), not a colour picker, so it can only be a grey; it can have
+    keyframes and formulas like any setting. Shapes also keep a Paint shape's opacity.
+  - **New mask shapes and painting are black** until you choose another grey (White, Black, or the Grey button), as black
+    is what does something on a white mask. The eyedropper picks a grey from the mask.
+  - **The Eraser paints white back in** (a mask starts white), rather than making a hole.
+  - **Invert** saves the turned-round painting as a new file (or no painting at all when it comes out white
+    everywhere, as a mask starts); a shape's grey becomes 100 % minus it, each keyframe's too, and a formula becomes
+    "1 - (formula)", and back again.
   - **Mask shapes are placed on the screen**, like the mask's painting (not in the element's own picture), so moving or
-    scaling the element doesn't move its mask. They have no colour or opacity of their own.
+    scaling the element doesn't move its mask.
   - **Mask mode starts on the Light tool** (ticking lights), as it did; drawing a shape, or picking one in the Mask
     shapes list, switches to Select.
-  - **A mask shape written without "mode"** (by hand, or an AI tool) hides, like the Editor's default on a shown mask.
+  - **A mask shape written without a grey** (by hand, an AI tool, or before this change) is black, or white if it says
+    "mode": "show". "Start with" is no longer read (no file of yours used it, nor Show / Hide shapes).
   - **Which weeks:** the 1st week is the 1st to the 7th of the month (so it holds the first of every day), the 2nd the
     8th to the 14th, and so on; Last is the month's last seven days. The buttons are **Every week**, 1st, 2nd, 3rd,
     4th and Last beside the days; picking a week turns Every week off, and Every week clears the picked ones. With

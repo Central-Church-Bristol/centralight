@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QPushButton,
     QSizePolicy,
@@ -65,14 +66,11 @@ def rgba_image(data: np.ndarray) -> QImage:
     return QImage(data.data, w, h, w * 4, QImage.Format.Format_RGBA8888_Premultiplied).copy()
 
 
-def mask_tint(keep: np.ndarray) -> QImage:
-    """Red over whatever a mask hides (keep 0 = hidden)."""
+def mask_image(keep: np.ndarray) -> QImage:
+    """A mask itself, black and white (M14: keep 255 = white, shown; 0 = black, hidden): what Mask mode shows."""
+    keep = np.ascontiguousarray(keep, dtype=np.uint8)
     h, w = keep.shape
-    tint = np.zeros((h, w, 4), dtype=np.uint8)
-    alpha = ((255 - keep.astype(np.uint16)) * 150 // 255).astype(np.uint8)
-    tint[:, :, 0] = alpha  # premultiplied: pure red at that strength
-    tint[:, :, 3] = alpha
-    return QImage(tint.data, w, h, w * 4, QImage.Format.Format_RGBA8888_Premultiplied).copy()
+    return QImage(keep.data, w, h, w, QImage.Format.Format_Grayscale8).copy()
 
 
 def _checkerboard() -> QPixmap:
@@ -218,26 +216,28 @@ class ViewportCanvas(QWidget):
 
 
 PAINT_TOOLS = ("brush", "eraser", "bucket", "gradient", "light")  # paint on a Paint element's strokes
-MASK_TOOLS = ("show", "hide")  # paint an element's mask
-MASK_BRUSHES = {"brush": "hide", "eraser": "show"}  # Mask mode: the Brush hides, the Eraser rubs that out (M14)
-MASK_MODE_TOOLS = ("select", "rect", "ellipse", "brush", "eraser", "light")  # no bucket, gradient or eyedropper there
+MASK_PAINT_TOOLS = ("brush", "eraser", "bucket", "gradient")  # Mask mode (M14): Paint's tools, in greys
+MASK_MODE_TOOLS = ("select", "rect", "ellipse", "brush", "eraser", "bucket", "gradient", "light", "dropper")
 TOOL_TIPS = {  # (in Layer mode, in Mask mode)
     "select": ("Select, move, resize and rotate shapes (or the picture of an Image, Video or NDI element)",
                "Select, move, resize and rotate the mask's shapes"),
     "rect": ("Draw a rectangle (Shift: square)",
-             "Draw a rectangle on the mask (Shift: square): it hides the element there, or shows it if the mask starts "
-             "hidden everywhere"),
+             "Draw a rectangle on the mask in its grey (Shift: square): black hides the element there, white shows it"),
     "ellipse": ("Draw an ellipse (Shift: circle)",
-                "Draw an ellipse on the mask (Shift: circle): it hides the element there, or shows it if the mask starts "
-                "hidden everywhere"),
-    "brush": ("Brush: paint on this Paint element", "Brush: paint where this element is hidden"),
-    "eraser": ("Eraser: rub out painting", "Eraser: rub out the mask's painting, so the element shows there again"),
+                "Draw an ellipse on the mask in its grey (Shift: circle): black hides the element there, white shows it"),
+    "brush": ("Brush: paint on this Paint element",
+              "Brush: paint the mask in its grey (black hides the element, white shows it, greys show it partly)"),
+    "eraser": ("Eraser: rub out painting", "Eraser: rub out the mask's painting (back to white: the element shows)"),
+    "bucket": ("Bucket: fill an area of the same colour", "Bucket: fill an area of about the same grey with the mask's grey"),
+    "gradient": ("Gradient: drag from where the colour starts to where it's gone (Shift: round)",
+                 "Gradient: drag from where the mask's grey starts to where it's gone (Shift: round)"),
     "light": ("Light colour: click a light's dot to fill the patch it follows",
               "Light: click a light's dot to tick or untick it (an unticked light is left alone by this element)"),
+    "dropper": ("Eyedropper: pick the brush colour from the picture", "Eyedropper: pick the mask's grey from the mask"),
 }
-BRUSH_TOOLS = ("brush", "eraser", "show", "hide")
+BRUSH_TOOLS = ("brush", "eraser")
 PAINT_VERBS = {"brush": "brush stroke", "eraser": "eraser", "bucket": "bucket fill", "gradient": "gradient",
-               "light": "light colour", "show": "mask: show", "hide": "mask: hide"}
+               "light": "light colour"}
 
 
 class SelectedViewport(ViewportCanvas):
@@ -251,6 +251,7 @@ class SelectedViewport(ViewportCanvas):
     drag_started = Signal()
     painted = Signal(str, object, str)  # "strokes" or "mask", the painting.Canvas, what was done (for undo)
     colour_picked = Signal(object)  # (r, g, b) from the eyedropper
+    grey_picked = Signal(float)  # 0-1, from the eyedropper in Mask mode (M14)
     transform_changing = Signal(str, dict)  # element id, {"transform.x": ...} (live while dragging the gizmo)
     shape_remove_requested = Signal(str)  # shape id: Delete or Backspace with a shape selected here (M14)
 
@@ -258,6 +259,7 @@ class SelectedViewport(ViewportCanvas):
         super().__init__(show, checkerboard=True, parent=parent)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)  # (clicked: it takes the keys, so Delete reaches it)
         self.mask_mode = False
+        self.mask_grey = 0.0  # Mask mode's brush and new mask shapes (M14): black (it hides) until another is chosen
         self.tool = "select"
         self.element: Mapping | None = None
         self.selected_shape = ""
@@ -369,12 +371,7 @@ class SelectedViewport(ViewportCanvas):
             painter.setClipRect(canvas)
             if self._checker is not None:  # start clean: the renderer's own (older) picture and tint are under here
                 painter.fillRect(canvas, self._checker)
-            if self._preview_is_mask:
-                if self._image is not None and not self._image.isNull():
-                    painter.drawImage(canvas, self._image)
-                painter.drawImage(canvas, self._preview)
-            else:
-                painter.drawImage(canvas, self._preview)
+            painter.drawImage(canvas, self._preview)  # (a mask's is the whole mask, black and white)
             if self._lights:
                 self._paint_lights(painter, canvas)
             painter.restore()
@@ -416,8 +413,7 @@ class SelectedViewport(ViewportCanvas):
             selected = shape.get("id") == self.selected_shape
             painter.save()
             painter.setTransform(self._transform(centre, rotation), True)
-            # (in Mask mode a Hide shape's outline is red, like what the mask hides; a Show shape's is white)
-            outline = theme.DANGER if self.mask_mode and shape.get("mode", "hide") != "show" else "#FFFFFF"
+            outline = theme.ACCENT if self.mask_mode else "#FFFFFF"  # (blue shows on a black-and-white mask)
             pen = QPen(QColor(theme.ACCENT if selected else outline), 1.4 if selected else 1.0, Qt.PenStyle.SolidLine if selected else Qt.PenStyle.DashLine)
             pen.setCosmetic(True)
             painter.setPen(pen)
@@ -462,12 +458,12 @@ class SelectedViewport(ViewportCanvas):
     # ------------------------------------------------------------ painting
 
     def painting_tool(self) -> str:
-        """The tool that paints right now ("" = none): strokes on a Paint element, or the mask's brushes (in Mask mode
-        the Brush paints where the element is hidden, and the Eraser rubs that out)."""
+        """The tool that paints right now ("" = none): strokes on a Paint element, or (in Mask mode, on any element)
+        the mask, in its grey."""
         if self.element is None:
             return ""
         if self.mask_mode:
-            return MASK_BRUSHES.get(self.tool, "")
+            return self.tool if self.tool in MASK_PAINT_TOOLS else ""
         return self.tool if self.tool in PAINT_TOOLS and self._is_paint() else ""
 
     def to_picture(self, point: QPointF, what: str) -> tuple[float, float]:
@@ -490,16 +486,18 @@ class SelectedViewport(ViewportCanvas):
     def _start_painting(self, tool: str, point: QPointF) -> None:
         from ..painting import Canvas
 
-        what = "mask" if tool in MASK_TOOLS else "strokes"
+        what = "mask" if self.mask_mode else "strokes"
+        colour = (self.mask_grey,) * 3 if what == "mask" else self.brush_colour
         start = self.load_picture(what)
-        self._session = {"what": what, "tool": tool, "canvas": Canvas(mask=what == "mask", start=start), "start": point}
+        self._session = {"what": what, "tool": tool, "canvas": Canvas(mask=what == "mask", start=start), "start": point,
+                         "colour": colour}
         canvas = self._session["canvas"]
         x, y = self.to_picture(point, what)
         if tool in BRUSH_TOOLS:
             mode = {"brush": "paint", "eraser": "erase"}.get(tool, tool)
-            canvas.stroke_to(x, y, self.brush_size, self.brush_softness, self.brush_colour, mode=mode)
+            canvas.stroke_to(x, y, self.brush_size, self.brush_softness, colour, mode=mode)
         elif tool == "bucket":
-            canvas.bucket(x, y, self.brush_colour)
+            canvas.bucket(x, y, colour)
             self._finish_painting()
             return
         elif tool == "light":
@@ -507,7 +505,7 @@ class SelectedViewport(ViewportCanvas):
             if area is None:
                 self._session = None
                 return
-            canvas.fill_area(area, self.brush_colour)
+            canvas.fill_area(area, colour)
             self._finish_painting()
             return
         self._update_preview(force=True)
@@ -549,7 +547,7 @@ class SelectedViewport(ViewportCanvas):
         if tool in BRUSH_TOOLS:
             x, y = self.to_picture(point, session["what"])
             mode = {"brush": "paint", "eraser": "erase"}.get(tool, tool)
-            session["canvas"].stroke_to(x, y, self.brush_size, self.brush_softness, self.brush_colour, mode=mode)
+            session["canvas"].stroke_to(x, y, self.brush_size, self.brush_softness, session["colour"], mode=mode)
             self._update_preview()
         elif tool == "gradient":
             session["end"] = point
@@ -563,22 +561,23 @@ class SelectedViewport(ViewportCanvas):
         canvas = session["canvas"]
         if session["tool"] == "gradient":
             end = point if point is not None else session.get("end", session["start"])
-            x0, y0 = self.to_picture(session["start"], "strokes")
-            x1, y1 = self.to_picture(end, "strokes")
+            x0, y0 = self.to_picture(session["start"], session["what"])
+            x1, y1 = self.to_picture(end, session["what"])
             if math.hypot(x1 - x0, y1 - y0) < 2:
                 self._session = None
                 self._preview = None
                 self.update()
                 return
             radial = bool(modifiers & Qt.KeyboardModifier.ShiftModifier) if modifiers is not None else session.get("radial", False)
-            canvas.gradient(x0, y0, x1, y1, self.brush_colour, radial=radial)
+            canvas.gradient(x0, y0, x1, y1, session["colour"], radial=radial)
         canvas.end_stroke()
         if canvas.changed:
             # show the finished picture until the renderer has drawn it from the new file
             self._update_preview(force=True)
             self._preview_until = time.monotonic() + 0.4
             self._session = None
-            self.painted.emit(session["what"], canvas, PAINT_VERBS.get(session["tool"], "painting"))
+            verb = PAINT_VERBS.get(session["tool"], "painting")
+            self.painted.emit(session["what"], canvas, f"mask: {verb}" if session["what"] == "mask" else verb)
         else:
             self._session = None
             self._preview = None
@@ -604,7 +603,7 @@ class SelectedViewport(ViewportCanvas):
             return
         canvas = session["canvas"]
         self._preview_is_mask = session["what"] == "mask"
-        if session["what"] == "mask":  # (with the mask's shapes and Start with, as the renderer's tint has them)
+        if session["what"] == "mask":  # (the mask itself, black and white, with its shapes over the painting)
             from ..elements import RenderContext, element_keep
 
             height, width = canvas.data.shape[:2]
@@ -612,7 +611,7 @@ class SelectedViewport(ViewportCanvas):
             ctx.folder = self.folder
             ctx.time = self.time
             keep = element_keep(self.element, ctx, painting=canvas.data)
-            self._preview = mask_tint(np.clip((canvas.data if keep is None else keep) * 255.0 + 0.5, 0, 255).astype(np.uint8))
+            self._preview = mask_image(np.clip((canvas.data if keep is None else keep) * 255.0 + 0.5, 0, 255).astype(np.uint8))
         else:
             from ..elements import RenderContext, finish_layer, render_paint
 
@@ -646,6 +645,16 @@ class SelectedViewport(ViewportCanvas):
             return
         alpha = colour.alphaF()  # the view's pictures are premultiplied: straight colour, please
         self.colour_picked.emit(tuple(min(1.0, c / alpha) for c in (colour.redF(), colour.greenF(), colour.blueF())))
+
+    def _pick_grey(self, point: QPointF) -> None:
+        """Mask mode's eyedropper (M14): the mask's grey under the pointer (the view shows the mask itself)."""
+        image = self._preview or self._image
+        if image is None or image.isNull():
+            return
+        fx, fy = self.to_fraction(point)
+        x = int(min(image.width() - 1, max(0, fx * image.width())))
+        y = int(min(image.height() - 1, max(0, fy * image.height())))
+        self.grey_picked.emit(round(image.pixelColor(x, y).redF(), 3))
 
     # ------------------------------------------------------------ the picture gizmo (Image, Video, NDI)
 
@@ -721,8 +730,8 @@ class SelectedViewport(ViewportCanvas):
         if event.button() != Qt.MouseButton.LeftButton:
             return super().mousePressEvent(event)
         point = event.position()
-        if self.tool == "dropper" and self.element is not None and not self.mask_mode:
-            self._pick_colour(point)
+        if self.tool == "dropper" and self.element is not None:
+            self._pick_grey(point) if self.mask_mode else self._pick_colour(point)
             return
         tool = self.painting_tool()
         if tool:
@@ -1006,13 +1015,14 @@ def _tool_icon(draw, tip: str) -> QToolButton:
 
 class SelectedPanel(ViewportPanel):
     mode_changed = Signal(bool)  # mask mode on?
+    invert_requested = Signal()  # Invert, in Mask mode (M14)
 
     def __init__(self, canvas: SelectedViewport, parent: QWidget | None = None) -> None:
         super().__init__("Selected", canvas, parent)
         self.layer = _toggle("Layer", "The element itself", True)
-        self.mask = _toggle("Mask", "The element's mask: what it hides is red. Draw rectangles and ellipses that show or "
-                                    "hide it, paint with the Brush (hides) and Eraser, or tick and untick lights with "
-                                    "the Light tool.")
+        self.mask = _toggle("Mask", "The element's mask, a black-and-white picture: white shows the element, black hides "
+                                    "it, grey shows it partly. Paint it with Paint's tools in greys, draw rectangles and "
+                                    "ellipses, or tick and untick lights with the Light tool.")
         modes = QButtonGroup(self)
         modes.setExclusive(True)
         modes.addButton(self.layer)
@@ -1074,8 +1084,37 @@ class SelectedPanel(ViewportPanel):
         options.addWidget(self.softness, 1)
         options.addWidget(self.colour)
         self.layout_.insertWidget(2, self.options)
+        # Mask mode (M14): its grey (the brush's, and new shapes'), quick White and Black, and Invert
+        self.grey = QToolButton()
+        self.grey.setObjectName("BrushColour")
+        self.grey.setToolTip("The mask's grey, for the brush, the bucket, the gradient and new shapes: 0 % black hides "
+                             "the element, 100 % white shows it")
+        self.grey.clicked.connect(self._choose_grey)
+        self.white = QPushButton("White")
+        self.white.setToolTip("Paint and draw in white: the element shows there")
+        self.white.clicked.connect(lambda: self.set_mask_grey(1.0))
+        self.black = QPushButton("Black")
+        self.black.setToolTip("Paint and draw in black: the element is hidden there")
+        self.black.clicked.connect(lambda: self.set_mask_grey(0.0))
+        self.invert = QPushButton("Invert")
+        self.invert.setToolTip("Turn the whole mask round: white becomes black and black white (its painting and shapes; "
+                               "the lights' ticks stay as they are). Press it again to turn it back")
+        self.invert.clicked.connect(self.invert_requested.emit)
+        self.mask_options = QWidget()
+        mask_row = QHBoxLayout(self.mask_options)
+        mask_row.setContentsMargins(0, 0, 0, 0)
+        mask_row.setSpacing(6)
+        grey_label = QLabel("Grey")
+        grey_label.setObjectName("RowDetail")
+        for widget in (grey_label, self.grey, self.white, self.black):
+            mask_row.addWidget(widget)
+        mask_row.addStretch(1)
+        mask_row.addWidget(self.invert)
+        self.layout_.insertWidget(3, self.mask_options)
         canvas.colour_picked.connect(self.set_brush_colour)
+        canvas.grey_picked.connect(self.set_mask_grey)
         self.set_brush_colour(canvas.brush_colour)
+        self.set_mask_grey(canvas.mask_grey)
         self._paint_element = False
         self._sync_tools()
 
@@ -1085,6 +1124,22 @@ class SelectedPanel(ViewportPanel):
         swatch = QPixmap(18, 18)
         swatch.fill(rgb_colour(canvas.brush_colour))
         self.colour.setIcon(QIcon(swatch))
+
+    def set_mask_grey(self, grey: float) -> None:
+        canvas: SelectedViewport = self.canvas  # type: ignore[assignment]
+        canvas.mask_grey = min(1.0, max(0.0, float(grey)))
+        swatch = QPixmap(18, 18)
+        swatch.fill(rgb_colour((canvas.mask_grey,) * 3))
+        self.grey.setIcon(QIcon(swatch))
+        self.grey.setText(f"{round(canvas.mask_grey * 100)} %")
+        self.grey.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+
+    def _choose_grey(self) -> None:
+        canvas: SelectedViewport = self.canvas  # type: ignore[assignment]
+        value, ok = QInputDialog.getInt(self, "Mask grey", "Grey (0 % black hides the element, 100 % white shows it):",
+                                        round(canvas.mask_grey * 100), 0, 100)
+        if ok:
+            self.set_mask_grey(value / 100.0)
 
     def _choose_colour(self) -> None:
         canvas: SelectedViewport = self.canvas  # type: ignore[assignment]
@@ -1116,9 +1171,10 @@ class SelectedPanel(ViewportPanel):
             if tool in TOOL_TIPS:
                 button.setToolTip(TOOL_TIPS[tool][1 if mask else 0])
         canvas: SelectedViewport = self.canvas  # type: ignore[assignment]
-        brushes = ("brush", "eraser") if mask else BRUSH_TOOLS + ("bucket", "gradient", "light")
+        brushes = BRUSH_TOOLS if mask else BRUSH_TOOLS + ("bucket", "gradient", "light")
         self.options.setVisible(canvas.tool in brushes)
         self.colour.setVisible(not mask and canvas.tool in ("brush", "bucket", "gradient", "light"))
+        self.mask_options.setVisible(mask)
 
     def set_paint_tools(self, enabled: bool) -> None:
         """Shapes and painting are for Paint elements (Select and the eyedropper work for them all)."""

@@ -677,18 +677,11 @@ def _shape_list(element: Any, group: str) -> list:
     return [s for s in shapes if hasattr(s, "get")] if isinstance(shapes, (list, tuple)) else []
 
 
-def new_mask_shape_mode(element: Any) -> str:
-    """What a new mask shape does: something you can see. It hides the element, on a mask that starts shown; it shows
-    it, on a mask that starts hidden everywhere."""
-    mask = element.get("mask") if element is not None else None
-    return "show" if hasattr(mask, "get") and mask.get("start") == "hidden" else "hide"
-
-
 def add_shape(show: Show, input_id: str, element_id: str, shape_type: str = "rect",
               x: float = 0.5, y: float = 0.5, w: float = 0.3, h: float = 0.4, colour: str = "#FFFFFF",
-              group: str = "shapes", mode: str | None = None) -> tuple[Show, str]:
-    """A new shape, last in its list (on top): a Paint element's ("shapes", ids S1, S2 …), or a mask's ("mask.shapes",
-    ids M1, M2 …, showing or hiding the element: see new_mask_shape_mode)."""
+              group: str = "shapes", grey: float = 0.0) -> tuple[Show, str]:
+    """A new shape, last in its list (on top): a Paint element's ("shapes", ids S1, S2 …, in the colour), or a mask's
+    ("mask.shapes", ids M1, M2 …, in the grey: black, unless chosen, so it does something on a white mask)."""
     inp = show.inputs[input_id]
     found = find_element(inp, element_id)
     if found is None:
@@ -697,13 +690,73 @@ def add_shape(show: Show, input_id: str, element_id: str, shape_type: str = "rec
     shape_id = new_element_id(inp, "M" if mask else "S")
     shapes = thaw(_shape_list(found[2], group))
     shape = {"id": shape_id, "type": shape_type}
-    if mask:
-        shape["mode"] = mode if mode in ("show", "hide") else new_mask_shape_mode(found[2])
     shape.update({"x": round(x, 4), "y": round(y, 4), "w": round(w, 4), "h": round(h, 4), "softness": NEW_SHAPE_SOFTNESS})
-    if not mask:
+    if mask:
+        shape["grey"] = round(min(1.0, max(0.0, float(grey))), 4)
+    else:
         shape["colour"] = colour
     shapes.append(shape)
     return set_element_value(show, input_id, element_id, group, shapes), shape_id
+
+
+def invert_mask(show: Show, input_id: str, element_id: str, paint: str | None) -> Show:
+    """Invert an element's mask (M14): white becomes black and black white, greys in between flipped too. paint: its
+    painting inverted (a new masks/ file, already saved; None when that comes out white everywhere, as a mask starts).
+    The shapes' greys flip, their keyframes and formulas too, so inverting again puts everything back as it was. The
+    lights it leaves alone ("exclude") don't change."""
+    found = find_element(show.inputs[input_id], element_id)
+    if found is None:
+        return show
+    mask = thaw(found[2].get("mask")) if hasattr(found[2].get("mask"), "get") else {}
+    if paint:
+        mask["paint"] = paint
+    else:
+        mask.pop("paint", None)
+    shapes = mask.get("shapes")
+    if isinstance(shapes, list):
+        flipped = []
+        for shape in shapes:
+            if isinstance(shape, dict):
+                shape = dict(shape)
+                if "grey" not in shape:  # (one written without a grey: black, or white with "mode": "show")
+                    shape["grey"] = 1.0 if shape.get("mode") == "show" else 0.0
+                shape.pop("mode", None)
+                shape["grey"] = _flipped(shape["grey"])
+            flipped.append(shape)
+        mask["shapes"] = flipped
+    return set_element_value(show, input_id, element_id, "mask", mask or None)
+
+
+def _flipped(raw: Any) -> Any:
+    """A grey (0-1) flipped: a number, each keyframe's value, or a formula (wrapped in 1 - (...), or unwrapped)."""
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return round(1.0 - float(raw), 6)
+    if isinstance(raw, dict):
+        out = dict(raw)
+        if "keys" in out and isinstance(out["keys"], list):
+            out["keys"] = [[k[0], _flipped(k[1]), *k[2:]] if isinstance(k, list) and len(k) >= 2 else k for k in out["keys"]]
+        if "value" in out:
+            out["value"] = _flipped(out["value"])
+        expr = out.get("expr")
+        if isinstance(expr, str) and expr.strip():
+            out["expr"] = _unflipped(expr) or f"1 - ({expr.strip()})"
+        return out
+    return raw
+
+
+def _unflipped(expr: str) -> str | None:
+    """The formula inside "1 - (...)", if that's all it is (so inverting twice gives back exactly what was there)."""
+    text = expr.strip()
+    if not (text.startswith("1 - (") and text.endswith(")")):
+        return None
+    inner, depth = text[5:-1], 0
+    for char in inner:
+        depth += 1 if char == "(" else -1 if char == ")" else 0
+        if depth < 0:
+            return None  # (e.g. "1 - (a) * (b)": not one bracket round it all)
+    return inner if depth == 0 else None
 
 
 def _shapes(show: Show, input_id: str, element_id: str, group: str = "shapes") -> list[dict]:
