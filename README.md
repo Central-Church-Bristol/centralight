@@ -7,7 +7,8 @@ hands-on Console. Windows only.
 
 ## Starting it
 
-Double-click `CentraLight.exe` (or `run.bat`). The first time, `run.bat` sets up `.venv` with what the app needs
+Double-click `run.bat` (or `CentraLight.exe`, once `tools\build_launcher.py` has made it). The first time,
+`run.bat` sets up `.venv` with what the app needs
 (from `requirements.txt`) and copies the church fonts (below).
 
 - It starts with **Simulated** output: it shows what it would send without touching the lights. To drive them:
@@ -61,7 +62,9 @@ While CentraLight runs, every action has a web address on this PC. Open <http://
 **Remote** chip) for all of them, with a button for each input: a phone remote too.
 
 - **Bitfocus Companion** (5.1 or later): the CentraLight module in `companion\` lights its keys with what's happening
-  (the input on Base, the Overlay, black, countdowns, the Console) and has an action for everything.
+  (the input on Base, the Overlay, black, countdowns, the Console), with actions for the inputs, the Overlay, shows,
+  black, Master, the house lights, variables, automations, the countdown and the Console. Layouts, Identify and the
+  Overlay's opacity are URLs (below), for Companion's Generic HTTP.
   `companion\README.md` has the steps: Modules → **Import module package** → `companion\centralight-1.0.0.tgz`.
 - **Elgato Stream Deck app:** a **Website** action with a URL such as `http://127.0.0.1:8746/api/input/warm-white`,
   with **GET request in background** ticked.

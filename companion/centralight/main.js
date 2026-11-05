@@ -9,6 +9,7 @@ const lib = require('./lib')
 
 const RETRY_SECONDS = [1, 2, 5, 10] // waits between tries to reconnect (the last one repeats)
 const ASK_SECONDS = 3 // how long the question "why not?" may take (see explain)
+const OPEN_SECONDS = 5 // a connection that hasn't opened by then is given up (and tried again)
 
 class CentraLightInstance extends InstanceBase {
 	async init(config) {
@@ -34,6 +35,7 @@ class CentraLightInstance extends InstanceBase {
 	async configUpdated(config) {
 		this.config = config
 		this.disconnect()
+		this.forget() // (the old CentraLight's state mustn't look live while the new one is tried)
 		this.retries = 0
 		this.listsKey = null // (a renamed connection: the presets name it in their variables)
 		this.define()
@@ -79,7 +81,18 @@ class CentraLightInstance extends InstanceBase {
 		const attempt = ++this.attempt
 		let opened = false
 		this.socket = socket
+		const opening = setTimeout(() => {
+			if (this.socket === socket && !opened) {
+				try {
+					socket.close()
+				} catch (error) {
+					// (it may be closing already)
+				}
+				gone()
+			}
+		}, OPEN_SECONDS * 1000)
 		socket.addEventListener('open', () => {
+			clearTimeout(opening)
 			if (this.socket !== socket) return
 			opened = true
 			this.connected = true
@@ -91,6 +104,7 @@ class CentraLightInstance extends InstanceBase {
 		})
 		// (gone: once, whichever comes first; a connection that never opened sends only "error", no "close")
 		const gone = () => {
+			clearTimeout(opening)
 			if (this.socket !== socket) return // (an old connection, after a settings change)
 			this.socket = null
 			this.connected = false
@@ -114,19 +128,20 @@ class CentraLightInstance extends InstanceBase {
 		})
 	}
 
-	// What CentraLight showed is gone with the connection: keys go dark, variables empty (not left as they were, which
-	// would look live).
+	// What CentraLight showed is gone with the connection: keys go dark, every variable empties (not left as it was,
+	// which would look live).
 	forget() {
+		const empty = Object.fromEntries(lib.variableDefinitions(this.state).map((v) => [v.variableId, '']))
 		this.state = {}
-		this.setVariableValues(lib.variableValues({}))
+		this.setVariableValues({ ...empty, ...lib.variableValues({}) })
 		this.checkFeedbacks()
 	}
 
-	// A connection that never opened: ask CentraLight's plain /api/state why (its answer has the reason), and say so.
+	// A connection that never opened: ask why, at the same address as a plain web page (its answer has the reason).
 	async explain(attempt) {
 		let status = 0
 		try {
-			const reply = await fetch(lib.stateUrl(this.config), { signal: AbortSignal.timeout(ASK_SECONDS * 1000) })
+			const reply = await fetch(lib.askUrl(this.config), { signal: AbortSignal.timeout(ASK_SECONDS * 1000) })
 			status = reply.status
 			await reply.body?.cancel()
 		} catch (error) {
@@ -138,9 +153,11 @@ class CentraLightInstance extends InstanceBase {
 				'CentraLight refused: check the key, and "Allow other computers" in its Settings → Remote')
 		} else if (status === 503) {
 			this.updateStatus(InstanceStatus.ConnectionFailure, 'CentraLight has too many live connections already')
-		} else if (status === 200) {
+		} else if (status === 404) {
 			this.updateStatus(InstanceStatus.ConnectionFailure,
-				'This CentraLight has no live connection: it needs updating to the version with the Console')
+				'This CentraLight has no live connection yet: it needs updating to the version with this module')
+		} else if (status === 426) {
+			this.updateStatus(InstanceStatus.ConnectionFailure, 'CentraLight answered, but the connection didn\'t open')
 		} else if (status) {
 			this.updateStatus(InstanceStatus.ConnectionFailure, `CentraLight answered ${status}`)
 		} else {

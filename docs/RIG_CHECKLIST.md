@@ -386,15 +386,15 @@ The app sends only the first 76 DMX channels (up to the last SlimPAR), which is 
 miss changes or do anything strange: gear → Output → tick **Send all 512 channels** → OK, and try again.
 Please note whether that made a difference.
 
-## 20. The console script still works (the fallback)
+## 20. If CentraLight misbehaves: the fallbacks
 
-Close the app first (it's holding the dongle), then:
+The old console script (`ndi_pixel_mapper.py`) went with the clean-up (M17), so the fallbacks are:
+- **MagicQ**, as before CentraLight. Quit CentraLight first (tray icon → **Quit**): only one program can use the
+  dongle at a time.
+- **The version you tried on 4 Nov:** updating to this one keeps a copy of it and of your shows. Ask Claude to
+  "switch back".
 
-```powershell
-.\.venv\Scripts\python.exe ndi_pixel_mapper.py
-```
-
-- [ ] The lights follow the screen as before. Press **Esc** to stop.
+(The old script is still in git's history, if it's ever wanted.)
 
 ## 20b. M14: your changes of 4 Nov (try these on the lights next time)
 
@@ -503,6 +503,8 @@ Close the app first (it's holding the dongle), then:
 - [ ] **Advanced**: the channel faders. Choose one light, **Amber** up: warmer. **Strobe** a little: it flashes (read
       the note first). **Release**: strobe stops at once, the rest fades back.
 - [ ] Hold some lights, then **Fade to black**: they fade with everything, and the header chip goes.
+- [ ] Hold a light at 30 % brightness and **Release** it: it fades back smoothly, with no blink at the start or
+      the end (if it blinks, tell Claude: the SlimPAR's own dimmer may smooth changes).
 - [ ] Hold some lights, quit and reopen CentraLight: they come back as they were.
 - [ ] The phone page: **Console · release all** while it holds lights. An automation **Release the Console** at a set
       time: the lights go back at that time.
@@ -530,27 +532,15 @@ Close the app first (it's holding the dongle), then:
 - [ ] Hold some lights on the Console page: **Release all** turns amber with the count; press it: they fade back.
 - [ ] Quit CentraLight: the connection goes red. Start it again: green within about 10 seconds, and the keys light up.
 
-## 21. Afterwards: the commits
+## 21. Afterwards: updating the main folder
 
-Each finished milestone is already committed on the branch `claude/centralight-gui` (nothing on `main`, nothing
-pushed). Your checkout is still on `main`, with the same files. To see the commits, and to make the branch the
-checked-out one:
+Everything is committed on the branch `claude/centralight-gui` (nothing on `main`, nothing pushed). The work was
+done in a separate copy of the code (`.claude\worktrees\m14`), which has the branch checked out. Your main folder
+still runs the version you tried on 4 Nov. It's updated with your OK, as planned for Sunday morning:
+1. Quit CentraLight (tray icon → **Quit**).
+2. Your shows (`Documents\CentraLight Shows`) and settings (`%LOCALAPPDATA%\CentraLight`) are backed up first.
+3. The main folder moves to the branch's newest commit. Then start CentraLight.
+4. To go back, say "switch back": the old files and the backed-up shows come back.
 
-```powershell
-git log --oneline claude/centralight-gui
-```
-
-These two make the branch the checked-out one without changing a single file (your own changes, like the logo
-files in `Assets\`, stay as uncommitted changes). A plain `git switch claude/centralight-gui` would refuse,
-because the app's files are already in the folder:
-
-```powershell
-git symbolic-ref HEAD refs/heads/claude/centralight-gui
-```
-
-```powershell
-git reset -q
-```
-
-Afterwards `git status` should list only your own changes. Pushing the branch to GitHub, or merging it into
-`main`, is up to you (or ask Claude).
+Don't switch branches in the main folder by hand (`git symbolic-ref`, `git switch`) meanwhile: git would then have
+the branch checked out twice. Pushing the branch to GitHub, or merging it into `main`, is up to you (or ask Claude).

@@ -29,7 +29,8 @@ connected (invert it for a key that warns when it isn't). When CentraLight goes 
 empty, so nothing looks live that isn't.
 
 If the connection isn't green, its status says why: CentraLight not answering (is it running?), a wrong key, too many
-connections, or a CentraLight too old to have the live connection (it needs updating).
+connections, or a CentraLight too old to have the live connection (it needs updating). A connection that hasn't
+opened within 5 seconds is tried again.
 
 **Variables**
 

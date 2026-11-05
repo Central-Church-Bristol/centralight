@@ -17,7 +17,7 @@ test('the address of the live connection', () => {
 	assert.equal(lib.connectionUrl({ host: '127.0.0.1:9000', port: 8746 }), 'ws://127.0.0.1:9000/api/ws')
 	assert.equal(lib.connectionUrl({ host: 'http://192.168.1.20:8746/', port: 1 }), 'ws://192.168.1.20:8746/api/ws')
 	assert.equal(lib.connectionUrl({ host: '[::1]:9000' }), 'ws://[::1]:9000/api/ws')
-	assert.equal(lib.stateUrl({ host: 'church-pc', port: 8746, key: 'k' }), 'http://church-pc:8746/api/state?key=k')
+	assert.equal(lib.askUrl({ host: 'church-pc', port: 8746, key: 'k' }), 'http://church-pc:8746/api/ws?key=k')
 	assert.throws(() => lib.connectionUrl({ host: 'my pc', port: 8746 }), /isn't a PC's address/)
 	assert.throws(() => lib.connectionUrl({ host: 'pc', port: 70000 }), /isn't a PC's address/)
 })

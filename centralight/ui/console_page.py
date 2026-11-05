@@ -695,7 +695,8 @@ class ConsolePage(QWidget):
         self.on_beat = QCheckBox("Step on each beat it hears (Settings → Audio)")
         grid.addWidget(self.on_beat, 3, 1, 1, 2)
         panel.body.addLayout(grid)
-        self.speed.valueChanged.connect(lambda _v: self._timing_changed())
+        self.speed.valueChanged.connect(lambda _v: self._timing_changed(speed=True))
+        self.speed.editingFinished.connect(self._speed_from_chase)
         self.speed_unit.currentIndexChanged.connect(lambda _i: self._unit_changed())
         self.direction.currentIndexChanged.connect(lambda _i: self._timing_changed())
         self.repeat.currentIndexChanged.connect(lambda _i: self._timing_changed())
@@ -727,6 +728,7 @@ class ConsolePage(QWidget):
         save_row.addStretch(1)
         save_row.addWidget(self.save_chase)
         panel.body.addLayout(save_row)
+        self._transport()  # (nothing plays yet)
         return panel
 
     # ------------------------------------------------------------ splits
@@ -754,7 +756,7 @@ class ConsolePage(QWidget):
             self.set_saved_colours(list(show.saved_colours))
         self._summarise()
         if hasattr(self, "chase_lights"):  # (its lights' names and groups may have changed)
-            self._show_chase_lights(self._view.chase or ChaseView(self._chase))
+            self._show_chase_lights(self._view.chase if self.owns_playing() else ChaseView(self._chase))
 
     def groups(self) -> dict[str, tuple[str, list[str]]]:
         """Each group button's key -> (its name, its lights in map order): the patch's groups, then the saved ones."""
@@ -887,14 +889,25 @@ class ConsolePage(QWidget):
                 if self._mine:  # (it stopped: shown as not playing)
                     self._mine = False
                     self._show_chase(ChaseView(self._chase))
-            elif self._mine or not self._chase.steps:  # (the page's chase is the one playing, or it has none of its own)
-                self._mine = True
-                if view.chase.chase != self._chase:  # (changed elsewhere: Tap or speed from the Stream Deck, say)
+            else:
+                # (the engine's chase itself changed since the frame before: Tap or speed from the Stream Deck, say. A
+                # frame from before the page's own edit got there isn't a change, and mustn't undo the edit)
+                changed = old.chase is None or view.chase.chase != old.chase.chase
+                if (self._mine or not self._chase.steps) and changed and view.chase.chase != self._chase:
+                    self._mine = True
                     self._chase = view.chase.chase
                     self._show_chase(view.chase)
-                else:  # (only where it's got to: the page's own edit coming back is no reason to rebuild)
+                elif self._mine:  # (only where it's got to)
                     self._mark_step(view.chase)
             # (else the page shows another chase, being made or loaded: the one playing is left alone until Play)
+        self._transport()
+
+    def _transport(self) -> None:
+        """Pause and Next step work on the chase that plays: only while the page shows that one."""
+        owns = self.owns_playing()
+        for button in (self.pause, self.next_step):
+            if button.isEnabled() != owns:
+                button.setEnabled(owns)
 
     def owns_playing(self) -> bool:
         """The chase on the page is the one playing: its changes go to the lights as they're made."""
@@ -925,6 +938,7 @@ class ConsolePage(QWidget):
         self._chase = chase
         self._mine = False
         self._show_chase(ChaseView(chase))
+        self._transport()
 
     def _show_chase(self, view: ChaseView) -> None:
         self._showing = True
@@ -1109,17 +1123,38 @@ class ConsolePage(QWidget):
         self._speed_range()
         self.speed.setValue(value)
         self.speed.blockSignals(blocked)
-        self._timing_changed()
+        self._timing_changed(speed=True)
 
-    def _timing_changed(self) -> None:
+    def _timing_changed(self, speed: bool = False) -> None:
+        """A timing control changed. speed: it was the speed box (or its unit); otherwise the chase keeps its own
+        speed (Tap or the Stream Deck may have changed it while the box, being typed in, wasn't shown it)."""
         if self._showing:
             return
-        seconds = self.speed_unit.currentData() == "seconds"
-        self._chase = replace(self._chase, bpm=self._chase.bpm if seconds else self.speed.value(),
-                              seconds=self.speed.value() if seconds else None, crossfade=self.crossfade.level(),
-                              direction=self.direction.currentData(), loop=bool(self.repeat.currentData()),
-                              on_beat=self.on_beat.isChecked())
+        chase = self._chase
+        if speed:
+            seconds = self.speed_unit.currentData() == "seconds"
+            chase = replace(chase, bpm=chase.bpm if seconds else self.speed.value(),
+                            seconds=self.speed.value() if seconds else None)
+        self._chase = replace(chase, crossfade=self.crossfade.level(), direction=self.direction.currentData(),
+                              loop=bool(self.repeat.currentData()), on_beat=self.on_beat.isChecked())
         self.chase_edited.emit(self._chase)
+
+    def _speed_from_chase(self) -> None:
+        """Typing in the speed box has ended: it shows the chase's speed again (if Tap or the Stream Deck changed it
+        meanwhile, that's what it is)."""
+        chase = self._chase
+        unit = 1 if chase.seconds is not None else 0
+        speed = chase.seconds if chase.seconds is not None else chase.bpm
+        if self.speed_unit.currentIndex() == unit and abs(self.speed.value() - speed) < 1e-9:
+            return
+        self._showing = True
+        try:
+            if self.speed_unit.currentIndex() != unit:
+                self.speed_unit.setCurrentIndex(unit)
+                self._speed_range()
+            self.speed.setValue(speed)
+        finally:
+            self._showing = False
 
     def set_advanced(self, on: bool) -> None:
         if self.advanced.isChecked() != on:

@@ -84,7 +84,8 @@ def _lights_used(inp: Input) -> set[str]:
             if isinstance(mask, Mapping):
                 used.update(light for light in mask.get("exclude", ()) or () if isinstance(light, str))
             if element.get("kind") == "lights":  # (M15: the lights a Lights element's steps set)
-                for step in element.get("steps", ()) or ():
+                steps = element.get("steps")
+                for step in steps if isinstance(steps, (list, tuple)) else ():
                     if isinstance(step, Mapping):
                         used.update(light for light in step if isinstance(light, str))
     return used

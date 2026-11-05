@@ -94,6 +94,41 @@ test('when CentraLight goes, the keys go dark (nothing left looking live)', asyn
 	assert.equal(instance.feedbacks.on_base.callback({ options: { input: 'warm-white' } }), false)
 	assert.equal(instance.feedbacks.connected.callback({ options: {} }), false)
 	assert.equal(instance.variables.master, '')
+	assert.equal(instance.variables['copies_worship-blue'], '') // (every variable, not just the fixed ones)
+	assert.equal(instance.variables.house_festoon, '')
+	assert.equal(instance.variables.console_held, '')
+})
+
+test('a refusal at the cap says so, and an old CentraLight says it needs updating', async (t) => {
+	for (const [refuse, status, words] of [
+		[503, 'connection_failure', /too many/],
+		[404, 'connection_failure', /needs updating/],
+	]) {
+		const fake = await startFake(sampleState())
+		fake.refuse = refuse
+		const instance = new CentraLight()
+		t.after(async () => {
+			await instance.destroy()
+			await fake.stop()
+		})
+		await instance.init({ host: '127.0.0.1', port: fake.port, key: '' })
+		await waitFor(() => instance.statuses.some(([s, text]) => s === status && words.test(text || '')), `${refuse}`)
+	}
+})
+
+test('a connection that never opens is given up and tried again', async (t) => {
+	const net = require('node:net')
+	const taken = new Set()
+	const silent = net.createServer((socket) => taken.add(socket)) // (takes the connection, never answers)
+	await new Promise((resolve) => silent.listen(0, '127.0.0.1', resolve))
+	const instance = new CentraLight()
+	t.after(async () => {
+		await instance.destroy()
+		for (const socket of taken) socket.destroy()
+		await new Promise((resolve) => silent.close(() => resolve()))
+	})
+	await instance.init({ host: '127.0.0.1', port: silent.address().port, key: '' })
+	await waitFor(() => instance.statuses.filter(([s]) => s === 'connecting').length >= 2, 'a second try', 9)
 })
 
 test('a refusal says why: the key, or too many connections', async (t) => {
@@ -125,6 +160,8 @@ test('renaming the connection makes everything again (the presets name it)', asy
 	instance.label = 'Lights'
 	await instance.configUpdated({ host: '127.0.0.1', port: fake.port, key: '' })
 	assert.ok(instance.defined > defined)
+	assert.equal(instance.variables.show, '') // (the old state doesn't look live while it reconnects)
+	await waitFor(() => instance.presets['overlay_worship-blue'], 'the state again')
 	assert.match(instance.presets['overlay_worship-blue'].style.text, /\$\(Lights:copies_worship-blue\)/)
 })
 

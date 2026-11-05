@@ -598,6 +598,8 @@ class _Handler(BaseHTTPRequestHandler):
         """GET /api/ws: the live connection (M16). Refused like any other request first (another website, a Host
         that isn't this PC, a missing key); then it stays open, on this thread, until either end closes it."""
         remote = self.remote
+        if remote.live >= MAX_LIVE:  # (first: a module asking why it can't connect learns this, not "use a WebSocket")
+            raise BadRequest(503, f"there are {MAX_LIVE} live connections already")
         problem = live_socket.handshake_problem(self.headers)
         if problem is not None:
             raise BadRequest(*problem)

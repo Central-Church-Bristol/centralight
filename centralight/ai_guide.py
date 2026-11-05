@@ -804,7 +804,11 @@ def check_input_data(data: Any, show: Show, existing_id: str | None = None) -> t
                 if light not in lights:
                     problems.append(f'{label}: mask.exclude names "{light}", which isn\'t a light (see the lights table).')
             if element.get("kind") == "lights":
-                named = {light for step in element.get("steps", ()) or () if isinstance(step, Mapping) for light in step}
+                steps = element.get("steps")
+                if not isinstance(steps, (list, tuple)):
+                    problems.append(f'{label}: "steps" must be a list of looks, e.g. [{{"slimpar-101": [1, 0, 0, 1]}}].')
+                    steps = ()
+                named = {light for step in steps if isinstance(step, Mapping) for light in step}
                 for light in sorted(str(light) for light in named):
                     if light not in lights:
                         problems.append(f'{label}: a step names "{light}", which isn\'t a light (see the lights table).')

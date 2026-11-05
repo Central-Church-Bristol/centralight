@@ -245,6 +245,7 @@ class LiveTests(test_remote.RemoteTestCase):
         self.assertEqual(self.request("/api/ws")[0], 426)  # (a plain GET)
         self.server.live = MAX_LIVE
         self.assertEqual(self.connect().status, 503)
+        self.assertEqual(self.request("/api/ws")[0], 503)  # (asked plainly, as the module does: "too many")
         self.server.live = 0
 
     def test_broken_frames_close_it(self) -> None:

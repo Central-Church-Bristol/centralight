@@ -59,7 +59,8 @@ async function startFake(state) {
 	// refuse: an HTTP status to answer everything with instead (403: a wrong key; 503: too many connections)
 	const fake = { state, commands: [], urls: [], clients: new Set(), answer: { ok: true }, refuse: 0 }
 	const server = http.createServer((request, response) => {
-		response.writeHead(fake.refuse || (request.url.startsWith('/api/state') ? 200 : 426))
+		// (as CentraLight: a plain GET of the live connection's address answers why it can't be one)
+		response.writeHead(request.url.startsWith('/api/ws') ? fake.refuse || 426 : 200)
 		response.end()
 	})
 	server.on('upgrade', (request, socket) => {

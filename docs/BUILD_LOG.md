@@ -65,6 +65,7 @@ never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 | — the CentraLight module for Companion 5.1: actions, feedbacks, variables, presets; built as `companion\centralight-1.0.0.tgz` | **done** (5 Nov, 17:37) |
 | A look at the Console page and the Lights element (two reviewers, 28 findings, all fixed) | **done** (5 Nov, 18:08) |
 | **M17: the repo clean-up** (the app alone: the console scripts gone, the output and patch code in the package) | **done** (5 Nov, 18:20) |
+| The last reviews: of the Console fixes (11 findings) and of M16 and M17 (7), all fixed | **done** (5 Nov, 19:22) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -77,11 +78,9 @@ Run all the tests (about five minutes, including the layout check at every scali
 - **Commits are on the branch `claude/centralight-gui`** (you gave the go-ahead on 3 Nov; never `main`, nothing
   pushed). M0–M4 went in as one commit, because they were finished before commits were allowed; each milestone
   after that gets its own. Before them is a commit with the console-script work (the Eurolite driver and scripts).
-  Your checkout is still on `main` with every file as it was: this checkout is shared with other Claude
-  sessions, so the commits were made without switching branches. To make the branch the checked-out one
-  without touching a single file, run `git symbolic-ref HEAD refs/heads/claude/centralight-gui` and then
-  `git reset -q` (step 21 of `RIG_CHECKLIST.md`). A plain `git switch claude/centralight-gui` refuses, because
-  the app's files are already there (untracked, as far as `main` knows). Tried on a copy of the repository.
+  Since M14 the work has been done in a separate copy of the code (`.claude\worktrees\m14`), which has the
+  branch checked out. Your main folder stays as it was until it's updated with your OK (`RIG_CHECKLIST.md`,
+  step 21). Don't switch branches there by hand meanwhile: git would have the branch checked out twice.
 - Your own earlier changes to the logo files in `Assets\` aren't in the commits (they're yours to commit); the
   app draws its logo itself if `CentraLight Logo 1024.png` isn't there.
 - The logo files in `Assets/` were already changed (and `CentraLight Logo 1024.png` added) before this work
@@ -115,6 +114,28 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
+
+## The last reviews (5 Nov, night)
+
+Two more reviewers checked the fixes themselves, and M16 and M17: 18 findings, all fixed, with tests.
+- **Fades on the Console, put right for good.** My first fix for "a dimmed light flares on Release" had the dimmer
+  jump to full and the colour make up the difference; cutting such a fade short (a Fade to black part-way through a
+  brightness fan, say) could flash or dip the light for a moment. Now the **dimmer fades in its own straight line**
+  and only the colour makes up the rest: what the light gives still goes straight, no channel jumps at the start or
+  the end, and any change part-way through starts the rest of that light's fades again from what it shows. A chase's
+  crossfade works the same way, and a Live colour over a "breathing" chase leaves it breathing.
+- **Stop** fades a light to what a Live change held before the chase (it snapped); a chase left on none of its lights
+  stops; a dimmer used as a colour light fades from what it shows; Cancel in the colour picker after another show
+  loaded holds nothing.
+- **The page:** Pause and Next step only work on the chase that's playing, while the page shows that one; a tempo from
+  Tap or the Stream Deck isn't undone by the next change on the page; a late frame can't bring back steps you've just
+  removed.
+- **Companion:** when CentraLight goes away every variable empties (some kept their values); changing the
+  connection's address doesn't leave the old state looking live, and a connection that doesn't open within
+  5 seconds is tried again; at the 8-connection limit it says so (it said CentraLight needed updating).
+- **The docs:** the rig checklist's fallback (the old pixel-mapper script went with M17) is now MagicQ, or switching
+  back to the version of 4 Nov; its step 21 describes Sunday's update of the main folder (the old git commands would
+  now confuse git: the branch is in use by the separate copy); the README's start and Companion lines are right.
 
 ## M17: the repo clean-up (5 Nov, evening)
 

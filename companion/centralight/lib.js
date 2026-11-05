@@ -51,11 +51,11 @@ function connectionUrl(config) {
 	return `ws://${host}:${port}/api/ws` + (key ? `?key=${encodeURIComponent(key)}` : '')
 }
 
-// What a failed connection asks, to say why: /api/state answers with the reason (a wrong key, too many connections),
-// or answers at all (a CentraLight too old to have the live connection).
-function stateUrl(config) {
+// What a failed connection asks, to say why: the live connection's own address as a plain web page answers with the
+// reason (403: the key; 503: too many connections; 404: a CentraLight too old to have it).
+function askUrl(config) {
 	const { host, port, key } = address(config)
-	return `http://${host}:${port}/api/state` + (key ? `?key=${encodeURIComponent(key)}` : '')
+	return `http://${host}:${port}/api/ws` + (key ? `?key=${encodeURIComponent(key)}` : '')
 }
 
 // A path for CentraLight: each part made safe for a URL ("var/Pulse speed" -> "var/Pulse%20speed").
@@ -431,7 +431,7 @@ function variableValues(state) {
 		countdown: s.countdown ? Math.ceil(Number(s.countdown.seconds) || 0) : '',
 		countdown_text: s.countdown ? s.countdown.text || '' : '',
 		next: s.next || '',
-		console_held: (s.console || {}).held || 0,
+		console_held: s.console ? s.console.held || 0 : '',
 	}
 	for (const h of s.house || []) {
 		const level = (s.levels || {})[h.id]
@@ -544,7 +544,7 @@ module.exports = {
 	DEFAULT_PORT,
 	address,
 	connectionUrl,
-	stateUrl,
+	askUrl,
 	path,
 	listsKey,
 	actionDefinitions,

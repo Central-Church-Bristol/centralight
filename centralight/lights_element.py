@@ -127,8 +127,9 @@ def _beats(element: Mapping[str, Any], ctx: Any, t: float) -> float:
     return beats + min(0.999, max(0.0, (t - last_at) / max(0.05, gap)))
 
 
-def looks_at(element: Mapping[str, Any], ctx: Any) -> dict[str, tuple[float, float, float, float]]:
-    """Each light's (r, g, b, brightness) now, for the lights the element sets."""
+def looks_at(element: Mapping[str, Any], ctx: Any, given: bool = False) -> dict[str, tuple[float, float, float, float]]:
+    """Each light's (r, g, b, brightness) now, for the lights the element sets (given: chase_look's, what the light
+    gives, straight through crossfades)."""
     from .elements import param
 
     chase = element_chase(element)
@@ -139,7 +140,7 @@ def looks_at(element: Mapping[str, Any], ctx: Any) -> dict[str, tuple[float, flo
     seed = str(element.get("id", ""))
     looks = {}
     for light in chase.lights:
-        look = chase_look(chase, light, place, seed, crossfade)
+        look = chase_look(chase, light, place, seed, crossfade, given=given)
         if look is not None:
             looks[light] = look
     return looks
@@ -155,12 +156,11 @@ def light_layer(element: Mapping[str, Any], ctx: Any) -> np.ndarray:
     the element doesn't set the light."""
     lights = ctx.lights
     layer = lights.empty()
-    looks = looks_at(element, ctx)
+    looks = looks_at(element, ctx, given=True)
     for index, light in enumerate(lights.ids):
         look = looks.get(light)
         if look is not None:
-            r, g, b, level = look
-            layer[:, index] = (r * level, g * level, b * level, 1.0)
+            layer[:, index] = (look[0], look[1], look[2], 1.0)
     return layer
 
 
@@ -171,7 +171,7 @@ def picture_layer(element: Mapping[str, Any], ctx: Any) -> np.ndarray:
     lights = ctx.lights
     if lights is None or width <= 0 or height <= 0:
         return layer
-    looks = looks_at(element, ctx)
+    looks = looks_at(element, ctx, given=True)
     radius = max(2.0, LIGHT_SIZE * width)
     reach = 1.5 * radius  # (beyond this a spot covers nothing: only its box is worked out)
     for index, light in enumerate(lights.ids):
@@ -186,9 +186,8 @@ def picture_layer(element: Mapping[str, Any], ctx: Any) -> np.ndarray:
         ys, xs = np.mgrid[y0:y1, x0:x1].astype(np.float32)
         distance = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
         cover = np.clip(1.5 - distance / radius, 0.0, 1.0)  # (solid in the middle, soft at the edge)
-        r, g, b, level = look
         box = layer[:, y0:y1, x0:x1]
-        for plane, value in enumerate((r * level, g * level, b * level)):
+        for plane, value in enumerate(look[:3]):
             box[plane] = box[plane] * (1.0 - cover) + value * cover
         box[3] = box[3] * (1.0 - cover) + cover
     return layer

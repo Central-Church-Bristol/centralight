@@ -297,6 +297,57 @@ class WiredTests(unittest.TestCase):
         self.frame()
         self.assertIsNone(self.engine._console.chase)  # (no steps left: it stopped)
 
+    def test_pause_and_next_only_for_the_chase_that_plays_and_a_tap_survives_typing(self) -> None:
+        from types import MappingProxyType
+
+        from centralight.commands import ConsoleChase
+        from centralight.console import Chase, ChaseStep
+
+        page = self.page
+        a, b = "slimpar-101", "slimpar-102"
+        playing = Chase((a,), (ChaseStep(MappingProxyType({a: (1.0, 0.0, 0.0, 1.0)})),
+                               ChaseStep(MappingProxyType({a: (0.0, 1.0, 0.0, 1.0)}))), bpm=120.0)
+        page.set_chase(playing)
+        self.assertFalse(page.next_step.isEnabled())  # (nothing plays)
+        page.play.click()
+        self.frame()
+        self.assertTrue(page.next_step.isEnabled() and page.pause.isEnabled())
+        page.speed.setFocus()  # (the cursor left in the speed box)
+        self.engine.submit(ConsoleChase("speed", bpm=90.0))  # (the Stream Deck)
+        self.frame()
+        self.assertEqual(page._chase.bpm, 90.0)
+        page.crossfade.set_level(0.4)
+        page._timing_changed()  # (as moving Crossfade does)
+        self.frame()
+        self.assertEqual(self.engine._console.chase.chase.bpm, 90.0)  # (not the box's stale 120)
+        page.speed.editingFinished.emit()
+        self.assertEqual(page.speed.value(), 90.0)
+        loaded = Chase((b,), (ChaseStep(MappingProxyType({b: (0.0, 0.0, 1.0, 1.0)})),))
+        page.set_chase(loaded)
+        self.frame()
+        self.assertFalse(page.next_step.isEnabled() or page.pause.isEnabled())  # (the page's isn't the playing one)
+        page.set_show(self.window.document.show)
+        self.assertEqual(page.chase_lights.text(), "On: SlimPAR 102")  # (the page's chase, not the playing one)
+
+    def test_a_late_frame_doesnt_undo_an_edit(self) -> None:
+        from types import MappingProxyType
+
+        from centralight.console import Chase, ChaseStep, ConsoleView
+
+        page = self.page
+        a = "slimpar-101"
+        chase = Chase((a,), (ChaseStep(MappingProxyType({a: (1.0, 0.0, 0.0, 1.0)})),
+                             ChaseStep(MappingProxyType({a: (0.0, 1.0, 0.0, 1.0)}))))
+        page.set_chase(chase)
+        page.play.click()
+        self.frame()
+        stale = self.window.last_frame.console
+        for _ in range(2):
+            page.choose_step(0)
+            page.remove_chosen_step()  # (every step: it stops)
+        page.set_view(ConsoleView(chase=stale.chase, held=stale.held))  # (a frame from before the stop got there)
+        self.assertEqual(len(page.chase().steps), 0)
+
     def test_advanced_shows_what_is_set_before_master(self) -> None:
         from centralight.commands import SetMaster
 
