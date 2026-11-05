@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..engine import EngineFrame
+from ..input_edit import lights_elements
 from ..model import Show
 from ..output import to_byte
 from ..preview import Previewer
@@ -233,6 +234,7 @@ class DashboardPage(QWidget):
     variable_changed = Signal(str, object)  # global variable name, value
     ai_requested = Signal(str)  # input id to edit with AI ("" = make a new one)
     import_requested = Signal()  # Import from another show…
+    console_requested = Signal(str)  # input id: Load into Console (an input saved from the Console, M15)
 
     def __init__(self, show: Show, sources=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -441,6 +443,8 @@ class DashboardPage(QWidget):
         menu.addSeparator()
         menu.addAction("Edit", lambda: self.edit_requested.emit(input_id))
         menu.addAction("Edit with AI…", lambda: self.ai_requested.emit(input_id))
+        if lights_elements(inp):  # (saved from the Console: back onto it, to change)
+            menu.addAction("Load into Console", lambda: self.console_requested.emit(input_id))
         menu.addAction("Rename…", lambda: self.rename_requested.emit(input_id))
         menu.addAction("Duplicate", lambda: self.duplicate_requested.emit(input_id))
         menu.addAction("Delete…", lambda: self.delete_requested.emit(input_id))

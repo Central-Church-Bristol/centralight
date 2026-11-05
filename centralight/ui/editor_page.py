@@ -62,6 +62,7 @@ class EditorPage(QWidget):
     done = Signal()
     new_input_requested = Signal()
     ai_requested = Signal(str)  # edit this input with AI
+    console_requested = Signal(str)  # Load into Console (a Lights element, M15): the input id
 
     def __init__(self, document: ShowDocument, engine: Any, settings: Settings, sources: Any | None = None,
                  parent: QWidget | None = None) -> None:
@@ -211,6 +212,7 @@ class EditorPage(QWidget):
         self.timeline.play_toggled.connect(self.set_playing)
         self.details.seek_requested.connect(self.seek)
         self.details.timed_requested.connect(lambda timed: self.timeline.set_timed(timed))
+        self.details.console_requested.connect(self.console_requested.emit)
 
         self._poll = QTimer(self)
         self._poll.setInterval(POLL_MS)

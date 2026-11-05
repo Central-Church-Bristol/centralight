@@ -70,7 +70,7 @@ from .document import ShowDocument
 from .element_palette import ELEMENT_MIME, TRANSITION_MIME
 
 KIND_COLOURS = {"colour": theme.LOGO_SKY, "paint": theme.ACCENT, "image": theme.OVERLAY, "video": theme.WARN, "ndi": theme.OK}
-KIND_TITLES = {"colour": "Colour", "paint": "Paint", "image": "Image", "video": "Video", "ndi": "NDI"}
+KIND_TITLES = {"colour": "Colour", "paint": "Paint", "image": "Image", "video": "Video", "ndi": "NDI", "lights": "Lights"}
 RULER_H = 22
 EDGE_PX = 6  # how close to a bar's end counts as grabbing that end
 SNAP_PX = 7

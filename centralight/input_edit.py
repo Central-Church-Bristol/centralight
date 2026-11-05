@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import shutil
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,24 @@ def new_input(show: Show, name: str = "New input") -> tuple[Show, str]:
     input_id = unique_input_id(show, name)
     colour = TAG_COLOURS[len(show.inputs) % len(TAG_COLOURS)]
     return _replace_input(show, Input(id=input_id, name=name, colour=colour)), input_id
+
+
+def new_lights_input(show: Show, name: str, chase: Any) -> tuple[Show, str]:
+    """Save look / chase as input (the Console, M15): a new input with one Lights element on its first track,
+    infinite, at the end of the dashboard. chase: a console.Chase (one step: a look)."""
+    from .lights_element import lights_element
+    from .show_io import freeze
+
+    show, input_id = new_input(show, name)
+    inp = show.inputs[input_id]
+    tracks = list(inp.tracks)
+    tracks[0] = (freeze(lights_element(chase, "E1")),)
+    return _replace_input(show, replace(inp, tracks=tuple(tracks))), input_id
+
+
+def lights_elements(inp: Input) -> list[Mapping[str, Any]]:
+    """The input's Lights elements (M15: Load into Console), top track first."""
+    return [element for track in reversed(inp.tracks) for element in track if element.get("kind") == "lights"]
 
 
 def duplicate_input(show: Show, input_id: str) -> tuple[Show, str]:

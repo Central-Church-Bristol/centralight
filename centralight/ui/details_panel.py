@@ -90,7 +90,7 @@ from .expression_edit import Evaluator, ExprButton, ExpressionDialog
 from .globals_panel import GlobalsPanel, LocalsPanel
 from .widgets import ElidedLabel, FlowLayout, Panel, discard
 
-KIND_TITLES = {"colour": "Colour", "paint": "Paint", "image": "Image", "video": "Video", "ndi": "NDI feed"}
+KIND_TITLES = {"colour": "Colour", "paint": "Paint", "image": "Image", "video": "Video", "ndi": "NDI feed", "lights": "Lights"}
 MIN_WIDTH = 340
 END_CHOICES = ((END_HOLD, "Hold the last moment"), (END_LOOP, "Loop"), (END_STOP, "Stop"))
 _FILLED_KEY = None
@@ -121,6 +121,7 @@ class DetailsPanel(QScrollArea):
     tab_changed = Signal(int)  # 0 = the Input tab, 1 = Globals
     seek_requested = Signal(float)  # move the Editor's playhead (input seconds): the ◆ menu's previous / next key
     timed_requested = Signal(bool)  # the Input tab's Infinite box: True = make it timed (the timeline does it)
+    console_requested = Signal(str)  # a Lights element's Load into Console (M15): the input's id
 
     def __init__(self, document: ShowDocument, sources_provider: Callable[[], list[str]] | None = None, parent: QWidget | None = None,
                  context: Callable[[], tuple[Mapping[str, Any], float]] | None = None,
@@ -531,6 +532,8 @@ class DetailsPanel(QScrollArea):
         title.body.addWidget(remove)
         layout.addWidget(title)
 
+        if kind == "lights":
+            layout.addWidget(self._steps_panel(element))
         if kind == "paint":
             layout.addWidget(self._shapes_panel(element))
             shape = self.current_shape()
@@ -541,6 +544,32 @@ class DetailsPanel(QScrollArea):
         if mask_shape is not None:
             layout.addWidget(self._shape_panel(mask_shape, "mask.shapes"))
         layout.addWidget(self._lights_panel(element))
+
+    def _steps_panel(self, element) -> Panel:
+        """A Lights element's steps (M15): what each sets, as the Console shows them. They're made and changed on the
+        Console page: Load into Console takes them there."""
+        from ..lights_element import element_chase
+        from .console_page import StepCard, hex_of
+
+        chase = element_chase(element)
+        panel = Panel("Steps")
+        count, lights = len(chase.steps), len(chase.lights)
+        what = "a look" if count == 1 else f"{count} steps"
+        panel.body.addWidget(hint(f"{what.capitalize()} on {lights} light{'s' if lights != 1 else ''}. To change them: Load "
+                                  "into Console, change them there, then Save as input again."))
+        cards = QWidget()
+        flow = FlowLayout(cards, spacing=6)
+        for number, step in enumerate(chase.steps, start=1):
+            card = StepCard(number, [hex_of(step.looks.get(light, (0.0, 0.0, 0.0, 0.0))) for light in chase.lights])
+            card.setEnabled(False)
+            card.setToolTip(f"Step {number}")
+            flow.addWidget(card)
+        panel.body.addWidget(cards)
+        load = QPushButton("Load into Console")
+        load.setToolTip("Open these steps on the Console page (a look is held on its lights there), to change and save again")
+        load.clicked.connect(lambda: self.console_requested.emit(self.input_id or ""))
+        panel.body.addWidget(load)
+        return panel
 
     def _shapes_panel(self, element) -> Panel:
         panel = Panel("Shapes")

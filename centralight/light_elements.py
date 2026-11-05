@@ -511,6 +511,10 @@ def light_content(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray 
     """The element at each light before its opacity and mask: (4, lights), or None if it shows nothing."""
     kind = element.get("kind")
     lights = ctx.lights
+    if kind == "lights":  # (M15: a look or a chase from the Console, set straight onto its lights)
+        from .lights_element import light_layer
+
+        return light_layer(element, ctx)
     if kind in ("paint", "colour"):
         u, v = unmove(lights.x, lights.y, _transform(element, ctx.time))
         drawn = light_paint(element, ctx, u, v) if kind == "paint" else light_fill(element, ctx, u, v)

@@ -22,7 +22,10 @@ COLOUR_TYPES = FILL_TYPES[1:]  # a Colour element always shows something
 SHAPE_TYPES = (("rect", "Rectangle"), ("ellipse", "Ellipse"))
 SNAP_CHOICES = ((True, "Snap"), (False, "Glide"))
 TRANSITION_CHOICES = (("cut", "Cut"), ("fade", "Fade"), ("dip", "Dip to black"), ("wipe", "Wipe"), ("iris", "Iris"), ("random", "Random by light"))
-ELEMENT_KINDS = (("colour", "Colour"), ("paint", "Paint"), ("image", "Image"), ("video", "Video"), ("ndi", "NDI"))
+ELEMENT_KINDS = (("colour", "Colour"), ("paint", "Paint"), ("image", "Image"), ("video", "Video"), ("ndi", "NDI"),
+                 ("lights", "Lights"))
+LIGHTS_TIMING = (("bpm", "Beats a minute"), ("seconds", "Seconds a step"))
+LIGHTS_DIRECTIONS = (("forward", "Forward"), ("backward", "Backward"), ("bounce", "Bounce"), ("random", "Random"))
 
 
 @dataclass(frozen=True)
@@ -143,6 +146,25 @@ def has_background(element: Mapping[str, Any] | None) -> bool:
     return isinstance(fill, Mapping) and fill.get("type", "colour") != "none"
 
 
+# A Lights element (M15): a look or a chase from the Console page. Its steps are edited on the Console ("Load into
+# Console" on its tile); its timing here, speed and crossfade with keys or formulas too
+LIGHTS = (
+    Spec("timing", "Speed in", "choice", "bpm", choices=LIGHTS_TIMING, animatable=False, group="Speed",
+         help="Beats a minute (a step each beat), or seconds a step"),
+    Spec("bpm", "BPM", "number", 120.0, 10.0, 300.0, 1.0, group="Speed", show_if=("timing", ("bpm",)),
+         long_label="Speed (beats a minute)", help="Steps a minute: one a beat"),
+    Spec("seconds", "Seconds", "number", 1.0, 0.05, 60.0, 0.05, unit="s", group="Speed", show_if=("timing", ("seconds",)),
+         long_label="Speed (seconds a step)"),
+    Spec("crossfade", "Crossfade", "number", 0.0, unit="%", help="0 %: each step snaps to the next; 100 %: it glides all "
+         "the way from the step before"),
+    Spec("direction", "Direction", "choice", "forward", choices=LIGHTS_DIRECTIONS, animatable=False),
+    Spec("loop", "Repeat", "choice", True, choices=((True, "Loop"), (False, "Play once")), animatable=False,
+         help="Play once: it stops on its last step"),
+    Spec("on_beat", "Step on", "choice", False, choices=((False, "The speed above"), (True, "Each beat it hears")),
+         animatable=False, help="Each beat the audio hears (Settings → Audio) moves it on a step"),
+)
+
+
 def element_specs(kind: str, element: Mapping[str, Any] | None = None, background: bool | None = None) -> tuple[Spec, ...]:
     """Every setting of an element of this kind, in the order the details panel shows them. A Paint element's
     Background settings are there only when it has one (background: say so instead of looking at element)."""
@@ -157,6 +179,8 @@ def element_specs(kind: str, element: Mapping[str, Any] | None = None, backgroun
         return VIDEO + (AREA, BOOST) + SMOOTHING + COMMON + (MEDIA_FIT,)
     if kind == "ndi":
         return NDI + (AREA, BOOST) + SMOOTHING + COMMON + (MEDIA_FIT,)
+    if kind == "lights":
+        return LIGHTS + COMMON[:2]  # (its lights are where they are: no position, size or turn)
     return COMMON
 
 

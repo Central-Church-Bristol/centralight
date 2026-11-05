@@ -507,6 +507,10 @@ Close the app first (it's holding the dongle), then:
 - [ ] **Chase:** choose the Pillars, **Quick → Colours across the lights**, **Play**: they step through your saved
       colours, and the line above the steps says **On: Pillars**. **Tap** four times in time: the speed follows. **Crossfade** 100 %: they glide. **Pause**, **Next step**.
       Direction **Bounce**, then **Random**. **Release all**: they fade back.
+- [ ] **Save as input:** with some lights held, **Save look as input…** "Front red" (read the note about amber and
+      strobe). On the Dashboard, **Front red** is a new tile: send it, and only those lights change. Its tile's menu →
+      **Load into Console**: the Console opens with those lights held and chosen. Make a chase, **Save chase as
+      input…**, send that tile: it plays. Undo (Ctrl+Z) takes a saved input away again.
 - [ ] Lock the padlock: the page can't be changed. Unlock.
 
 ## 21. Afterwards: the commits

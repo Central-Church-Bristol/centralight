@@ -140,6 +140,10 @@ def element_is_dynamic(element: Mapping[str, Any]) -> bool:
         return False
 
     result = element.get("kind") in ("ndi", "video") or walk(element)
+    if not result and element.get("kind") == "lights":  # (M15: a chase moves; a look on its own doesn't)
+        from .lights_element import is_moving
+
+        result = is_moving(element)
     _dynamic.put(id(element), (element, result))  # holding the element keeps its id from being reused
     return result
 
@@ -448,7 +452,15 @@ def render_ndi(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | N
     return cached
 
 
-RENDERERS = {"ndi": render_ndi, "colour": render_colour, "paint": render_paint, "image": render_image, "video": render_video}
+def render_lights(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | None:
+    """A Lights element (M15): a spot of each light's colour where the light is (the lights get it exactly)."""
+    from .lights_element import picture_layer
+
+    return picture_layer(element, ctx)
+
+
+RENDERERS = {"ndi": render_ndi, "colour": render_colour, "paint": render_paint, "image": render_image, "video": render_video,
+             "lights": render_lights}
 
 
 # ---------------------------------------------------------------- one element, start to finish

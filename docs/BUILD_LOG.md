@@ -60,6 +60,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — 1 and 2: choosing lights, the Look, fans, Advanced, takeover until Release, everywhere, safety, restarts | **done** (5 Nov, 16:58) |
 | — 3: chases (Add step, Quick, timing, Tap, Play / Pause / Next, step on each beat) | **done** (5 Nov, 16:58) |
 | A look at M15's engine side (a reviewer, 14 findings, all fixed) | **done** (5 Nov, 17:15) |
+| — 4: Save look / Save chase as input (a new Lights element), and Load into Console | **done** (5 Nov, 17:26) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -157,6 +158,16 @@ photosensitivity note under Strobe.
   a group's name for a whole group ("On: Pillars"). It follows the chase as steps are added or lights are released.
 - **From the Stream Deck:** `/api/live/tap`, `/api/live/next`, `/api/live/pause`, `/api/live/resume` and
   `/api/live/speed?bpm=120`.
+
+**Save as input** (part 4):
+- **Save look as input…** (the chosen lights, as they look now) and **Save chase as input…** make a new input on the
+  Dashboard with one **Lights** element: it sets just those lights, and the others show what's under it (the tracks
+  below, or black). A chase keeps its speed, crossfade, direction, loop or once, and step on each beat. The dialog
+  says it: inputs carry colour and brightness only; amber, strobe, the colour macro and programs stay on the Console.
+- **Load into Console** (the input's tile menu, or the Editor's Lights settings) brings it back: a look is held as it
+  was; a chase goes onto the page, ready to Play. Change it and save it again.
+- **In the Editor** a Lights element shows its steps as cards, and its timing settings (speed and crossfade can have
+  keys or formulas, like other settings). It's in the AI guide and input.schema.json, so an AI tool can write one too.
 
 ## M14: your changes after the rig test (4 Nov, night)
 
@@ -1783,6 +1794,9 @@ Problems the tests found and that are fixed:
       step (bounce: back on the first). Random plays every step once a pass, never the same one twice in a row. Tap
       needs two taps, averages up to five, and starts again after a gap of 2.5 s; it works before Play too.
     - **Saved groups and colours** go in the show's `show.json`, with undo; a show keeps up to 24 colours.
+    - **Save as input** names the new input "Console look" / "Console chase" (a number added if it's taken), and puts it
+      at the end of the Dashboard. A look's brightness goes in with its colour, so as an input it lights the same.
+      Load into Console chooses the input's lights on the map and opens the Console page.
     - **The "On: …" line** names a whole patch group first (Top Wash, Side Fill, Pillars), then a whole saved group,
       then single lights, in the chase's order; "every light" when it's all of them.
 - **M13 choices** (all easy to change):

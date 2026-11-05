@@ -65,10 +65,12 @@ from ..files import read_json
 from ..global_automations import GLOBAL_DIR, GLOBAL_NAME, global_folder
 from ..layouts import switch_layout
 from ..engine import EngineFrame
-from ..input_edit import delete_input, duplicate_input, move_input, new_input, update_input
+from ..input_edit import (delete_input, duplicate_input, lights_elements, move_input, new_input, new_lights_input,
+                          unique_name as unique_input_name, update_input)
+from ..lights_element import element_chase
 from ..live_state import LiveState
 from ..log import log_exception, log_info
-from ..console import COLOUR, ConsoleView, fan
+from ..console import COLOUR, Chase, ConsoleView, fan, step_from
 from ..model import NO_SHOW, Show, clean_notes, safe_text
 from ..ndi_source import CONNECTED, NO_SIGNAL, SEARCHING
 from ..output import device_spec, show_channels
@@ -577,8 +579,7 @@ class MainWindow(QWidget):
         chip = self.header.chips["console"]
         chip.set_clickable(True)
         chip.clicked.connect(lambda: None if self._locked else self._console_release(None))
-        for button in (page.save_look, page.save_chase):  # (Save as input comes with part 4)
-            button.hide()
+        self._wire_lights_inputs()
 
     def _console_set(self, lights: list[str], attrs: dict, fade: float) -> None:
         if lights and not self._locked:
@@ -628,6 +629,89 @@ class MainWindow(QWidget):
     def _save_console_colour(self, colour: str) -> None:
         if not self._locked and not self.document.read_only:
             self.document.apply(add_saved_colour(self.document.show, colour), f"Save the colour {colour}")
+
+    # ------------------------------------------------------------ Save as input, Load into Console (M15, part 4)
+
+    def _wire_lights_inputs(self) -> None:
+        """The Console's Save look / Save chase as input, and Load into Console (a Dashboard tile's menu, the Editor)."""
+        self.console_page.look_save_requested.connect(self._save_console_look)
+        self.console_page.chase_save_requested.connect(self._save_console_chase)
+        self.dashboard.console_requested.connect(self.load_into_console)
+        self.editor_page.console_requested.connect(self.load_into_console)
+
+    def _console_profiles(self) -> dict[str, str]:
+        return {fx.id: fx.profile for fx in self.document.show.colour_fixtures()}
+
+    def _save_console_look(self, lights: list) -> None:
+        """Save look as input: the chosen lights' colour and brightness as they are now, as a new input setting just
+        them."""
+        if self._locked or self.document.read_only:
+            return
+        if not lights:
+            self._message("Save look as input", "Choose the lights first (click them on the map): their colour and "
+                          "brightness as they are now become a new input.")
+            return
+        frame = self.last_frame
+        step = step_from(list(lights), frame.console.values, self._console_profiles(), frame.master) if frame else None
+        if step is None or not step.looks:
+            self._message("Save look as input", "The chosen lights have no colour and brightness to save yet.")
+            return
+        chase = Chase(lights=tuple(light for light in lights if light in step.looks), steps=(step,))
+        count = len(chase.lights)
+        self._save_lights_input(chase, "Save look as input", "Console look",
+                                f"these {count} light{'s' if count != 1 else ''} as they look now", "the look")
+
+    def _save_console_chase(self, chase: Any) -> None:
+        if self._locked or self.document.read_only:
+            return
+        if chase is None or not chase.steps or not chase.lights:
+            self._message("Save chase as input", "Make the chase first: choose lights, then Add step (or Quick).")
+            return
+        count = len(chase.steps)
+        self._save_lights_input(chase, "Save chase as input", "Console chase",
+                                f"this chase ({count} step{'s' if count != 1 else ''}, with its speed and the rest)", "the chase")
+
+    def _save_lights_input(self, chase: Any, title: str, start: str, what: str, short: str) -> None:
+        show = self.document.show
+        name, ok = QInputDialog.getText(
+            self, title, f"A name for {what}. It becomes an input on the Dashboard that sets just these lights; the "
+            "others show what's under it.\n\nInputs carry colour and brightness only: amber, strobe, the colour macro "
+            "and programs stay on the Console.", text=unique_input_name(show, start))
+        name = safe_text(name).strip() if ok else ""
+        if not name:
+            return
+        name = unique_input_name(show, name)
+        self.document.apply(new_lights_input(show, name, chase)[0], f"Save {short} as “{name}”")
+        self._message(title, f"“{name}” is on the Dashboard now. Send it like any input; its tile's menu has "
+                      "Load into Console, to bring it back here and change it.")
+
+    def load_into_console(self, input_id: str) -> None:
+        """Load into Console (an input saved from it): a look's lights are held as it has them; a chase goes onto the
+        page, ready to Play. The Console opens with its lights chosen."""
+        if self._locked or not self._console_wired:
+            return
+        inp = self.document.show.inputs.get(input_id)
+        elements = lights_elements(inp) if inp is not None else []
+        if not elements:
+            self._message("Load into Console", "Only an input saved from the Console (Save look or Save chase as "
+                          "input) can be loaded into it.")
+            return
+        profiles = self._console_profiles()
+        chase = element_chase(elements[0])
+        lights = [light for light in chase.lights if light in profiles]
+        if not lights or not chase.steps:
+            self._message("Load into Console", f"None of “{inp.name}”'s lights are in this show.")
+            return
+        chase = replace(chase, lights=tuple(lights))
+        if len(chase.steps) == 1:  # (a look: held at once, as the input has it)
+            self.engine.submit(ConsoleSet({light: {"red": r * 255.0, "green": g * 255.0, "blue": b * 255.0,
+                                                   "dimmer": level * 255.0}
+                                           for light, (r, g, b, level) in chase.steps[0].looks.items() if light in profiles},
+                                          0.0))
+        else:
+            self.console_page.set_chase(chase)
+        self.console_page.set_selection(lights)
+        self.show_page("console")
 
     def _update_console_chip(self, view: ConsoleView) -> None:
         """"Console: 5 lights" on every page while the Console holds lights (a click lets them all go)."""

@@ -211,6 +211,12 @@ def input_schema(show: Show) -> dict[str, Any]:
                 "description": "The file this one was copied from, anywhere on this PC (a full path, e.g. "
                                "G:\\My Drive\\Worship\\candles.mp4). CentraLight plays its own copy (\"file\") and copies "
                                "changes in from here, once someone at the PC has allowed it."}
+        if kind == "lights":
+            properties["steps"] = {
+                "type": "array", "minItems": 1, "description": "Its looks, played in turn (one: a still look). Each sets "
+                "some lights: [red, green, blue, brightness], 0-1; the lights it doesn't name are see-through",
+                "items": {"type": "object", "propertyNames": {"enum": lights}, "additionalProperties": {
+                    "type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number", "minimum": 0, "maximum": 1}}}}
         if kind == "paint":
             properties["shapes"] = {"type": "array", "items": {"type": "object", "required": ["id", "type"],
                                                                "properties": {"id": {"type": "string"}, **_nested(SHAPE)}}}
@@ -394,6 +400,13 @@ def guide_text(show: Show, full: bool = True) -> str:
         "`file`: a video inside the show folder, e.g. `media/candles.mp4`, and `original` (optional) the video it was "
         "copied from, as for Image. It loops for as long as the element lasts; `speed` plays it faster or slower.",
         _table(_spec_rows(tuple(s for s in element_specs("video") if s.path in _PICTURE_SETTINGS + ("file", "speed")))),
+        "### Lights (`\"kind\": \"lights\"`): lights set straight, a look or a chase",
+        "What the Console page saves (Save look / Save chase as input). `steps` is a list of looks played in turn; "
+        "each names some lights by id with `[red, green, blue, brightness]`, 0-1, e.g. "
+        "`\"steps\": [{\"slimpar-101\": [1, 0.5, 0, 1]}, {\"slimpar-101\": [0, 0, 1, 0.6]}]`. A light a step "
+        "doesn't name is see-through there (the tracks under it show). One step is a still look. It sets colour and "
+        "brightness only. With more steps:",
+        _table(_spec_rows(element_specs("lights")[:7])),
         "How lights read a picture (NDI, Image and Video): each light shows the average of a square patch of this "
         "element's picture around its dot, as big as `area` (0 = just the colour under the dot, 0.25 = a small patch, "
         "the usual, 1 = the whole picture's average, the same for every light; bigger is calmer). `boost` puts back "
