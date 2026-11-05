@@ -987,6 +987,9 @@ class MainWindow(QWidget):
             log_exception("saving live.json", exc)
 
     def _backup(self) -> None:
+        show = self.show_data
+        if not show.folder or show.read_only:  # (no show loaded, M14: nothing to back up)
+            return
         try:
             backup_show(Path(self.show_data.folder))
         except OSError as exc:

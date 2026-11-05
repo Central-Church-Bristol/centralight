@@ -559,6 +559,10 @@ class ShowDocument(QObject):
         old_key, new_key = folder_key(self._show.folder), folder_key(show.folder)
         if old_key:
             self._other_stacks[old_key] = self._stacks
+        else:  # (a show with no folder, as no show loaded (M14): nothing comes back to its histories, so they go)
+            for stack in self._stacks.values():
+                self.undo_group.removeStack(stack)
+                stack.deleteLater()
         self._stacks = self._other_stacks.pop(new_key, {}) if new_key else {}
         self._newest_undone.clear()
         self._show = self._saved = show

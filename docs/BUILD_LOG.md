@@ -54,6 +54,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — your rule of 5 Nov: a schedule that ends by going black keeps the default show away | **done** (5 Nov, 09:05) |
 | — your change of 5 Nov: masks as black-and-white pictures (Paint's tools in greys, White, Black, Invert) | **done** (5 Nov, 09:50) |
 | — your change of 5 Nov: the Default show's **Last loaded** and **None (lights off)** (no show loaded) | **done** (5 Nov, 11:07) |
+| — a 1-hour soak going to no show and back (15 times), and three small fixes made meanwhile | **done** (5 Nov, 12:57; no errors; 981 tests pass twice) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -300,6 +301,34 @@ cause was older than M14's changes (tests had just never lined up to show it):
 - **Found on the way, not reachable today:** if Qt ever copied one of CentraLight's drawn icons in order to change
   it, the copy's drawing code would be freed straight away (a PySide quirk), and the app would crash. Nothing in
   CentraLight changes an icon after making it, so it can't happen now. It's noted as a follow-up.
+
+## A soak of no show (5 Nov, 11:27–12:27, and a shorter one after)
+
+The whole app, as it runs for you but with Simulated output and its own temporary settings and shows (never your
+lights or files), with the Default show set to **None (lights off)**, for an hour, following a test NDI picture, while:
+- global schedules loaded Central Church for 2 minutes, then left 2 minutes with no show, 15 times: each schedule's
+  end counted down ("Closing the show (lights off)", 15 s), faded the lights off (2 s) and closed the show, and the
+  next one loaded it again from no show, its "Start up" sending Follow screen;
+- two copies of a linked video went on the Overlay every 90 seconds (45 copies; while no show was loaded the phone
+  page's URL answered "No show loaded", as it should), and the video's original was replaced once.
+
+Results:
+- **No errors:** the session log has 156 lines, none of them an error. The show closed 15 times and came back 14 times
+  (the first schedule found it loaded already).
+- **Threads** went back to 23–24 every time the show closed (up to 50 with the videos playing), so nothing was left
+  open.
+- **CPU** averaged 10 % of one core (0.6 % of the PC); with no show loaded it's about nothing.
+- **Memory** rose steadily through the hour, about 40 MB (with no show loaded: 146, 155, 169 and 180 MB, quarter hour by
+  quarter hour), much as in the first hour of the 3-hour soak below, which then stayed level; an hour can't show
+  whether this one levels off too.
+- **A second, 30-minute soak with only the closing and loading** (every 2 minutes, no video or Overlay; 12:27–12:57):
+  14 closes and 14 loads, no errors, and memory with no show loaded at 113, 115 and 116 MB, ten minutes by ten
+  minutes. The closing and loading itself costs little, and less as it goes on, so most of the hour's rise came with
+  the videos, as in the soaks before.
+- **Three small fixes made meanwhile** (one found by closing and loading 150 times in a test, two by reading the code
+  again): each close left an empty undo history behind (half a kilobyte); with no show loaded, Settings' **Open show
+  folder** and **Export Claude skill…** are greyed out (the first would have opened CentraLight's own folder); and the
+  10-minute backup skips (it looked in an empty path and found nothing).
 
 ## A 3-hour soak of M14 (5 Nov, 04:16–07:16)
 

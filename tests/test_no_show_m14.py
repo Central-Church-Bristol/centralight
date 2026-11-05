@@ -429,6 +429,29 @@ class WindowTests(WindowCase):
         bare, _engine = self.make_window(NO_SHOW)  # (no show loaded before: none)
         self.assertEqual(bare.header.house_controls, {})
 
+    def test_closing_and_loading_again_leaves_no_histories_behind(self) -> None:
+        central = create_show(self.root / "Central Church", "Central Church")
+        window, _engine = self.make_window(central)
+        group = window.document.undo_group
+
+        def cycle() -> None:
+            window._close_now("Test", automation=True)
+            window.load_show(central.folder, who="Test", automation=True)
+
+        cycle()
+        before = len(group.stacks())
+        for _ in range(5):
+            cycle()
+        self.assertEqual(len(group.stacks()), before)  # (each close made a history for "no show" that stayed, before)
+
+    def test_no_backup_with_no_show(self) -> None:
+        from unittest import mock
+
+        window, _engine = self.make_window(NO_SHOW)
+        with mock.patch("centralight.ui.main_window.backup_show") as backup:
+            window._backup()
+        backup.assert_not_called()
+
     def test_a_new_show_from_no_show_has_the_last_shows_lights(self) -> None:
         from dataclasses import replace
 
@@ -458,6 +481,14 @@ class WindowTests(WindowCase):
         self.assertEqual(window.settings.default_show, "_none")
         again = SettingsDialog(window.settings, central.folder, window, shows=window.list_shows())
         self.assertEqual(again.default_show.currentText(), "None (lights off)")
+        # with no show loaded, what needs its folder is greyed out (it would open CentraLight's own folder)
+        from PySide6.QtWidgets import QPushButton
+
+        bare = SettingsDialog(window.settings, "", window, show=NO_SHOW, shows=window.list_shows())
+        buttons = {b.text(): b for b in bare.findChildren(QPushButton)}
+        for text in ("Open show folder", "Open the AI guide", "Export Claude skill…"):
+            self.assertFalse(buttons[text].isEnabled(), text)
+        self.assertTrue(buttons["Open log folder"].isEnabled())
 
     def test_the_cards_automations_line(self) -> None:
         from centralight.shows import ShowInfo
