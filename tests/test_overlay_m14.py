@@ -160,6 +160,30 @@ class DragTests(EditorTestCase):
 
 
 class AutomationTests(unittest.TestCase):
+    def test_a_deleted_inputs_copies_leave(self) -> None:
+        """(Review: they kept playing, and with its tile gone nothing but Clear all could clear them; a held flash whose
+        input was deleted mid-hold stayed too.)"""
+        from centralight.commands import SwapShow
+        from centralight.input_edit import delete_input
+        from tests.fakes import FakeEngine
+
+        show = with_inputs(show_from_patch())
+        engine = FakeEngine(show)
+        engine.submit(SendToOverlay("pillars-purple", tag="held"))
+        engine.settle(1.5)
+        self.assertEqual(len(engine.frames.get().overlay.copies), 1)
+        engine.submit(SwapShow(delete_input(show, "pillars-purple")))
+        engine.settle(2.0)
+        self.assertEqual(engine.frames.get().overlay.copies, ())
+
+    def test_moving_a_tile_keeps_inputs_whose_files_didnt_load_in_their_place(self) -> None:
+        show = with_inputs(show_from_patch())
+        ids = [inp.id for inp in show.ordered_inputs()]
+        broken = show.with_inputs(show.inputs, (ids[0], "broken", *ids[1:]))  # (inputs/broken.json couldn't be read)
+        moved = move_input(broken, ids[-1], 0)
+        self.assertEqual(list(moved.input_order), [ids[-1], "broken", ids[0], *ids[1:-1]])
+        self.assertEqual([i.id for i in moved.ordered_inputs()], [ids[-1], *ids[:-1]])
+
     def test_the_actions_and_what_they_say(self) -> None:
         show = with_inputs(show_from_patch())
         self.assertEqual(check_action({"do": "overlay", "input": "pillars-purple"}), [])

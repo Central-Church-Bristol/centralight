@@ -103,7 +103,14 @@ def move_input(show: Show, input_id: str, index: int) -> Show:
     if old < index:
         index -= 1
     order.insert(min(index, len(order)), input_id)
-    return show.with_inputs(show.inputs, tuple(order))
+    # back into the whole order, which may name inputs whose files couldn't be read: they stay where they were
+    tiles, merged, seen = iter(order), [], set()
+    for item in show.input_order:
+        if item not in seen:
+            seen.add(item)
+            merged.append(next(tiles) if item in show.inputs else item)
+    merged.extend(tiles)
+    return show.with_inputs(show.inputs, tuple(merged))
 
 
 def update_input(show: Show, input_id: str, **changes: Any) -> Show:

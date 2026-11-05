@@ -336,6 +336,21 @@ class BusTests(unittest.TestCase):
             self.assertIsNone(layer.render(6.1, self.ctx))
             self.assertEqual(layer.copies, [])
 
+    def test_a_timed_copy_cleared_while_it_plays_stops_at_its_end_as_it_leaves(self) -> None:
+        """(Review: one set to Loop jumped back to its start during the fade out, and one set to Stop vanished.)"""
+        for end in ("loop", "stop"):
+            layer = OverlayLayer()
+            timed = Input(id="timed", name="timed", infinite=False, length=2.0, end=end, tracks=freeze([[
+                {"id": "E1", "kind": "paint", **fill("#FF0000"), "start": 0.0, "end": 1.0},
+                {"id": "E2", "kind": "paint", **fill("#00FF00"), "start": 1.0, "end": 2.0}], [], [], []]))
+            copy = layer.send(timed, 0.0)
+            self.assertTrue(layer.clear_copy(copy.number, 1.5))  # (it leaves over its 1 s fade, until 2.5 s)
+            picture = layer.render(2.05, self.ctx)
+            self.assertIsNotNone(picture, end)
+            red, green = float(picture[0, 0, 0]), float(picture[1, 0, 0])
+            self.assertGreater(green, 0.2, end)  # (its end, fading: green...)
+            self.assertLess(red, 0.01, end)  # (...not its start, red)
+
     def test_render_input_blends_tracks_in_order(self) -> None:
         tracks = freeze([
             [{"id": "E1", "kind": "paint", **fill("#808080")}],

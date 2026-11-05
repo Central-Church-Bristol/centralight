@@ -47,6 +47,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — 11 the colour picker updates live (Preview, one undo step, Enter / Esc) | **done** (5 Nov, 02:45; 914 tests pass) |
 | — the Clean-up: no compatibility with what you never had (old Overlay links, old file conversions) | **done** (5 Nov, 03:00; 911 tests pass) |
 | A look at M14 (three reviewers, 21 findings): the default show's nine | **done** (5 Nov, 03:15) |
+| — and the Overlay and Dashboard's six (one went with the clean-up) | **done** (5 Nov, 03:30) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -293,6 +294,26 @@ folders). 21 findings. Fixed, each with a test:
   at about ten minutes after a start they could disagree. It's worked out once now.
 - **The session log said "(Settings say so)"** for a quit as Windows shuts down with Settings on Ask: it says "(there's
   no time to ask)" now.
+
+**The Overlay and the Dashboard (items 4 and 3)**
+- **Two copies of one video input shared one video reader,** which jumped back and forth between their two moments
+  every tick: each showed the wrong picture most of the time, and with a 720p video the engine waited 23 ms a tick for
+  it (a tick is 25 ms), so every light could stutter. Each running copy (on Base, or each on the Overlay) has its own
+  reader now; a reader nobody has used for 10 seconds closes, as before.
+- **A timed copy cleared while it played jumped at its end as it faded out** (one set to Loop went back to its start, one
+  set to Stop vanished). On the Overlay a timed input plays once, so now it stops at its end while it fades.
+- **A deleted input's copies stayed on the Overlay,** and with its tile gone only Clear all could clear them (a held
+  flash whose input was deleted mid-hold stayed too). Now they leave the way they came in. The delete question says
+  so.
+- **Dragging a tile dropped inputs whose files couldn't be read from the order,** so when such a file was fixed its tile
+  came back at the end. They keep their place now.
+- **A greyed-out part-ticked box looked empty** (the padlock on, or a read-only show: the Selected tab's light groups).
+  It's grey and shows its dash now, like a greyed-out ticked box.
+- **"On" and "on / off" Overlay automations from before M14 lost their meaning when converted:** gone with the
+  conversions themselves, in the clean-up.
+- **Not fixed, a follow-up:** dragging a tile runs Qt's drag from inside the tile's own mouse handler. If a show load (an
+  automation, the Stream Deck) replaced the tiles during the drag, the tile could be freed while its handler runs. The
+  reviewer couldn't make it happen, and neither could I; it's noted to look at.
 
 ## The overnight soaks (4 Nov, early morning)
 

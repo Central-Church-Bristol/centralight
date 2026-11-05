@@ -187,13 +187,15 @@ class VideoLibrary:
     """The clips in use, by file. Shared by the engine, the Editor and the previews."""
 
     def __init__(self) -> None:
-        self._clips: dict[tuple[str, bool], VideoClip] = {}
+        self._clips: dict[tuple[str, bool, Any], VideoClip] = {}
         self._lock = threading.Lock()
 
-    def clip(self, path: Path, threaded: bool = True) -> VideoClip:
-        """The clip for a file (opened the first time; opened again if the file has been replaced)."""
+    def clip(self, path: Path, threaded: bool = True, player: Any = None) -> VideoClip:
+        """The clip for a file (opened the first time; opened again if the file has been replaced). player: who plays
+        it, for the engine's running copies of an input (M14): each has a clip of its own, so two copies of one video
+        at different moments (on the Overlay, say) don't make one reader seek back and forth every tick. None: shared."""
         path = Path(path)
-        key = (str(path.resolve()).lower(), threaded)
+        key = (str(path.resolve()).lower(), threaded, player)
         try:
             stamp = path.stat().st_mtime_ns
         except OSError:

@@ -573,6 +573,10 @@ QGroupBox::indicator:checked:disabled {
     border-color: @text_3;
     background: @text_3;
 }
+QCheckBox::indicator:indeterminate:disabled, QAbstractItemView::indicator:indeterminate:disabled {
+    border-color: @text_3;
+    background: @text_3;
+}
 
 QGroupBox {
     color: @text_2;

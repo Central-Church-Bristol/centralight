@@ -173,5 +173,59 @@ class VideoElementTests(unittest.TestCase):
         self.assertEqual(kept(), names[-VIDEOS_KEPT + 1:] + names[:1])
 
 
+class CopiesTests(unittest.TestCase):
+    """Two running copies of one video input (on the Overlay, say) each have a reader of their own (M14 review: they
+    shared one, which seeked back and forth every tick while the engine waited for it)."""
+
+    def test_each_copy_has_its_own_reader(self) -> None:
+        from centralight.elements import video_player
+
+        library = VideoLibrary()
+        self.addCleanup(library.close)
+        a, b = {}, {}
+        with tempfile.TemporaryDirectory() as folder:
+            path = make_video(Path(folder) / "clip.avi")
+            first = library.clip(path, threaded=True, player=id(a))
+            self.assertIs(library.clip(path, threaded=True, player=id(a)), first)
+            self.assertIsNot(library.clip(path, threaded=True, player=id(b)), first)
+            self.assertIs(library.clip(path, threaded=True), library.clip(path, threaded=True))  # (no player: shared)
+            library.close()
+        engine_ctx = RenderContext(0, 0, per_light=True)
+        engine_ctx.memory = a
+        self.assertEqual(video_player(engine_ctx), id(a))
+        editor_ctx = RenderContext(0, 0, video_threaded=False)
+        editor_ctx.memory = a
+        self.assertIsNone(video_player(editor_ctx))  # (exact frames: one shared reader, as before)
+
+    def test_the_engine_asks_for_each_copys_own_reader(self) -> None:
+        from unittest import mock
+
+        from centralight import video_source
+        from centralight.new_show import show_from_patch
+
+        show = show_from_patch()
+        inp = Input(id="v", name="v", tracks=freeze([[{"id": "E1", "kind": "video", "file": "clip.avi"}], [], [], []]))
+        players = []
+        real = video_source.videos.clip
+
+        def spy(path, threaded=True, player=None):
+            players.append(player)
+            return real(path, threaded=threaded, player=player)
+
+        first, second = Instance(inp, 0.0), Instance(inp, 1.0)  # (sent a second apart)
+        with tempfile.TemporaryDirectory() as folder:
+            make_video(Path(folder) / "clip.avi")
+            for per_light in (True, False):  # (the lights, and the Dashboard's picture)
+                ctx = RenderContext(0 if per_light else 64, 0 if per_light else 36, folder=folder,
+                                    lights=lights_for(show.fixtures, None), per_light=per_light)
+                with mock.patch.object(video_source.videos, "clip", spy):
+                    render_input(first, 1.5, ctx)
+                    render_input(second, 1.5, ctx)
+            video_source.videos.close()
+        self.assertEqual(len(players), 4)
+        self.assertNotIn(None, players)
+        self.assertEqual(len(set(players)), 2)  # (one reader for each copy, the same for the lights and the picture)
+
+
 if __name__ == "__main__":
     unittest.main()

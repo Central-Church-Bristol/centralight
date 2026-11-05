@@ -820,7 +820,7 @@ class Engine:
                 self._solo = Instance(inp, now)
                 self._solo_fixed = command.input is not None  # a trial input: show changes don't replace it
         elif isinstance(command, SwapShow):
-            self._swap_show(command.show)
+            self._swap_show(command.show, now)
         elif isinstance(command, LoadShow):
             if not command.automation:
                 self._global_runner.manual_load()  # (a person's choice: the default show doesn't replace it, M14)
@@ -1205,7 +1205,7 @@ class Engine:
 
     # ------------------------------------------------------------ show changes
 
-    def _swap_show(self, show: Show) -> None:
+    def _swap_show(self, show: Show, now: float | None = None) -> None:
         old, self.show = self.show, show
         if show.globals != old.globals:
             self._globals = reconcile_globals(show, old, self._globals)
@@ -1218,7 +1218,7 @@ class Engine:
         self._ctx.lights = self._picture_ctx.lights = lights
         self._ctx.folder = self._picture_ctx.folder = show.folder
         self._base.update_inputs(show.inputs)
-        self._overlay.update_inputs(show.inputs)
+        self._overlay.update_inputs(show.inputs, now)
         if self._solo is not None and self._solo.input.id in show.inputs and not self._solo_fixed:
             self._solo.input = show.inputs[self._solo.input.id]
         self.sources.set_keep(self._ndi_names())
@@ -1235,7 +1235,7 @@ class Engine:
         carries on to black."""
         old = self.show
         if show.folder and _folder_key(show.folder) == _folder_key(old.folder):
-            self._swap_show(show)  # (the same show again: just its latest version)
+            self._swap_show(show, now)  # (the same show again: just its latest version)
             return
         solo, self._solo = self._solo, None
         self._solo_fixed = False

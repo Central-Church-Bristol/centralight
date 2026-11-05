@@ -474,8 +474,9 @@ class MainWindow(QWidget):
                  if any(isinstance(item, Mapping) and item.get("input") == input_id
                         for item in (*a.conditions, *a.actions, *a.on_end))]
         used = f"\n\nThese automations use it, and would skip it: {', '.join(users)}." if users else ""
-        answer = QMessageBox.question(self, "Delete input", f"Delete “{inp.name}”?{used}\n\nIf it's on the lights it keeps "
-                                      "playing until something replaces it. Ctrl+Z brings it back.")
+        answer = QMessageBox.question(self, "Delete input", f"Delete “{inp.name}”?{used}\n\nIf it's on Base it keeps "
+                                      "playing until something replaces it; its copies on the Overlay go. Ctrl+Z brings "
+                                      "it back.")
         if answer == QMessageBox.StandardButton.Yes:
             self.document.apply(delete_input(self.document.show, input_id), f"Delete {inp.name}")
 

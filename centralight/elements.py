@@ -390,6 +390,12 @@ def render_image(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray |
     return media_layer(image, ctx, _fit_of(element))
 
 
+def video_player(ctx: RenderContext) -> int | None:
+    """Who's playing a video, for its reader (M14): the engine's running copy of the input (its memory is its own), so
+    each copy reads at its own moment. None (shared) for exact frames (the Editor, previews, tests)."""
+    return id(ctx.memory) if ctx.video_threaded and ctx.memory is not None else None
+
+
 def render_video(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | None:
     """A video file, looping for as long as the element lasts; `speed` plays it faster or slower."""
     from .video_source import videos
@@ -397,7 +403,8 @@ def render_video(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray |
     path = media_path(ctx.folder, element.get("file"))
     if path is None or not path.is_file():
         return None
-    clip = videos.clip(path, threaded=ctx.video_threaded)
+    player = video_player(ctx)
+    clip = videos.clip(path, threaded=ctx.video_threaded, player=player)
     if clip.duration <= 0:
         return None
     speed = max(0.0, float(param(element, "speed", ctx.time, 1.0)))
@@ -407,7 +414,7 @@ def render_video(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray |
             ctx.waiting = True  # (never cleared here: an NDI feed in the same picture may still be waiting)
         return None
     fit = _fit_of(element)
-    key = ("video", str(path), fit, ctx.width, ctx.height)
+    key = ("video", str(path), fit, ctx.width, ctx.height, player)
     cached = ctx.cache.get(key)
     if cached is None or cached[0] is not frame:
         if cached is None:  # (a video this drawing hasn't had yet: the oldest others go, so they can't pile up)

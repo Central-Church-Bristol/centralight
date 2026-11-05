@@ -384,7 +384,10 @@ class OverlayCopy:
         visible = self.visibility(now)
         if visible <= 0.0 and not self.revealing(now):
             return None
-        at = now if self.hold_at is None else min(now, self.instance.started + self.hold_at)
+        hold = self.hold_at
+        if hold is None and not self.input.infinite:  # (it plays once: cleared while it plays, it stops at its end)
+            hold = max(0.0, float(self.input.length) - END_EPSILON)
+        at = now if hold is None else min(now, self.instance.started + hold)
         layer = render_input(self.instance, at, ctx)
         if visible < 1.0:
             tr = self.transition  # (the reveal's own progress, from hidden to shown, whichever way it's going)
@@ -506,11 +509,14 @@ class OverlayLayer:
         if any(copy.gone(now) for copy in self.copies):
             self.copies = [copy for copy in self.copies if not copy.gone(now)]
 
-    def update_inputs(self, inputs) -> None:
-        """Edited inputs play live; a deleted one carries on until it's cleared."""
+    def update_inputs(self, inputs, now: float | None = None) -> None:
+        """Edited inputs play live; a deleted one's copies leave, the way they came in (nothing else could clear them:
+        its tile has gone)."""
         for copy in self.copies:
             if copy.input.id in inputs:
                 copy.instance.input = inputs[copy.input.id]
+            elif now is not None:
+                copy.leave(now)
 
     # ---------------------------------------------------------------- drawing
 

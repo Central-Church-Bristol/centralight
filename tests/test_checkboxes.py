@@ -57,6 +57,30 @@ class TickBoxTests(unittest.TestCase):
         corner = image.pixelColor(rect.left() + 2, rect.top() + 2)
         self.assertTrue(_close(corner, theme.ACCENT), corner.name())
 
+    def test_a_greyed_out_part_ticked_box_still_shows(self) -> None:
+        """(Review: with the padlock on, a part-ticked group of lights looked empty: a dark dash on a dark box.)"""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QCheckBox, QStyle, QStyleOptionButton
+
+        from centralight.ui import theme
+        from tests.qt_support import process
+
+        box = QCheckBox("Pillars")
+        box.setTristate(True)
+        box.setCheckState(Qt.CheckState.PartiallyChecked)
+        box.setEnabled(False)
+        box.resize(140, 24)
+        box.show()
+        process(self.app)
+        option = QStyleOptionButton()
+        box.initStyleOption(option)
+        rect = box.style().subElementRect(QStyle.SubElement.SE_CheckBoxIndicator, option, box)
+        image = box.grab().toImage()
+        box.close()
+        box.deleteLater()
+        corner = image.pixelColor(rect.left() + 2, rect.top() + 2)
+        self.assertTrue(_close(corner, theme.TEXT_3), corner.name())
+
     def test_the_tick_pictures_are_there(self) -> None:
         from PySide6.QtGui import QImageReader
 

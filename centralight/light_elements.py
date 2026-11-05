@@ -45,6 +45,7 @@ from .elements import (
     media_path,
     ndi_source_name,
     param,
+    video_player,
 )
 from .lights import ASPECT, DEFAULT_AREA, area_half_size
 
@@ -442,7 +443,8 @@ def _frame_table(element: Mapping[str, Any], ctx: RenderContext) -> AreaTable | 
         path = media_path(ctx.folder, element.get("file"))
         if path is None or not path.is_file():
             return None
-        clip = videos.clip(path, threaded=ctx.video_threaded)
+        player = video_player(ctx)
+        clip = videos.clip(path, threaded=ctx.video_threaded, player=player)
         if clip.duration <= 0:
             return None
         speed = max(0.0, float(param(element, "speed", ctx.time, 1.0)))
@@ -451,7 +453,7 @@ def _frame_table(element: Mapping[str, Any], ctx: RenderContext) -> AreaTable | 
             if not clip.error:
                 ctx.waiting = True
             return None
-        key = ("video", str(path), ctx.video_threaded)
+        key = ("video", str(path), ctx.video_threaded, player)
         cached = _tables.get_fresh(key)
         if cached is None or cached[0] is not frame:
             cached = (frame, AreaTable(frame))  # (the newest frame of each video: the frame tells them apart)
