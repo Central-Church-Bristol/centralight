@@ -141,6 +141,7 @@ class EditorRenderer:
             self._big.time = t - element_span(element, inp)[0] if not inp.infinite else t
             scope = scope_for(inp, t, request.globals, self._big.audio, self._memory)
             scope.element = f"{inp.id}/{element.get('id', '?')}"
+            self._big.element_key = scope.element  # (its own memory: a keyed speed, say, not the last element drawn)
             with use_scope(scope):
                 layer = render_element(element, self._big, use_mask=False)
                 mask = element_keep(element, self._big)

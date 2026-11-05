@@ -312,6 +312,12 @@ class ShortcutTests(WindowTestCase):
         window, _engine = self.make()
         self.assertLessEqual(window.minimumWidth(), main_window_module.MIN_WIDTH)
         self.assertEqual(set(window.pages), {"dashboard", "console", "editor", "layout", "automation"})  # (Console: M15)
+        from centralight.ui.details_panel import RESERVED_HOTKEYS
+        from centralight.ui.main_window import RESERVED_KEYS
+
+        for number in range(1, len(window.pages) + 1):  # (a tab each: no input's hotkey can take one)
+            self.assertIn(f"Ctrl+{number}", RESERVED_KEYS)
+            self.assertIn(f"Ctrl+{number}", RESERVED_HOTKEYS)
 
 
 if __name__ == "__main__":

@@ -557,7 +557,16 @@ class Header(QFrame):
     def _visible_chips(self) -> list[StatusChip]:
         return [chip for chip in self.chips.values() if chip.isVisibleTo(self)]
 
-    def _row1_width(self, with_levels: bool, compact_chips: bool) -> int:
+    def _brand_width(self, wordmark: bool) -> int:
+        """The logo with (or without) the wordmark, whether the wordmark shows now or not."""
+        now = self.brand.sizeHint().width()
+        words = self.brand.wordmark.sizeHint().width() + self.brand.layout().spacing()
+        showing = not self.brand.wordmark.isHidden()
+        if wordmark:
+            return now if showing else now + words
+        return now - words if showing else now
+
+    def _row1_width(self, with_levels: bool, compact_chips: bool, wordmark: bool = True) -> int:
         """Width row 1 needs, worked out from the widgets' own size hints."""
         margins = self.row1.contentsMargins()
         spacing = self.row1.spacing()
@@ -567,7 +576,7 @@ class Header(QFrame):
         else:
             chip_width = sum(chip.full_width() for chip in chips)
         chip_width += max(0, len(chips) - 1) * self.chip_box.layout().spacing()
-        brand = self.brand.sizeHint().width()
+        brand = self._brand_width(wordmark)
         parts = [
             brand,
             self.tab_box.sizeHint().width(),
@@ -588,21 +597,23 @@ class Header(QFrame):
         try:
             width = self.width()
             self.show_picker.set_text_limit(SHOW_NAME_MAX_PX)
-            self._show_wordmark(True)  # (measured with it first)
             one_row = self._row1_width(True, False) <= width
             compact = (not one_row) and self._row1_width(False, False) > width
+            wordmark = True
             if compact:  # still short of room with the chips as dots: the show's name shortens to fit
                 over = self._row1_width(False, True) - width
                 if over > 0:
                     self.show_picker.set_text_limit(SHOW_NAME_MAX_PX - over - 8)  # (… cuts whole letters: some to spare)
                 if self._row1_width(False, True) > width:
                     # and still (five tabs on a small screen, M15): the wordmark goes, the logo stays, and the
-                    # show's name gets back what that frees
-                    self._show_wordmark(False)
+                    # show's name gets back what that frees (worked out by sums: hiding and showing it to measure,
+                    # every frame, made the header lay itself out over and over)
+                    wordmark = False
                     self.show_picker.set_text_limit(SHOW_NAME_MAX_PX)
-                    over = self._row1_width(False, True) - width
+                    over = self._row1_width(False, True, wordmark=False) - width
                     if over > 0:
                         self.show_picker.set_text_limit(SHOW_NAME_MAX_PX - over - 8)
+            self._show_wordmark(wordmark)
             if force or one_row != self._one_row:
                 self._place_levels(one_row)
             if force or compact != self._compact_chips:

@@ -129,8 +129,32 @@ class ConsolePageTests(unittest.TestCase):
         page.set_chase(chase)
         self.assertEqual(page.chase_lights.text(), "On: Pillars")
         self.assertIn("SlimPAR 106, SlimPAR 107", page.chase_lights.toolTip())
-        page.set_view(ConsoleView(chase=ChaseView(chase, playing=True, lights=("slimpar-107",))))  # (106 released)
+        page.set_view(ConsoleView(chase=ChaseView(chase, playing=True, lights=("slimpar-107",))))
+        self.assertEqual(page.chase_lights.text(), "On: Pillars")  # (another chase playing: the page's is shown)
+        page.play.click()  # (now the page's chase is the one playing: 106 released from it)
+        page.set_view(ConsoleView(chase=ChaseView(chase, playing=True, lights=("slimpar-106", "slimpar-107"))))
+        page.set_view(ConsoleView(chase=ChaseView(chase, playing=True, lights=("slimpar-107",))))
         self.assertEqual(page.chase_lights.text(), "On: SlimPAR 107")
+
+    def test_odd_and_even_follow_the_order_and_empty_groups_go(self) -> None:
+        page = self.page
+        page.order.setCurrentIndex(page.order.findData("right"))
+        page.choose("odd")
+        self.assertEqual(page.map.selection()[0], page.map_order()[-1])  # (from the first in the order: the right)
+        page.set_show(save_group(self.show, "Gone", ["nobody"]))
+        self.assertNotIn("saved:Gone", page.group_buttons)  # (none of its lights here: no button)
+
+    def test_the_cards_show_what_plays(self) -> None:
+        from types import MappingProxyType
+
+        from centralight.console import Chase, ChaseStep
+        from centralight.ui.console_page import step_colours
+
+        a, b = "slimpar-101", "slimpar-102"
+        chase = Chase((a, b), (ChaseStep(MappingProxyType({a: (1.0, 0.0, 0.0, 0.5), b: (0.0, 1.0, 0.0, 0.0)})),
+                               ChaseStep(MappingProxyType({a: (0.0, 0.0, 1.0, 1.0)}))))
+        self.assertEqual(step_colours(chase, 0), ["#800000", "#000000"])  # (brightness counts: B is dark)
+        self.assertEqual(step_colours(chase, 1), ["#0000FF", "#000000"])  # (B left out: as the step before)
 
     def test_the_padlock(self) -> None:
         self.page.set_locked(True)
@@ -204,16 +228,87 @@ class WiredTests(unittest.TestCase):
         self.assertFalse(chip.isVisibleTo(self.window.header))
 
     def test_cancel_in_the_picker_puts_back(self) -> None:
+        """What was kept when the picker opened comes back exactly: a colour held, a part of one (only red, from
+        Advanced), or none (the inputs' again); and a chase played over a held colour still wins after."""
+        from centralight.commands import ConsoleBack, ConsoleChase, ConsoleKeep, ConsoleSet
+        from centralight.console import Chase, ChaseStep
+        from types import MappingProxyType
+
         self.page.group_buttons["patch:Pillars"].click()
         pillars = self.page.map.selection()
         self.page.use_colour("#00FF00")
+        self.engine.submit(ConsoleSet({TOP[0]: {"red": 200}}))
         self.frame()
-        before = {light: self.chans(light) for light in TOP}
-        self.window._console_restore({pillars[0]: {"red": 0, "green": 255, "blue": 0}}, [pillars[1]])
+        before = {light: self.chans(light) for light in TOP[1:]}
+        self.engine.submit(ConsoleKeep((pillars[0], TOP[0], TOP[1])))
+        self.engine.submit(ConsoleSet({light: {"red": 9, "green": 9, "blue": 9} for light in (pillars[0], TOP[0], TOP[1])}))
+        self.frame()
+        self.page.look_restore.emit()  # (as Cancel does)
         self.frame()
         self.assertEqual(self.chans(pillars[0])[:3], (0, 255, 0))  # (held before: held again)
-        self.assertNotEqual(self.chans(pillars[1])[:3], (0, 255, 0))  # (let go: the inputs' again)
-        self.assertEqual({light: self.chans(light) for light in TOP}, before)
+        self.assertEqual(self.chans(TOP[0])[0], 200)  # (only red was held: red again, the rest the inputs')
+        self.assertEqual({light: self.chans(light) for light in TOP[1:]}, before)  # (none held: the inputs' again)
+        chase = Chase((pillars[1],), (ChaseStep(MappingProxyType({pillars[1]: (0.0, 0.0, 1.0, 1.0)})),))
+        self.engine.submit(ConsoleKeep((pillars[1],)))
+        self.engine.submit(ConsoleChase("play", chase))  # (later than its green: the chase wins)
+        self.engine.submit(ConsoleSet({pillars[1]: {"red": 255}}))
+        self.engine.submit(ConsoleBack())
+        self.frame()
+        self.assertEqual(self.chans(pillars[1])[:3], (0, 0, 255))  # (put back as it was: the chase still wins)
+
+    def test_a_loaded_chase_waits_for_play_and_typing_a_speed_works(self) -> None:
+        """(The look of 5 Nov: a chase loaded while another plays isn't sent until Play; the speed box isn't rewritten
+        under the hand while the chase plays; removing every step stops it.)"""
+        from types import MappingProxyType
+
+        from centralight.console import Chase, ChaseStep
+
+        page = self.page
+        a, b = "slimpar-101", "slimpar-102"
+        playing = Chase((a,), (ChaseStep(MappingProxyType({a: (1.0, 0.0, 0.0, 1.0)})),
+                               ChaseStep(MappingProxyType({a: (0.0, 1.0, 0.0, 1.0)}))))
+        page.set_chase(playing)
+        page.play.click()
+        self.frame()
+        loaded = Chase((b,), tuple(ChaseStep(MappingProxyType({b: (0.0, 0.0, v, 1.0)})) for v in (0.2, 0.6, 1.0)))
+        page.set_chase(loaded)  # (as Load into Console does)
+        self.frame()
+        page.crossfade.set_level(0.5)
+        page._timing_changed()
+        self.frame()
+        self.assertEqual(self.engine._console.chase.chase.lights, (a,))  # (still the first chase, untouched)
+        self.assertEqual(len(page.step_cards), 3)
+        page.play.click()
+        self.frame()
+        self.assertEqual(self.engine._console.chase.chase.lights, (b,))
+        page.speed_unit.setCurrentIndex(page.speed_unit.findData("seconds"))
+        page.speed.setFocus()
+        page.speed.lineEdit().selectAll()
+        from PySide6.QtTest import QTest
+
+        QTest.keyClicks(page.speed, "1.5")
+        for _ in range(3):
+            self.frame()
+        self.assertAlmostEqual(page.speed.value(), 1.5)
+        self.assertAlmostEqual(self.engine._console.chase.chase.seconds, 1.5)
+        for _ in range(3):
+            page.choose_step(0)
+            page.remove_chosen_step()
+        self.frame()
+        self.assertIsNone(self.engine._console.chase)  # (no steps left: it stopped)
+
+    def test_advanced_shows_what_is_set_before_master(self) -> None:
+        from centralight.commands import SetMaster
+
+        page = self.page
+        page.set_advanced(True)
+        self.engine.submit(SetMaster(0.5, 0.0))
+        page.set_selection(["slimpar-101"])
+        page._channel_moved("red", 1.0)
+        for _ in range(2):
+            self.frame()
+        page._fill_channels()
+        self.assertEqual(page.channel_rows["red"][2].text(), "255")  # (what it's set to, not what Master lets out)
 
     def test_making_and_playing_a_chase(self) -> None:
         page = self.page

@@ -45,15 +45,29 @@ def element_chase(element: Mapping[str, Any]) -> Chase:
                         lights.append(str(light))
         steps.append(ChaseStep(MappingProxyType(looks)))
     direction = element.get("direction", "forward")
-    chase = Chase(lights=tuple(lights), steps=tuple(steps), bpm=_plain(element.get("bpm"), 120.0),
-                  seconds=_plain(element.get("seconds"), 1.0) if element.get("timing") == "seconds" else None,
-                  crossfade=max(0.0, min(1.0, _plain(element.get("crossfade"), 0.0))),
-                  direction=direction if direction in dict(DIRECTIONS) else "forward",
+    chase = Chase(lights=tuple(lights), steps=tuple(steps), bpm=_at_start(element, "bpm", 120.0),
+                  seconds=_at_start(element, "seconds", 1.0) if element.get("timing") == "seconds" else None,
+                  crossfade=max(0.0, min(1.0, _at_start(element, "crossfade", 0.0))),
+                  direction=direction if isinstance(direction, str) and direction in dict(DIRECTIONS) else "forward",
                   loop=element.get("loop", True) is not False, on_beat=element.get("on_beat") is True)
     if len(_chases) > 256:
         _chases.clear()
     _chases[id(element)] = (element, chase)
     return chase
+
+
+def _at_start(element: Mapping[str, Any], name: str, default: float) -> float:
+    """A setting at the element's start: a plain number, or keys or a formula worked out at 0 (Load into Console
+    starts from there)."""
+    value = element.get(name)
+    if not is_dynamic(value):
+        return _plain(value, default)
+    from .elements import param
+
+    try:
+        return finite(param(element, name, 0.0, default), default)
+    except Exception:  # (a formula that needs what only a running input has: the usual value)
+        return default
 
 
 def _plain(value: Any, default: float) -> float:
@@ -82,10 +96,9 @@ def position(element: Mapping[str, Any], ctx: Any) -> float:
     t = max(0.0, float(ctx.time))
     if element.get("on_beat") is True:
         return _beats(element, ctx, t)
-    speed = element.get("seconds") if element.get("timing") == "seconds" else element.get("bpm")
-    if not is_dynamic(speed) or ctx.memory is None:
+    if ctx.memory is None:
         return t / step_seconds(element, t)
-    key = (ctx.element_key, "lights-position")
+    key = (ctx.element_key, "lights-position")  # (a plain speed too: edited while it plays, it mustn't jump)
     last = ctx.memory.get(key)
     if last is None or t < last[0] or t - last[0] > 5.0:  # (a jump: a seek, or the first time)
         place = t / step_seconds(element, t)
@@ -101,12 +114,14 @@ def _beats(element: Mapping[str, Any], ctx: Any, t: float) -> float:
     if ctx.memory is None:
         return 0.0
     key = (ctx.element_key, "lights-beats")
-    beats, level, last_at, gap = ctx.memory.get(key, (0, 0.0, None, step_seconds(element, t)))
+    beats, level, last_at, gap, last_t = ctx.memory.get(key, (0, 0.0, None, step_seconds(element, t), t))
+    if t < last_t - 1e-6:  # (its time went back: a loop, or it came round again: from the first step)
+        beats, last_at = 0, None
     if beat >= BEAT_RISE and beat > level + BEAT_JUMP:  # (as the Console's chase: a quick rise is a new beat)
         if last_at is not None and 0.15 < t - last_at < 3.0:
             gap = 0.6 * gap + 0.4 * (t - last_at)
         beats, last_at = beats + 1, t
-    ctx.memory[key] = (beats, beat, last_at, gap)
+    ctx.memory[key] = (beats, beat, last_at, gap, t)
     if last_at is None:
         return float(beats)
     return beats + min(0.999, max(0.0, (t - last_at) / max(0.05, gap)))
@@ -158,18 +173,24 @@ def picture_layer(element: Mapping[str, Any], ctx: Any) -> np.ndarray:
         return layer
     looks = looks_at(element, ctx)
     radius = max(2.0, LIGHT_SIZE * width)
-    ys, xs = np.mgrid[0:height, 0:width].astype(np.float32)
+    reach = 1.5 * radius  # (beyond this a spot covers nothing: only its box is worked out)
     for index, light in enumerate(lights.ids):
         look = looks.get(light)
         if look is None:
             continue
         cx, cy = float(lights.x[index]) * width, float(lights.y[index]) * height
+        x0, x1 = max(0, int(cx - reach)), min(width, int(cx + reach) + 2)
+        y0, y1 = max(0, int(cy - reach)), min(height, int(cy + reach) + 2)
+        if x0 >= x1 or y0 >= y1:
+            continue
+        ys, xs = np.mgrid[y0:y1, x0:x1].astype(np.float32)
         distance = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
         cover = np.clip(1.5 - distance / radius, 0.0, 1.0)  # (solid in the middle, soft at the edge)
         r, g, b, level = look
+        box = layer[:, y0:y1, x0:x1]
         for plane, value in enumerate((r * level, g * level, b * level)):
-            layer[plane] = layer[plane] * (1.0 - cover) + value * cover
-        layer[3] = layer[3] * (1.0 - cover) + cover
+            box[plane] = box[plane] * (1.0 - cover) + value * cover
+        box[3] = box[3] * (1.0 - cover) + cover
     return layer
 
 

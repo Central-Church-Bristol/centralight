@@ -330,6 +330,18 @@ class ConsoleChase:
 
 
 @dataclass(frozen=True)
+class ConsoleKeep:
+    """The colour picker opens on these lights: remember exactly what the Console holds of their colour (M15)."""
+
+    lights: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ConsoleBack:
+    """Cancel in the colour picker: those lights' colour back exactly as it was kept (what came later stays later)."""
+
+
+@dataclass(frozen=True)
 class SetReleaseFade:
     """Settings: how long Release and Release all take to hand lights back (M15)."""
 
@@ -372,5 +384,7 @@ Command = (
     | ConsoleSet
     | ConsoleRelease
     | ConsoleChase
+    | ConsoleKeep
+    | ConsoleBack
     | SetReleaseFade
 )

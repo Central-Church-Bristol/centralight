@@ -148,5 +148,80 @@ class LightsElementTests(unittest.TestCase):
         self.assertLessEqual(set(saved), set(lights["properties"]))  # (what Save as input writes is all in the schema)
 
 
+class LookTests(unittest.TestCase):
+    """The look at the Lights element (5 Nov): each finding, fixed."""
+
+    def test_a_speed_changed_while_it_plays_carries_on(self) -> None:
+        chase = Chase((A,), (look((A, (1.0, 0.0, 0.0, 1.0))), look((A, (0.0, 0.0, 1.0, 1.0)))), bpm=120)
+        element = dict(lights_element(chase))
+        memory: dict = {}
+        before = position(element, Ctx(600.0, memory))  # (ten minutes on Base)
+        for bpm in (121, 122, 123, 124, 125):  # (the BPM dragged in the Editor while it plays)
+            element = {**element, "bpm": bpm}
+            now = position(element, Ctx(600.025 + (bpm - 121) * 0.025, memory))
+            self.assertLess(now - before, 0.1)  # (a tick's worth onwards, not a leap)
+            before = now
+
+    def test_beats_start_again_when_its_time_goes_back(self) -> None:
+        chase = Chase((A,), (look((A, (1.0, 0.0, 0.0, 1.0))), look((A, (0.0, 0.0, 1.0, 1.0)))), on_beat=True, loop=False)
+        element = lights_element(chase)
+        memory: dict = {}
+        for moment, level in ((0.1, 0.0), (0.5, 1.0), (0.6, 0.3), (1.0, 1.0), (1.1, 0.3)):
+            position(element, Ctx(moment, memory, level))
+        self.assertEqual(int(position(element, Ctx(1.2, memory, 0.2))), 2)
+        self.assertEqual(int(position(element, Ctx(0.05, memory, 0.2))), 0)  # (a loop back: from the first step)
+
+    def test_a_direction_that_isnt_a_word(self) -> None:
+        element = {**lights_element(Chase((A,), (look((A, (1.0, 0.0, 0.0, 1.0))),))), "direction": {"expr": "1"}}
+        self.assertEqual(element_chase(element).direction, "forward")
+        from centralight.console import chase_from_dict
+
+        self.assertEqual(chase_from_dict({"lights": [A], "steps": [{A: [1, 0, 0, 1]}], "direction": ["up"]}).direction,
+                         "forward")
+
+    def test_saved_on_the_top_track(self) -> None:
+        show, input_id = new_lights_input(with_inputs(show_from_patch()), "Top", Chase((A,), (look((A, (1, 0, 0, 1))),)))
+        tracks = show.inputs[input_id].tracks
+        self.assertEqual([len(track) for track in tracks], [0, 0, 0, 1])  # (a background added later goes under it)
+
+    def test_load_starts_from_keyed_speed_and_crossfade(self) -> None:
+        element = dict(lights_element(Chase((A,), (look((A, (1, 0, 0, 1))), look((A, (0, 0, 1, 1)))))))
+        element["bpm"] = {"keys": [[0.0, 60], [10.0, 120]]}
+        element["crossfade"] = {"keys": [[0.0, 0.8], [5.0, 0.1]]}
+        chase = element_chase(element)
+        self.assertEqual((round(chase.bpm), round(chase.crossfade, 2)), (60, 0.8))
+
+    def test_the_picture_draws_each_spot_where_it_is_and_follows_a_move(self) -> None:
+        import numpy as np
+
+        from centralight.elements import RenderContext, render_element
+        from centralight.lights import LightSet
+
+        from dataclasses import replace as changed
+
+        from centralight.model import MapSpot
+
+        element = lights_element(Chase((A,), (look((A, (1.0, 0.0, 0.0, 1.0))),)))
+        fixtures = [changed(fx, map=MapSpot(0.25, 0.5)) if fx.id == A else fx for fx in show_from_patch().fixtures]
+        ctx = RenderContext(160, 90, None, lights=LightSet(fixtures))
+        picture = render_element(element, ctx)
+        self.assertGreater(picture[0, 45, 40], 0.9)  # (red at the light)
+        self.assertEqual(picture[0, 45, 120], 0.0)
+        ctx.lights = LightSet([changed(fx, map=MapSpot(0.75, 0.5)) if fx.id == A else fx for fx in fixtures])
+        moved = render_element(element, ctx)
+        self.assertGreater(moved[0, 45, 120], 0.9)  # (the light moved: so did its spot, not a picture kept from before)
+        self.assertEqual(moved[0, 45, 40], 0.0)
+        self.assertFalse(np.any(moved[3, :, :100]))  # (only its spot: nothing anywhere else)
+
+    def test_import_and_the_ai_check_know_the_lights_it_sets(self) -> None:
+        from centralight.ai_guide import guide_text
+        from centralight.show_import import _lights_used
+
+        show, input_id = new_lights_input(with_inputs(show_from_patch()), "Look", Chase((A, B), (look((A, (1, 0, 0, 1)), (B, (0, 1, 0, 1))),)))
+        self.assertLessEqual({A, B}, _lights_used(show.inputs[input_id]))
+        text = guide_text(show)
+        self.assertIn("keeps the look it had in the step before", text)
+
+
 if __name__ == "__main__":
     unittest.main()

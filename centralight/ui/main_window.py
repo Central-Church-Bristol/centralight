@@ -51,7 +51,9 @@ from ..commands import (
     SetDefaultShow,
     CloseShow,
     SetReleaseFade,
+    ConsoleBack,
     ConsoleChase,
+    ConsoleKeep,
     ConsoleRelease,
     ConsoleSet,
     SetOverlayOn,
@@ -157,7 +159,8 @@ MIN_HEIGHT = 720
 LIVE_SAVE_DELAY_MS = 1500
 BACKUP_INTERVAL_MS = 10 * 60 * 1000
 # Keys the app already uses: an input's hotkey can't be one of these
-RESERVED_KEYS = {"Ctrl+Z", "Ctrl+Y", "Ctrl+Shift+Z", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+,", "Ctrl+Shift+D", "Ctrl+V"}
+RESERVED_KEYS = {"Ctrl+Z", "Ctrl+Y", "Ctrl+Shift+Z", "Ctrl+,", "Ctrl+Shift+D", "Ctrl+V",
+                 *(f"Ctrl+{number}" for number in range(1, len(PAGES) + 1))}  # (a tab each: Ctrl+5 since M15)
 
 
 class MainWindow(QWidget):
@@ -564,7 +567,8 @@ class MainWindow(QWidget):
             lights, {attr: float(value) * 255.0 for attr, value in zip(COLOUR, rgb)}, fade))
         page.channel_set.connect(lambda lights, attr, value, fade: self._console_set(lights, {attr: float(value)}, fade))
         page.fan_set.connect(self._console_fan)
-        page.look_restore.connect(self._console_restore)
+        page.look_kept.connect(lambda lights: self.engine.submit(ConsoleKeep(tuple(lights))) if lights else None)
+        page.look_restore.connect(lambda: self.engine.submit(ConsoleBack()))
         page.release_requested.connect(lambda lights: self._console_release(tuple(lights)) if lights else None)
         page.release_all_requested.connect(lambda: self._console_release(None))
         page.group_save_requested.connect(self._save_console_group)
@@ -575,7 +579,7 @@ class MainWindow(QWidget):
         page.chase_pause_requested.connect(lambda paused: self._console_chase("pause" if paused else "resume"))
         page.chase_next_requested.connect(lambda: self._console_chase("next"))
         page.chase_tap_requested.connect(lambda: self._console_chase("tap"))
-        page.chase_edited.connect(lambda chase: self._console_chase("update", chase) if self._chase_playing() else None)
+        page.chase_edited.connect(self._console_chase_edited)
         chip = self.header.chips["console"]
         chip.set_clickable(True)
         chip.clicked.connect(lambda: None if self._locked else self._console_release(None))
@@ -592,12 +596,11 @@ class MainWindow(QWidget):
             if values:
                 self.engine.submit(ConsoleSet(values, max(0.0, float(fade))))
 
-    def _console_restore(self, values: dict, let_go: list) -> None:
-        """Cancel in the Console's colour picker: the colours held before, or the inputs' again (at once)."""
-        if values:
-            self.engine.submit(ConsoleSet(values, 0.0))
-        if let_go:
-            self.engine.submit(ConsoleRelease(tuple(let_go), 0.0, COLOUR))
+    def _console_chase_edited(self, chase) -> None:
+        """A change to the chase on the page: it goes to the lights at once if it's the one playing (all its steps
+        removed: it stops, its lights fading back)."""
+        if self.console_page.owns_playing():
+            self._console_chase("update" if chase.steps and chase.lights else "stop", chase)
 
     def _console_chase(self, action: str, chase=None) -> None:
         if not self._locked:
@@ -637,7 +640,7 @@ class MainWindow(QWidget):
         self.console_page.look_save_requested.connect(self._save_console_look)
         self.console_page.chase_save_requested.connect(self._save_console_chase)
         self.dashboard.console_requested.connect(self.load_into_console)
-        self.editor_page.console_requested.connect(self.load_into_console)
+        self.editor_page.console_requested.connect(self.load_into_console)  # (input id, element id)
 
     def _console_profiles(self) -> dict[str, str]:
         return {fx.id: fx.profile for fx in self.document.show.colour_fixtures()}
@@ -678,20 +681,24 @@ class MainWindow(QWidget):
             "others show what's under it.\n\nInputs carry colour and brightness only: amber, strobe, the colour macro "
             "and programs stay on the Console.", text=unique_input_name(show, start))
         name = safe_text(name).strip() if ok else ""
-        if not name:
+        if not name or self.document.read_only:
             return
+        show = self.document.show  # (as it is now: things may have changed while the dialog was open)
         name = unique_input_name(show, name)
         self.document.apply(new_lights_input(show, name, chase)[0], f"Save {short} as “{name}”")
-        self._message(title, f"“{name}” is on the Dashboard now. Send it like any input; its tile's menu has "
-                      "Load into Console, to bring it back here and change it.")
+        self._message(title, f"“{name}” is on the Dashboard now. Send it like any input; its tile's menu has Load "
+                      "into Console, to bring it back here and change it. While the Console still holds these lights, "
+                      "it wins over the input: Release them to see the input on its own.")
 
-    def load_into_console(self, input_id: str) -> None:
+    def load_into_console(self, input_id: str, element_id: str = "") -> None:
         """Load into Console (an input saved from it): a look's lights are held as it has them; a chase goes onto the
-        page, ready to Play. The Console opens with its lights chosen."""
+        page, ready to Play. The Console opens with its lights chosen. element_id: that Lights element (the Editor's)."""
         if self._locked or not self._console_wired:
             return
         inp = self.document.show.inputs.get(input_id)
         elements = lights_elements(inp) if inp is not None else []
+        if element_id:
+            elements = [element for element in elements if element.get("id") == element_id] or elements
         if not elements:
             self._message("Load into Console", "Only an input saved from the Console (Save look or Save chase as "
                           "input) can be loaded into it.")
@@ -709,8 +716,10 @@ class MainWindow(QWidget):
                                            for light, (r, g, b, level) in chase.steps[0].looks.items() if light in profiles},
                                           0.0))
         else:
+            if self.last_frame is not None:
+                self.console_page.set_view(self.last_frame.console)  # (what plays now, before the page takes its chase)
             self.console_page.set_chase(chase)
-        self.console_page.set_selection(lights)
+        self.console_page.show_lights(lights, chase.steps[0].looks.get(lights[0]))
         self.show_page("console")
 
     def _update_console_chip(self, view: ConsoleView) -> None:

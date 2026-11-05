@@ -466,6 +466,11 @@ RENDERERS = {"ndi": render_ndi, "colour": render_colour, "paint": render_paint, 
 # ---------------------------------------------------------------- one element, start to finish
 
 
+def _where_lights_are(element: Mapping[str, Any], ctx: RenderContext) -> Any:
+    """A Lights element's picture depends on where the lights are (moved, or another layout): part of what it's kept by."""
+    return getattr(ctx.lights, "key", None) if element.get("kind") == "lights" else None
+
+
 def render_content(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray | None:
     """The element's own picture, before its transform, opacity and mask."""
     renderer = RENDERERS.get(str(element.get("kind")))
@@ -473,7 +478,7 @@ def render_content(element: Mapping[str, Any], ctx: RenderContext) -> np.ndarray
         return None
     if element_is_dynamic(element):
         return renderer(element, ctx)
-    key = (id(element), ctx.width, ctx.height, ctx.folder)
+    key = (id(element), ctx.width, ctx.height, ctx.folder, _where_lights_are(element, ctx))
     cached = ctx.static.get_fresh(key)
     if cached is not None and cached[0] is element:
         return cached[1]
@@ -492,7 +497,7 @@ def render_element(element: Mapping[str, Any], ctx: RenderContext, use_mask: boo
         return light_element(element, ctx, use_mask)
     if element_is_dynamic(element):
         return _finish_element(element, ctx, use_mask)
-    key = ("finished", id(element), ctx.width, ctx.height, ctx.folder, use_mask)
+    key = ("finished", id(element), ctx.width, ctx.height, ctx.folder, use_mask, _where_lights_are(element, ctx))
     cached = ctx.static.get_fresh(key)
     if cached is not None and cached[0] is element:
         return cached[1]

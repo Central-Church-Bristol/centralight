@@ -103,7 +103,8 @@ def _filled_key_icon():
         _FILLED_KEY = icons.line_icon(lambda painter, rect, colour, _on: icons.draw_key(painter, rect, colour, True), theme.ACCENT)
     return _FILLED_KEY
 SPECIAL_NAMES = {"t", "time", "value", "pi"}
-RESERVED_HOTKEYS = {"Ctrl+Z", "Ctrl+Y", "Ctrl+Shift+Z", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+,", "Ctrl+V", "Ctrl+Shift+D"}
+RESERVED_HOTKEYS = {"Ctrl+Z", "Ctrl+Y", "Ctrl+Shift+Z", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5", "Ctrl+,", "Ctrl+V",
+                    "Ctrl+Shift+D"}  # (Ctrl+1 to 5: the tabs; Ctrl+5 since the Console, M15)
 SHAPE_TITLES = {"rect": "Rectangle", "ellipse": "Ellipse"}
 
 
@@ -121,7 +122,7 @@ class DetailsPanel(QScrollArea):
     tab_changed = Signal(int)  # 0 = the Input tab, 1 = Globals
     seek_requested = Signal(float)  # move the Editor's playhead (input seconds): the ◆ menu's previous / next key
     timed_requested = Signal(bool)  # the Input tab's Infinite box: True = make it timed (the timeline does it)
-    console_requested = Signal(str)  # a Lights element's Load into Console (M15): the input's id
+    console_requested = Signal(str, str)  # a Lights element's Load into Console (M15): the input's id, the element's
 
     def __init__(self, document: ShowDocument, sources_provider: Callable[[], list[str]] | None = None, parent: QWidget | None = None,
                  context: Callable[[], tuple[Mapping[str, Any], float]] | None = None,
@@ -259,8 +260,9 @@ class DetailsPanel(QScrollArea):
         lights = tuple((fx.id, fx.name, fx.group) for fx in self.show_data.colour_fixtures())
         split = self._split_state(inp, element) if has_background(element) else None  # (the Split button's note)
         mask = tuple((str(s.get("id")), s.get("type", "rect")) for s in mask_shapes(element.get("mask")))
+        steps = repr(element.get("steps")) if element.get("kind") == "lights" else None  # (the step cards)
         return ("element", inp.id, self.element_id, element.get("kind"), rows, shapes, self.shape_id, lights, split,
-                mask, self.mask_shape_id)
+                mask, self.mask_shape_id, steps)
 
     def _split_state(self, inp: Input, element) -> tuple[bool, tuple[str, ...]]:
         """Split into Colour + Paint: (is there room, what it would change on the lights)."""
@@ -549,7 +551,7 @@ class DetailsPanel(QScrollArea):
         """A Lights element's steps (M15): what each sets, as the Console shows them. They're made and changed on the
         Console page: Load into Console takes them there."""
         from ..lights_element import element_chase
-        from .console_page import StepCard, hex_of
+        from .console_page import StepCard, step_colours
 
         chase = element_chase(element)
         panel = Panel("Steps")
@@ -559,15 +561,15 @@ class DetailsPanel(QScrollArea):
                                   "into Console, change them there, then Save as input again."))
         cards = QWidget()
         flow = FlowLayout(cards, spacing=6)
-        for number, step in enumerate(chase.steps, start=1):
-            card = StepCard(number, [hex_of(step.looks.get(light, (0.0, 0.0, 0.0, 0.0))) for light in chase.lights])
+        for number, _step in enumerate(chase.steps, start=1):
+            card = StepCard(number, step_colours(chase, number - 1))
             card.setEnabled(False)
             card.setToolTip(f"Step {number}")
             flow.addWidget(card)
         panel.body.addWidget(cards)
         load = QPushButton("Load into Console")
         load.setToolTip("Open these steps on the Console page (a look is held on its lights there), to change and save again")
-        load.clicked.connect(lambda: self.console_requested.emit(self.input_id or ""))
+        load.clicked.connect(lambda: self.console_requested.emit(self.input_id or "", self.element_id or ""))
         panel.body.addWidget(load)
         return panel
 

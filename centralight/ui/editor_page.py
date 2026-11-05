@@ -62,7 +62,7 @@ class EditorPage(QWidget):
     done = Signal()
     new_input_requested = Signal()
     ai_requested = Signal(str)  # edit this input with AI
-    console_requested = Signal(str)  # Load into Console (a Lights element, M15): the input id
+    console_requested = Signal(str, str)  # Load into Console (a Lights element, M15): the input id, the element id
 
     def __init__(self, document: ShowDocument, engine: Any, settings: Settings, sources: Any | None = None,
                  parent: QWidget | None = None) -> None:

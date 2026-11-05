@@ -75,15 +75,16 @@ def new_input(show: Show, name: str = "New input") -> tuple[Show, str]:
 
 
 def new_lights_input(show: Show, name: str, chase: Any) -> tuple[Show, str]:
-    """Save look / chase as input (the Console, M15): a new input with one Lights element on its first track,
-    infinite, at the end of the dashboard. chase: a console.Chase (one step: a look)."""
+    """Save look / chase as input (the Console, M15): a new input with one Lights element on its top track (so a
+    background added later goes under it), infinite, at the end of the dashboard. chase: a console.Chase (one step: a
+    look)."""
     from .lights_element import lights_element
     from .show_io import freeze
 
     show, input_id = new_input(show, name)
     inp = show.inputs[input_id]
     tracks = list(inp.tracks)
-    tracks[0] = (freeze(lights_element(chase, "E1")),)
+    tracks[-1] = (freeze(lights_element(chase, "E1")),)
     return _replace_input(show, replace(inp, tracks=tuple(tracks))), input_id
 
 

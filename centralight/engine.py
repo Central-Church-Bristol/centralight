@@ -62,7 +62,9 @@ from .bus import (
 from .commands import (
     BLACK_FADE,
     CloseShow,
+    ConsoleBack,
     ConsoleChase,
+    ConsoleKeep,
     ConsoleRelease,
     ConsoleSet,
     SetReleaseFade,
@@ -911,6 +913,10 @@ class Engine:
             self._console.release(command.lights, fade, now, command.attrs)
         elif isinstance(command, ConsoleChase):
             self._console_chase(command, now)
+        elif isinstance(command, ConsoleKeep):
+            self._console.keep(command.lights)
+        elif isinstance(command, ConsoleBack):
+            self._console.put_back(now)
         elif isinstance(command, SetReleaseFade):
             self.release_fade = max(0.0, min(60.0, float(command.seconds)))
         elif isinstance(command, CountdownAction):

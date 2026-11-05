@@ -58,6 +58,19 @@ STEP_SIDE = 64  # a chase step's card
 NO_CHASE_LIGHTS = "On: no lights yet (choose some, then Add step)"
 
 
+def step_colours(chase: Chase, index: int) -> list[str]:
+    """A step card's colours: each light as that step plays it (colour times brightness; a light the step leaves out
+    keeps the look of the step before that has one)."""
+    from ..console import step_look
+
+    colours = []
+    for light in chase.lights:
+        look = step_look(chase, index, light)
+        r, g, b, level = look if look is not None else (0.0, 0.0, 0.0, 0.0)
+        colours.append(hex_of((r * level, g * level, b * level)))
+    return colours
+
+
 def hex_of(rgb) -> str:
     r, g, b = (max(0, min(255, round(float(v) * 255))) for v in rgb[:3])
     return f"#{r:02X}{g:02X}{b:02X}"
@@ -329,7 +342,8 @@ class ConsolePage(QWidget):
     chase_edited = Signal(object)  # the Chase, changed on the page
     chase_save_requested = Signal(object)  # Save chase as input…
     advanced_switched = Signal(bool)
-    look_restore = Signal(dict, list)  # Cancel in the colour picker: values to hold again, lights to let go of colour
+    look_kept = Signal(list)  # the colour picker opens on these lights (what they hold is kept, for Cancel)
+    look_restore = Signal()  # Cancel in the colour picker: the colour back exactly as it was kept
     saved_colour_removed = Signal(str)
 
     def __init__(self, show: Show, parent: QWidget | None = None) -> None:
@@ -340,6 +354,7 @@ class ConsolePage(QWidget):
         self._locked = False
         self._colour = "#FFFFFF"
         self._chase = Chase()
+        self._mine = False  # the chase on the page is the one playing (Play pressed, or the engine's taken on)
         self._chosen_step = -1
         self._showing = False  # (filling the chase's controls from a chase: not a change someone made)
         self._saved_colours: list[str] = []
@@ -692,7 +707,7 @@ class ConsolePage(QWidget):
         self.play.setIcon(icons.line_icon(icons.draw_play, theme.ACCENT_TEXT))
         self.play.setProperty("accent", True)
         self.play.setToolTip("Play the chase on its lights (the Console holds them until Release)")
-        self.play.clicked.connect(lambda: self.chase_play_requested.emit(self._chase))
+        self.play.clicked.connect(self._play_pressed)
         self.pause = QPushButton(" Pause")
         self.pause.setIcon(icons.line_icon(icons.draw_pause, theme.TEXT_2))
         self.pause.setCheckable(True)
@@ -751,7 +766,9 @@ class ConsolePage(QWidget):
             if group:
                 found.setdefault(f"patch:{group}", (group, []))[1].append(light)
         for saved in self.show_data.groups:
-            found[f"saved:{saved.name}"] = (saved.name, [light for light in lights if light in saved.lights])
+            members = [light for light in lights if light in saved.lights]
+            if members:  # (none of its lights in this show: no button)
+                found[f"saved:{saved.name}"] = (saved.name, members)
         return found
 
     def _fill_choose_buttons(self) -> None:
@@ -785,7 +802,7 @@ class ConsolePage(QWidget):
 
     def choose(self, kind: str) -> None:
         """All, None, Invert, Odd or Even (named actions, for a controller later too)."""
-        self._apply_choice(choose(kind, self.map_order(), self.map.selection()))
+        self._apply_choice(choose(kind, self._ordered(self.map_order()), self.map.selection()))
 
     def choose_group(self, key: str) -> None:
         group = self.groups().get(key)
@@ -826,11 +843,20 @@ class ConsolePage(QWidget):
         menu = QMenu(self)
         menu.addAction(f"Remove {colour}", lambda: self.saved_colour_removed.emit(colour))
         menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+        menu.deleteLater()
 
     def set_selection(self, ids: list[str]) -> None:
         self.map.set_selection(ids)
         self._summarise()
         self._fill_channels()
+
+    def show_lights(self, ids: list[str], look: tuple | None = None) -> None:
+        """Choose these lights (in the Order below the map), and show this look (r, g, b, brightness) in the Look:
+        Load into Console, before the engine has the look itself."""
+        self._apply_choice(ids)
+        if look is not None:
+            r, g, b, level = look
+            self.set_look(level, hex_of((r, g, b)))
 
     def set_look(self, brightness: float, colour: str) -> None:
         """The Look's controls (from the chosen lights)."""
@@ -856,14 +882,27 @@ class ConsolePage(QWidget):
             self._summarise()
         if view.values != old.values or view.held != old.held:
             self._fill_channels()
-        if view.chase != old.chase and view.chase is not None:
-            if old.chase is None or view.chase.chase != old.chase.chase:
-                self._chase = view.chase.chase
-                self._show_chase(view.chase)
-            else:
-                self._mark_step(view.chase)
-        elif view.chase is None and old.chase is not None:
-            self._show_chase(ChaseView(self._chase))
+        if view.chase != old.chase:
+            if view.chase is None:
+                if self._mine:  # (it stopped: shown as not playing)
+                    self._mine = False
+                    self._show_chase(ChaseView(self._chase))
+            elif self._mine or not self._chase.steps:  # (the page's chase is the one playing, or it has none of its own)
+                self._mine = True
+                if view.chase.chase != self._chase:  # (changed elsewhere: Tap or speed from the Stream Deck, say)
+                    self._chase = view.chase.chase
+                    self._show_chase(view.chase)
+                else:  # (only where it's got to: the page's own edit coming back is no reason to rebuild)
+                    self._mark_step(view.chase)
+            # (else the page shows another chase, being made or loaded: the one playing is left alone until Play)
+
+    def owns_playing(self) -> bool:
+        """The chase on the page is the one playing: its changes go to the lights as they're made."""
+        return self._mine and self._view.chase is not None
+
+    def _play_pressed(self) -> None:
+        self._mine = True
+        self.chase_play_requested.emit(self._chase)
 
     def _mark_step(self, view: ChaseView) -> None:
         """Just which step is playing (and Pause), and the lights it's on, without rebuilding the cards."""
@@ -882,8 +921,9 @@ class ConsolePage(QWidget):
         self.map.set_levels(colours, house)
 
     def set_chase(self, chase: Chase) -> None:
-        """The chase being made on the page."""
+        """A chase onto the page (Load into Console): shown, not playing until Play."""
         self._chase = chase
+        self._mine = False
         self._show_chase(ChaseView(chase))
 
     def _show_chase(self, view: ChaseView) -> None:
@@ -937,17 +977,21 @@ class ConsolePage(QWidget):
         while self.steps_row.count():
             self.steps_row.takeAt(0)
         for number, step in enumerate(chase.steps, start=1):
-            colours = [hex_of(step.looks.get(light, (0.0, 0.0, 0.0, 0.0))) for light in chase.lights]
-            card = StepCard(number, colours)
+            card = StepCard(number, step_colours(chase, number - 1))
             card.clicked.connect(lambda _checked=False, index=number - 1: self.choose_step(index))
             card.current = view.playing and view.step == number - 1
             card.setChecked(number - 1 == self._chosen_step)
             self.step_cards.append(card)
             self.steps_row.addWidget(card)
         self.steps_row.addStretch(1)
-        self.speed_unit.setCurrentIndex(1 if chase.seconds is not None else 0)
-        self._speed_range()
-        self.speed.setValue(chase.seconds if chase.seconds is not None else chase.bpm)
+        unit = 1 if chase.seconds is not None else 0
+        speed = chase.seconds if chase.seconds is not None else chase.bpm
+        if not (self.speed.hasFocus() and self.speed_unit.currentIndex() == unit):  # (not while being typed in)
+            if self.speed_unit.currentIndex() != unit:
+                self.speed_unit.setCurrentIndex(unit)
+                self._speed_range()
+            if abs(self.speed.value() - speed) > 1e-9:
+                self.speed.setValue(speed)
         self.crossfade.set_level(chase.crossfade)
         self.crossfade_value.setText(f"{round(chase.crossfade * 100)}%")
         self.direction.setCurrentIndex(max(0, self.direction.findData(chase.direction)))
@@ -970,7 +1014,7 @@ class ConsolePage(QWidget):
     def _edit_chase(self, chase: Chase, chosen: int) -> None:
         self._chase = chase
         self._chosen_step = chosen
-        playing = self._view.chase
+        playing = self._view.chase if self.owns_playing() else None
         self._show_chase(ChaseView(chase, playing=playing is not None, paused=bool(playing and playing.paused),
                                    step=playing.step if playing is not None else 0))
         self.chase_edited.emit(chase)
@@ -1105,16 +1149,27 @@ class ConsolePage(QWidget):
         if not chosen:
             return
         light = chosen[0]
-        held = self._view.levels.get(light, {})
-        sent = self._view.values.get(light, ())
         names = [attr for attr, _name in channels_of("slimpar9")]
 
         def value(attr: str, usual: int) -> int:
-            if attr in held:
-                return int(held[attr])
-            return int(sent[names.index(attr)]) if len(sent) == len(names) else usual
+            found = self._before_master(light, attr, names)
+            return usual if found is None else found
 
         self.set_look(value("dimmer", 255) / 255, hex_of(tuple(value(attr, 255) / 255 for attr in COLOUR)))
+
+    def _before_master(self, light: str, attr: str, names: list[str]) -> int | None:
+        """What the light's attribute is set to, before Master: what the Console holds, else what's sent with Master
+        taken back out of the colour (None: not known)."""
+        held = self._view.levels.get(light, {})
+        if attr in held:
+            return int(held[attr])
+        sent = self._view.values.get(light, ())
+        if attr not in names or len(sent) != len(names):  # (a light with other channels: not this way)
+            return None
+        value = int(sent[names.index(attr)])
+        if attr in COLOUR and self.master > 0.0:
+            value = min(255, round(value / self.master))
+        return value
 
     # ------------------------------------------------------------ the Look's actions (each for the chosen lights)
 
@@ -1142,10 +1197,7 @@ class ConsolePage(QWidget):
 
         from .colour_picker import LiveColourDialog, preview_choice
 
-        held = self._view.levels
-        restore = {light: {attr: held[light][attr] for attr in COLOUR}
-                   for light in lights if light in held and all(attr in held[light] for attr in COLOUR)}
-        let_go = [light for light in lights if light not in restore]
+        self.look_kept.emit(list(lights))  # (exactly what they hold now, for Cancel)
         dialog = LiveColourDialog(self._colour, preview_choice.wanted(), live=True, parent=self)
         dialog.changed.connect(lambda colour: self.colour_set.emit(lights, _rgb(colour), 0.0))
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
@@ -1156,7 +1208,7 @@ class ConsolePage(QWidget):
             if not (dialog.preview.isChecked() and dialog.tried() and colour == dialog._shown):
                 self.colour_set.emit(lights, _rgb(colour), self.fade.value())
         elif dialog.tried():
-            self.look_restore.emit(restore, let_go)
+            self.look_restore.emit()
         dialog.deleteLater()
 
     def apply_fan(self) -> None:
@@ -1193,8 +1245,9 @@ class ConsolePage(QWidget):
 
     def _fill_channels(self) -> None:
         chosen = [i for i in self.map.selection() if i in self._view.values]
-        for index, (attr, (caption, fader, value)) in enumerate(self.channel_rows.items()):
-            levels = {self._view.values[i][index] for i in chosen if index < len(self._view.values[i])}
+        names = list(self.channel_rows)
+        for attr, (caption, fader, value) in self.channel_rows.items():
+            levels = {found for found in (self._before_master(i, attr, names) for i in chosen) if found is not None}
             if not levels:
                 fader.set_level(0.0)
                 value.setText("–")

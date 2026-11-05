@@ -129,9 +129,38 @@ class LightsInputWindowTests(unittest.TestCase):
             self.page.save_look.click()
         self.engine.submit(ConsoleRelease(fade=0.0))
         self.frame()
-        self.window.editor_page.console_requested.emit(self.saved("Green").id)
+        self.window.editor_page.console_requested.emit(self.saved("Green").id, "E1")
         self.frame()
         self.assertEqual(self.engine._console.held[A]["green"].value, 255.0)
+
+    def test_loading_shows_the_look(self) -> None:
+        self.engine.submit(ConsoleSet({A: {"red": 255, "green": 128, "blue": 0, "dimmer": 77}}))
+        self.frame()
+        self.page.set_selection([A])
+        with mock.patch(GET_TEXT, return_value=("Amber-ish", True)):
+            self.page.save_look.click()
+        self.engine.submit(ConsoleRelease(fade=0.0))
+        self.page.set_selection([B])
+        self.frame()
+        self.window.load_into_console(self.saved("Amber-ish").id)
+        self.assertEqual(self.page.map.selection(), [A])
+        self.assertAlmostEqual(self.page.brightness.level(), 77 / 255, places=2)  # (the loaded look, not B's)
+        self.assertEqual(self.page._colour, "#FF8000")
+
+    def test_a_change_made_while_naming_it_stays(self) -> None:
+        from centralight.input_edit import new_input
+
+        self.page.set_selection([A])
+
+        def meanwhile(*_args, **_kwargs):
+            self.window.document.apply(new_input(self.window.document.show, "Made meanwhile")[0], "test")
+            return ("Kept", True)
+
+        with mock.patch(GET_TEXT, side_effect=meanwhile):
+            self.page.save_look.click()
+        names = [inp.name for inp in self.window.document.show.inputs.values()]
+        self.assertIn("Made meanwhile", names)
+        self.assertIn("Kept", names)
 
     def test_only_inputs_from_the_console_can_be_loaded(self) -> None:
         self.assertIsNone(self.menu_action("warm-white", "Load into Console"))

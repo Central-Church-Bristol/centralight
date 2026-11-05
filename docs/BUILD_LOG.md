@@ -63,6 +63,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — 4: Save look / Save chase as input (a new Lights element), and Load into Console | **done** (5 Nov, 17:26) |
 | **M16: the Stream Deck through Companion** — CentraLight's live connection (`/api/ws`, pushing what's happening) | **done** (5 Nov, 17:37) |
 | — the CentraLight module for Companion 5.1: actions, feedbacks, variables, presets; built as `companion\centralight-1.0.0.tgz` | **done** (5 Nov, 17:37) |
+| A look at the Console page and the Lights element (two reviewers, 28 findings, all fixed) | **done** (5 Nov, 18:08) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -113,6 +114,34 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
+
+## A look at the Console page and the Lights element (5 Nov, evening)
+
+Two more reviewers tried the Console page (and its wiring into the window) and the Lights element: 28 findings, all
+fixed, with tests. (The full suite: 1083 tests; one speed test, painting with the biggest brush, ran slow while a
+soak ran alongside, and passed run again on its own.)
+- **A chase loaded onto the page while another plays** stays on the page until you press **Play**: changing its
+  speed or steps no longer swaps the playing chase without asking, and the page no longer mixes the two.
+- **Typing a speed while the chase plays** works (1.5 s used to come out as 1.00), and the step cards aren't rebuilt
+  every frame while you drag Crossfade.
+- **Cancel in the colour picker** puts back exactly what was held (just Red held stays just Red; a chase played since
+  still wins).
+- **With Master below 100 %**, the Advanced faders and the Look show what's set, not what Master lets out (a Red
+  dragged to full no longer springs back to half).
+- **Ctrl+5** (the Automation tab since the Console came) can't be an input's hotkey any more.
+- **Load into Console** shows the loaded look in the Look panel, and the Editor's button loads the Lights element you
+  were looking at.
+- **Save as input** keeps changes made while its name dialog was open, and its message says that while the Console
+  holds the lights, it wins over the input.
+- **The header** no longer lays itself out over and over on a narrow window.
+- Removing every step of a playing chase stops it; step cards show brightness and what a light left out of a step
+  shows; Odd and Even follow the Order; a saved group with none of its lights in the show has no button; a menu leak.
+- **The Lights element:** a speed changed while it plays carries on from where it is (dragging its BPM made the lights
+  flicker); a saved look goes on the top track, so a background added later goes under it; its picture follows a
+  light that's moved; step on each beat starts again when a timed input loops; Load into Console starts from keyed
+  speeds; the Editor's picture of it costs a fraction of what it did; an AI's odd values can't break the Editor; the
+  AI guide says what a light a step leaves out does (it keeps the step before's look); importing an input and the AI
+  check know the lights its steps name.
 
 ## M16: the Stream Deck through Companion (5 Nov, evening)
 

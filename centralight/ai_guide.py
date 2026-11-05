@@ -214,7 +214,8 @@ def input_schema(show: Show) -> dict[str, Any]:
         if kind == "lights":
             properties["steps"] = {
                 "type": "array", "minItems": 1, "description": "Its looks, played in turn (one: a still look). Each sets "
-                "some lights: [red, green, blue, brightness], 0-1; the lights it doesn't name are see-through",
+                "some lights: [red, green, blue, brightness], 0-1; a light it doesn't name keeps the step before's look, and a "
+                "light no step names is see-through",
                 "items": {"type": "object", "propertyNames": {"enum": lights}, "additionalProperties": {
                     "type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number", "minimum": 0, "maximum": 1}}}}
         if kind == "paint":
@@ -404,8 +405,9 @@ def guide_text(show: Show, full: bool = True) -> str:
         "What the Console page saves (Save look / Save chase as input). `steps` is a list of looks played in turn; "
         "each names some lights by id with `[red, green, blue, brightness]`, 0-1, e.g. "
         "`\"steps\": [{\"slimpar-101\": [1, 0.5, 0, 1]}, {\"slimpar-101\": [0, 0, 1, 0.6]}]`. A light a step "
-        "doesn't name is see-through there (the tracks under it show). One step is a still look. It sets colour and "
-        "brightness only. With more steps:",
+        "doesn't name keeps the look it had in the step before (so to turn a light off in a step, give it brightness "
+        "0); a light no step names is see-through (the tracks under it show). One step is a still look. It sets "
+        "colour and brightness only. With more steps:",
         _table(_spec_rows(element_specs("lights")[:7])),
         "How lights read a picture (NDI, Image and Video): each light shows the average of a square patch of this "
         "element's picture around its dot, as big as `area` (0 = just the colour under the dot, 0.25 = a small patch, "
@@ -801,6 +803,11 @@ def check_input_data(data: Any, show: Show, existing_id: str | None = None) -> t
             for light in excluded or ():
                 if light not in lights:
                     problems.append(f'{label}: mask.exclude names "{light}", which isn\'t a light (see the lights table).')
+            if element.get("kind") == "lights":
+                named = {light for step in element.get("steps", ()) or () if isinstance(step, Mapping) for light in step}
+                for light in sorted(str(light) for light in named):
+                    if light not in lights:
+                        problems.append(f'{label}: a step names "{light}", which isn\'t a light (see the lights table).')
             for where, text in _walk_params(element, ""):
                 problems += _expression_problems(text, f"{label}, {where}", names)
             if element.get("kind") in ("image", "video"):

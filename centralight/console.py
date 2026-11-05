@@ -378,6 +378,7 @@ class ConsoleState:
         self._taps: list[float] = []
         self._inputs: tuple[Any, Any] | None = None  # (light ids, their colours from the inputs this tick)
         self._index: tuple[Any, dict[str, int]] = (None, {})  # (the inputs' light list, each light's place in it)
+        self._kept: dict[str, dict[str, _Held]] | None = None  # (the colour picker: what to put back on Cancel)
 
     @property
     def active(self) -> bool:
@@ -496,6 +497,29 @@ class ConsoleState:
         it out now, so it would go stale)."""
         if not self.active:
             self._last.clear()
+
+    def keep(self, lights: Iterable[str]) -> None:
+        """The colour picker opens: what the Console holds of these lights' colour, as it is (Cancel puts it back)."""
+        self._kept = {light: {attr: replace(h) for attr, h in self.held.get(light, {}).items() if attr in COLOUR}
+                      for light in lights if light in self.profiles}
+
+    def put_back(self, now: float) -> None:
+        """Cancel in the colour picker: the kept lights' colour exactly as it was (when each was set, too, so a chase
+        played since still wins where it did); colour that wasn't held follows the inputs again at once."""
+        kept, self._kept = self._kept, None
+        for light, attrs in (kept or {}).items():
+            held = self.held.setdefault(light, {})
+            for attr in COLOUR:
+                if attr in attrs:
+                    held[attr] = attrs[attr]
+                else:
+                    held.pop(attr, None)
+                self.releasing.get(light, {}).pop(attr, None)
+            if not held:
+                del self.held[light]
+            if light in self.releasing and not self.releasing[light]:
+                del self.releasing[light]
+        self._tidy()
 
     def _hurry(self, light: str, fade: float, now: float, wanted: set[str] | None) -> bool:
         """The light's attributes already fading back take no longer than `fade` from now (a Cut to black ends them at
@@ -879,5 +903,5 @@ def chase_from_dict(data: Any) -> Chase | None:
         lights=lights, steps=tuple(steps), bpm=number("bpm", 120.0, *BPM_RANGE),
         seconds=number("seconds", 1.0, 0.05, 600.0) if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else None,
         crossfade=number("crossfade", 0.0, 0.0, 1.0),
-        direction=direction if direction in dict(DIRECTIONS) else "forward",
+        direction=direction if isinstance(direction, str) and direction in dict(DIRECTIONS) else "forward",
         loop=data.get("loop", True) is not False, on_beat=data.get("on_beat") is True)
