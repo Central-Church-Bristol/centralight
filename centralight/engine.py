@@ -340,6 +340,9 @@ class Engine:
         uptime: Callable[[], float] = system_uptime,
         started_by_windows: bool = False,
         global_automations: Show | None = None,
+        pc_start: bool | None = None,
+        default_show: str = "",
+        default_opened: bool = False,
     ) -> None:
         """output: a DmxOutputThread (anything with submit(bytes) and status()).
         live: what to carry on with, for this show: if live.json was saved with another show loaded, pass
@@ -352,6 +355,10 @@ class Engine:
         started_by_windows: Windows started CentraLight at sign-in, which counts as "The PC starts" (with Fast
         Startup, a shut-down PC doesn't really restart, so Windows' running time doesn't go back to 0).
         global_automations: a Show holding just the global automations (they're app-wide, not the show's).
+        pc_start: whether the PC has just started, as the app worked it out when it chose the show (so both agree);
+        None: worked out here. default_show: the default show (Settings, M14), known from the first check.
+        default_opened: the PC has just started and the default show opened instead of the last one, so the global
+        automations under way that load a show run again (a catch-up), and their show comes back.
 
         The PC has just started: every light starts black (house lights off, their levels kept) with nothing
         playing, and the show's "When this show loads" automations run. CentraLight reopened without a restart
@@ -377,7 +384,8 @@ class Engine:
         # "The PC starts": Windows started CentraLight at sign-in, or it starts within 10 minutes of the PC starting and
         # didn't run since then (a crash and reopen at 10:01 after a 09:52 start carries on, as any reopening does)
         booted_at = wall() - uptime()
-        self._pc_start = bool(started_by_windows) or (uptime() < STARTUP_WINDOW and not live.saved_at > booted_at)
+        self._pc_start = (bool(started_by_windows) or (uptime() < STARTUP_WINDOW and not live.saved_at > booted_at)
+                          if pc_start is None else bool(pc_start))
         self._house: dict[str, _House] = {}
         self._house_driven: dict[str, str] = {}  # house light id -> the input that set it
         house = live.house
@@ -403,6 +411,9 @@ class Engine:
         self.global_automations = global_automations if global_automations is not None else Show(name="Global automations")
         self._global_runner = AutomationRunner()
         self._global_runner.restore(live.global_automations, wall(), saved_at=live.saved_at)
+        self._global_runner.default_show = str(default_show or "").strip()
+        if default_opened and self._pc_start:
+            self._global_runner.rerun_show_loads(self.global_automations)
         self._global_runner.paused, self._global_runner.paused_since = self._runner.paused, self._runner.paused_since
         self._first_check = True
         # the countdown before an automatic show load or Cut / Fade to black (countdown.py); none just after starting

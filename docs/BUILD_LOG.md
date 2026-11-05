@@ -46,6 +46,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — a check where 5 and 10 meet: the default show at PC start and the last show's variables | **done** (5 Nov, 02:45; it can't happen in the app, and a test checks it) |
 | — 11 the colour picker updates live (Preview, one undo step, Enter / Esc) | **done** (5 Nov, 02:45; 914 tests pass) |
 | — the Clean-up: no compatibility with what you never had (old Overlay links, old file conversions) | **done** (5 Nov, 03:00; 911 tests pass) |
+| A look at M14 (three reviewers, 21 findings): the default show's nine | **done** (5 Nov, 03:15) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -261,6 +262,37 @@ cause was older than M14's changes (tests had just never lined up to show it):
 - **Found on the way, not reachable today:** if Qt ever copied one of CentraLight's drawn icons in order to change
   it, the copy's drawing code would be freed straight away (a PySide quirk), and the app would crash. Nothing in
   CentraLight changes an icon after making it, so it can't happen now. It's noted as a follow-up.
+
+## A look at M14 (5 Nov, early morning)
+
+Three reviewers read M14's commits (the Overlay and the Dashboard; Colour, Split and mask shapes; the default show,
+the weeks, show variables and the extras), and tried what they found with scripts (Simulated output, temporary
+folders). 21 findings. Fixed, each with a test:
+
+**The default show (item 5)**
+- **A PC restart in the middle of a service left the default show on.** Sunday 09:00–12:30 had loaded Morning; the
+  PC restarted at 10:15; the default show opened, and Sunday Morning, still "matched" from before, didn't run again.
+  Now, when the default show opens instead of the last one, the global automations under way that load a show run
+  again (a catch-up), so Morning comes back.
+- **A default show waiting for its countdown loaded over a new schedule** (Wait 10 min pressed, and Youth starting
+  meanwhile; or its minute being up just as the next schedule began). Now a schedule starting cancels it, as a show
+  loaded by hand does.
+- **Back-to-back schedules lost track of each other, depending on their order in the list,** so the default show
+  never came after the second. Fixed. And when a schedule inside a longer one ends (Sunday 18:00–20:00 inside "all
+  Sunday"), the longer one's show comes back, and the default show waits for that one to end (see the decisions).
+- **A quick reopen after a crash forgot the default show** for its first check (the window told the engine a moment
+  too late), so a schedule that ended meanwhile left its show on. The engine knows it from the start now.
+- **An automation whose conditions depend on the loaded show** ("mood above 0.5 → Load Evening", where Evening's mood
+  is 0) flipped back and forth with the default show every few seconds. Only automations with clock, feed or sound
+  conditions hand back to the default show now.
+- **Run now on a global automation that loads a show** counts as a person's choice now: the default show doesn't
+  replace it when the schedule that loaded the show before ends.
+- **The week schedule** showed the default show after an automation whose "When it stops matching" loads a show; that
+  show stays, so the default isn't drawn there now.
+- **"The PC starts" was worked out twice**, a few seconds apart (by the window, to choose the show, and by the engine):
+  at about ten minutes after a start they could disagree. It's worked out once now.
+- **The session log said "(Settings say so)"** for a quit as Windows shuts down with Settings on Ask: it says "(there's
+  no time to ask)" now.
 
 ## The overnight soaks (4 Nov, early morning)
 
@@ -1436,6 +1468,16 @@ Problems the tests found and that are fixed:
     until you paint with it.
   - **If the show changes under an open colour window** (a global automation loads another show, say), the colour
     picked isn't applied to the new show.
+  - **After the review (default show):** only an automation whose conditions are about the clock, an NDI feed or
+    sound hands back to the default show when it stops. One that's about a show variable, an input being live, which
+    show is loaded or the lights being black doesn't (loading a show changes those, so it would flip back and forth).
+  - **A schedule inside a longer one** (Sunday 18:00–20:00 inside "all Sunday"): when the inner one ends, the longer
+    one's show loads again (with the countdown), and the default show comes when that one ends. The plan only covered
+    back-to-back schedules, where the next one's show is already loading.
+  - **When the PC restarts mid-service and the default show opens,** the schedule under way runs again from the top,
+    as a catch-up does: its show loads, and its other actions (an input sent to Base, say) happen too.
+  - **Run now** on a global automation that loads a show is a person's choice (the default show doesn't replace it);
+    **Now** on a countdown that started early is still the schedule's own run.
 - **M13 choices** (all easy to change):
   - **The week schedule is a tab beside the automation's editor** (Automation | Week schedule) rather than squeezed
     in beside the Coming up list: at 1280×720 that panel is too short for a week, and the left column too narrow.

@@ -116,6 +116,8 @@ RECENT = 600.0  # a match that ended while CentraLight was closed runs its "when
 QUIET_HOLD = 2.0  # seconds of quiet before a sound condition counts as stopped (a gap between songs isn't)
 REMEMBER_REMOVED = 3600.0  # a deleted automation's state is kept this long, so Undo doesn't run it again
 TIMED_KINDS = ("time", "days", "dates", "sun")  # conditions that depend only on the clock
+# conditions that loading a show doesn't change: only an automation with just these hands back to the default show (M14)
+STEADY_KINDS = TIMED_KINDS + ("ndi", "audio")
 HISTORY_SIZE = 100
 EVALUATE_EVERY = 1.0  # seconds
 TIME_PATTERN = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
@@ -460,9 +462,12 @@ def _skipped_start(start: int, previous: datetime | None, local: datetime, wall_
 
 def schedules_a_show(automation: Automation) -> bool:
     """Does this automation load a show for as long as it matches (a schedule, a feed being lost …)? Not one that runs
-    at a moment ("When CentraLight starts"): that never "stops matching" in a way that means anything."""
+    at a moment ("When CentraLight starts"): that never "stops matching" in a way that means anything. Nor one with a
+    condition that loading a show changes (a show variable, an input being live, which show is loaded, the colour
+    lights being black): its own load could make it stop matching, and the default show would come back, again and
+    again."""
     return (any(isinstance(a, Mapping) and a.get("do") == "load_show" for a in automation.actions)
-            and not any(c.get("type") in EVENTS for c in automation.conditions))
+            and all(c.get("type") in STEADY_KINDS for c in automation.conditions))
 
 
 def chosen_weeks(cond: Mapping[str, Any]) -> list[str]:
@@ -796,7 +801,20 @@ class AutomationRunner:
         """A person loaded a show (the picker, the Stream Deck, the phone page): it stays when the automation that
         loaded the one before stops matching, and a default show waiting for its countdown doesn't load (M14)."""
         self.loader = None
+        self._drop_defaults()
+
+    def _drop_defaults(self) -> None:
+        """A show waiting to load because a schedule ended (the default show, or a longer schedule's show) won't."""
         self.pending = [p for p in self.pending if not p[3].get("_default")]
+
+    def rerun_show_loads(self, container: Show) -> None:
+        """The PC has just started and the default show opened instead of the last one (M14): the automations under way
+        that load a show run again at the first check (as a catch-up does), so their show comes back."""
+        for automation in container.ordered_automations():
+            state = self.states.get(automation.id)
+            if state is not None and state.matched and schedules_a_show(automation):
+                state.matched = state.restored = False
+        self.loader = None
 
     def set_paused(self, paused: bool, now: float) -> None:
         if paused != self.paused:
@@ -1005,6 +1023,7 @@ class AutomationRunner:
             if matched:
                 if schedules_a_show(automation):
                     self.loader = automation.id  # (when it stops matching, the default show may load: M14)
+                    self._drop_defaults()  # (one waiting for its countdown doesn't load over this one's show)
                 now_actions += self._run(automation, list(automation.actions), mono_now, situation.now, "ran", ", ".join(true),
                                          lifts=self._lifts_quit_dark(automation, situation))
             else:
@@ -1014,20 +1033,29 @@ class AutomationRunner:
                 if automation.id == self.loader:
                     ended = automation
         if ended is not None:  # (after them all: another automation may have started loading a show in this check)
-            self.loader = None
-            if self._default_wanted(ended, show):
-                now_actions += self._run(ended, [{"do": "load_show", "show": self.default_show, "_default": True}], mono_now,
-                                         situation.now, "stopped matching: the default show loads", count=False)
+            if self.loader == ended.id:
+                self.loader = None
+            now_actions += self._hand_back(ended, show, mono_now, situation.now)
         return now_actions
 
-    def _default_wanted(self, ended: Automation, container: Show) -> bool:
-        """The automation that loaded the show has stopped matching: does the default show load now? Not if it hasn't
-        one, if that automation's own "when it stops matching" loads a show (that wins), or if another automation that
-        loads a show matches now (its show stays)."""
-        if not self.default_show or any(isinstance(a, Mapping) and a.get("do") == "load_show" for a in ended.on_end):
-            return False
-        return not any(a.id != ended.id and a.enabled and schedules_a_show(a) and self.states.get(a.id, AutomationState()).matched
-                       for a in container.ordered_automations())
+    def _hand_back(self, ended: Automation, container: Show, mono_now: float, wall_now: float) -> list[tuple[str, dict]]:
+        """The automation that loaded the show has stopped matching (M14). What loads now: nothing if its own "when it
+        stops matching" loads a show (that wins), or if another automation started loading one in this check (its show
+        stays). Else another automation that loads a show and still matches gets its show back (a schedule inside a
+        longer one has ended), and the default show waits for that one. Else the default show, if there is one."""
+        if self.loader is not None or any(isinstance(a, Mapping) and a.get("do") == "load_show" for a in ended.on_end):
+            return []
+        for other in container.ordered_automations():
+            if (other.id != ended.id and other.enabled and schedules_a_show(other)
+                    and self.states.get(other.id, AutomationState()).matched):
+                self.loader = other.id
+                shows = [a.get("show") for a in other.actions if isinstance(a, Mapping) and a.get("do") == "load_show"]
+                return self._run(other, [{"do": "load_show", "show": shows[-1], "_default": True}], mono_now, wall_now,
+                                 f"still matches after “{ended.name}” stopped: its show loads again", count=False)
+        if not self.default_show:
+            return []
+        return self._run(ended, [{"do": "load_show", "show": self.default_show, "_default": True}], mono_now, wall_now,
+                         "stopped matching: the default show loads", count=False)
 
     @staticmethod
     def _lifts_quit_dark(automation: Automation, situation: Situation) -> bool:
@@ -1062,6 +1090,8 @@ class AutomationRunner:
         waiting (a countdown, an "after N s" step) is replaced by this run."""
         self._drop_pending(automation.id)
         self._drop_expected(automation.id)
+        if any(isinstance(a, Mapping) and a.get("do") == "load_show" for a in automation.actions):
+            self.manual_load()  # (a person chose this show: the default show doesn't replace it, M14)
         return self._run(automation, list(automation.actions), mono_now, wall_now, "run by hand", count=False, why="by hand")
 
     def _run(self, automation: Automation, actions: list, mono_now: float, wall_now: float, what: str,

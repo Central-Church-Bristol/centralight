@@ -21,6 +21,7 @@ from .sources import SourceManager
 from .paths import default_show_dir, shows_root
 from .priority import prefer_livestream_apps
 from .settings import Settings
+from .shows import same_folder
 from .show_io import SHOW_FILE, ShowError, backup_show
 from .timing import begin_precise_timer, end_precise_timer
 
@@ -138,7 +139,11 @@ def main(argv: list[str] | None = None) -> int:
 
     settings = Settings.load()
     live = LiveState.load()
-    show, problem = open_show(settings, show_to_open(settings, live, pc_start=pc_just_started(live, "--minimized" in argv)))
+    pc_start = pc_just_started(live, "--minimized" in argv)  # (worked out once: the engine is told, so both agree)
+    show, problem = open_show(settings, show_to_open(settings, live, pc_start=pc_start))
+    # the default show opened instead of the last one (M14): schedules under way run again, so their show comes back
+    default_opened = (pc_start and bool(settings.default_show) and live is not None and bool(live.show)
+                      and not same_folder(live.show, show.folder))
     if live is not None:
         live = live.for_show(show.folder)  # (saved with another show loaded: only what's app-wide carries over)
     if show.folder and not show.read_only:
@@ -159,7 +164,8 @@ def main(argv: list[str] | None = None) -> int:
     audio = AudioCapture(settings.audio_source, settings.audio_attack, settings.audio_release)
     audio.start()  # off unless Settings → Audio says what to listen to
     engine = Engine(show, output, live, sources=sources, audio=audio, initial_base=FOLLOW_SCREEN_ID,
-                    started_by_windows="--minimized" in argv, global_automations=global_automations)
+                    started_by_windows="--minimized" in argv, global_automations=global_automations,
+                    pc_start=pc_start, default_show=settings.default_show, default_opened=default_opened)
     engine.start()
     log_info(f"CentraLight started: show {show.folder}, output {settings.output}")
 

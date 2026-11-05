@@ -443,6 +443,8 @@ Close the app first (it's holding the dongle), then:
   - [ ] The same again, but load another show from the Show menu while Evening is on: when the automation ends,
         nothing changes (manual wins).
   - [ ] Restart the PC: Central Church opens. (Quitting and reopening CentraLight carries on with the show that was on.)
+  - [ ] Restart the PC while a global automation that loads another show is under way (one for the next hour, say):
+        Central Church opens, then that automation's show loads straight after.
 - [ ] **The colour picker updates live**: put Warm white on Base, open it in the Editor, click its Colour element, then
       the colour's swatch. Drag in the colour square: the lights follow as you drag.
   - [ ] **Cancel**: they go back. Again, then **OK**: they keep it, and one Ctrl+Z puts the old colour back.

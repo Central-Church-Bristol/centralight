@@ -157,6 +157,9 @@ def _default_blocks(blocks: list[Block], default_show: str, names: Mapping[str, 
         at = max(at, end)
     if at < last:
         gaps.append((at, last))
+    # a "When it stops matching" load wins over the default: its show stays until the next block
+    stops = sorted(b.start for b in blocks if b.moment and b.on_end and not b.missing)
+    gaps = [(start, min([s for s in stops if start <= s < end], default=end)) for start, end in gaps]
     known = default_show in names
     return [Block("", "The default show", default_show, names.get(default_show, default_show), start, end,
                   continues_before=start <= first, continues_after=end >= last, show_id=default_show if known else "",

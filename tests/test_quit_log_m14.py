@@ -79,6 +79,13 @@ class QuitLogTests(WindowTestCase):
         self.assertEqual(text.count("Quit, as Windows logs off or shuts down: turn the lights off (Settings say so)"), 1)
         self.assertTrue(engine.fake_output.closed_with_blackout)
 
+    def test_windows_logging_off_when_settings_say_ask(self) -> None:
+        window, _engine = self.make(Settings(quit_action=QUIT_ASK))
+        start = self.log_size()
+        window.quit_without_asking("as Windows logs off or shuts down")
+        self.assertIn("Quit, as Windows logs off or shuts down: leave the lights as they are (there's no time to ask)",
+                      self.log_since(start))
+
 
 class SoakToolTests(unittest.TestCase):
     def test_its_own_lines_go_to_its_own_session_log(self) -> None:

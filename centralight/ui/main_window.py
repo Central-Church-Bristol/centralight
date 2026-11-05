@@ -1591,7 +1591,8 @@ class MainWindow(QWidget):
         if self._shut_down:
             return  # (a quit that's under way already: it was written then)
         lights_off = self.settings.quit_action == QUIT_OFF
-        log_info(f"Quit, {why}: {QUIT_WORDS[QUIT_OFF] if lights_off else QUIT_WORDS[QUIT_LEAVE]} (Settings say so)")
+        reason = "there's no time to ask" if self.settings.quit_action == QUIT_ASK else "Settings say so"
+        log_info(f"Quit, {why}: {QUIT_WORDS[QUIT_OFF] if lights_off else QUIT_WORDS[QUIT_LEAVE]} ({reason})")
         self.shutdown(lights_off=lights_off)
 
     def shutdown(self, lights_off: bool) -> None:

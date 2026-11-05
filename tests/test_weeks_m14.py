@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import calendar
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 from centralight.automations import AutomationRunner, Situation, check_condition, describe_condition, in_weeks, upcoming
 from centralight.model import Show
