@@ -80,6 +80,7 @@ class SettingsDialog(QDialog):
         audio_sources: list[tuple[str, str]] | None = None,
         audio_values=None,
         show=None,
+        shows: list | None = None,
     ) -> None:
         super().__init__(parent)
         self._show = show
@@ -263,7 +264,23 @@ class SettingsDialog(QDialog):
         for value, label in QUIT_LABELS:
             self.quit_action.addItem(label, value)
         self.quit_action.setCurrentIndex(max(0, self.quit_action.findData(settings.quit_action)))
+        # the default show (M14): opens when the PC starts, and comes back after a schedule
+        self.default_show = QComboBox()
+        self.default_show.addItem("None: open the last show", "")
+        for info in shows or ():
+            self.default_show.addItem(info.name, info.id)
+        if settings.default_show and self.default_show.findData(settings.default_show) < 0:
+            self.default_show.addItem(f"{settings.default_show} (not there any more)", settings.default_show)
+        self.default_show.setCurrentIndex(max(0, self.default_show.findData(settings.default_show)))
+        default_row = QHBoxLayout()
+        default_row.addWidget(QLabel("Default show"))
+        default_row.addWidget(self.default_show, 1)
         quit_layout = QVBoxLayout(quit_box)
+        quit_layout.addLayout(default_row)
+        quit_layout.addWidget(hint("It opens when the PC starts (instead of the last show), and loads again when a global "
+                                   "automation that loaded another show stops matching (with the countdown), unless "
+                                   "someone has loaded a show by hand since. Global automations still win: one that's under "
+                                   "way loads its show. Reopening CentraLight after a quit or a crash carries on as it was."))
         quit_layout.addWidget(self.start_with_windows)
         quit_layout.addWidget(self.clshow_files)
         quit_layout.addWidget(hint("Closing the window keeps CentraLight running in the tray; Quit is in the tray icon's menu."))
@@ -403,6 +420,7 @@ class SettingsDialog(QDialog):
         settings.quit_action = str(self.quit_action.currentData() or QUIT_ASK)
         settings.black_fade = round(self.black_fade.value(), 2)
         settings.countdown = self.countdown.value()
+        settings.default_show = str(self.default_show.currentData() or "")
         settings.start_with_windows = self.start_with_windows.isChecked()
         settings.clshow_files = self.clshow_files.isChecked()
         settings.remote_port = self.remote_port.value()

@@ -264,6 +264,14 @@ class SetCountdownLength:
 
 
 @dataclass(frozen=True)
+class SetDefaultShow:
+    """The default show (Settings, M14): its id, or "" for none. It loads when the global automation that loaded a show
+    stops matching, unless a person has loaded another since, or that automation's "when it stops matching" loads one."""
+
+    show: str = ""
+
+
+@dataclass(frozen=True)
 class CountdownAction:
     """The countdown banner's buttons (and /api/countdown/...): "now" (Load now), "wait" (Wait 10 min) or "skip".
     countdown_id "" = the one the banner shows."""

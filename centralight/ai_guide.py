@@ -548,7 +548,10 @@ def global_guide_text(shows: list[tuple[str, str]], house_labels: list[str]) -> 
         'named, not numbered: `{"do": "house", "label": "Key lights", "level": 0.7, "fade": 2}` sets the loaded show\'s '
         "light of that name (skipped, with a note in the log, if it has none). Before a Load a show, and before any "
         "automation's Cut or Fade to black, CentraLight shows a countdown (15 s unless Settings say otherwise) with Load "
-        "now, Wait 10 min and Skip; one that comes from the clock starts early, so the change still happens on time.",
+        "now, Wait 10 min and Skip; one that comes from the clock starts early, so the change still happens on time. "
+        "If Settings has a default show, it opens when the PC starts, and loads again when the automation that loaded a "
+        "show stops matching (unless someone loaded a show by hand since, that automation's `on_end` loads one, or "
+        "another automation that loads a show matches then), so a schedule only needs its own times.",
         "```json\n" + json_text(example) + "```",
         "## The shows\n\n" + show_rows,
         "Days are `mon` ... `sun`. " + WEEKS_TEXT + " Times `\"HH:MM\"` (overnight ranges like 22:00-02:00 are fine); "

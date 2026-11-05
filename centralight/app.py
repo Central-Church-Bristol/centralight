@@ -36,12 +36,31 @@ def _prepare_windows_shell() -> None:
         pass
 
 
-def show_to_open(settings: Settings, live: LiveState | None, root: Path | None = None) -> Path:
+def pc_just_started(live: LiveState | None, started_by_windows: bool) -> bool:
+    """Has the PC just started (as the engine works it out)? Windows started CentraLight at sign-in, or it's starting
+    within 10 minutes of the PC starting and hasn't run since then. Reopening after a quit or a crash isn't."""
+    import time
+
+    from .automations import STARTUP_WINDOW, system_uptime
+
+    uptime = system_uptime()
+    saved_at = live.saved_at if live is not None else 0.0
+    return bool(started_by_windows) or (uptime < STARTUP_WINDOW and not saved_at > time.time() - uptime)
+
+
+def show_to_open(settings: Settings, live: LiveState | None, root: Path | None = None, pc_start: bool = False) -> Path:
     """The show that was loaded last (live.json says which), else the one Settings names, else Central Church; if
     none of those is there any more (deleted, say), the first show there is; only with no show at all is Central
-    Church made afresh."""
-    from .shows import list_shows
+    Church made afresh. When the PC has just started, the default show (Settings, M14) opens instead, if there is one
+    (reopening after a quit or a crash carries on with the last show, so it doesn't change the lights)."""
+    from .shows import find_show, list_shows
 
+    if pc_start and settings.default_show:
+        info = find_show(root if root is not None else shows_root(), settings.default_show)
+        if info is not None and (Path(info.folder) / SHOW_FILE).is_file():
+            log_info(f"The PC has just started, so the default show “{info.name}” opens")
+            return Path(info.folder)
+        log_info(f"The default show ({settings.default_show}) isn't there any more, so the last show opens")
     for candidate in (live.show if live is not None else "", settings.show_folder, str(default_show_dir())):
         if candidate and (Path(candidate) / SHOW_FILE).is_file():
             return Path(candidate)
@@ -119,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
 
     settings = Settings.load()
     live = LiveState.load()
-    show, problem = open_show(settings, show_to_open(settings, live))
+    show, problem = open_show(settings, show_to_open(settings, live, pc_start=pc_just_started(live, "--minimized" in argv)))
     if live is not None:
         live = live.for_show(show.folder)  # (saved with another show loaded: only what's app-wide carries over)
     if show.folder and not show.read_only:

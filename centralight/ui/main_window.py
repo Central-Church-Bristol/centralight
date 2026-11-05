@@ -48,6 +48,7 @@ from ..commands import (
     SetAutomationsPaused,
     SetMaster,
     SetCountdownLength,
+    SetDefaultShow,
     SetOverlayOn,
     SetOverlayOpacity,
     SetVariable,
@@ -229,6 +230,7 @@ class MainWindow(QWidget):
         self.countdown_banner = CountdownBanner()
         self.countdown_banner.pressed.connect(lambda what, cid: self.engine.submit(CountdownAction(what, cid)))
         self.engine.submit(SetCountdownLength(settings.countdown))
+        self.engine.submit(SetDefaultShow(settings.default_show))  # (it comes back after a schedule, M14)
 
         sources = getattr(engine, "sources", None)
         self.dashboard = DashboardPage(show, sources=sources)
@@ -262,6 +264,7 @@ class MainWindow(QWidget):
         self.automation_page = AutomationPage(self.document, engine, sources_provider=(
             (lambda: sources.available()) if sources is not None and hasattr(sources, "available") else None),
             global_document=self.global_document, shows_provider=self.list_shows)
+        self.automation_page.set_default_show(settings.default_show)
         self.automation_page.scope_changed.connect(self._update_undo_scope)
         self.automation_page.import_requested.connect(lambda: self.import_from_show(AUTOMATIONS))
         # linked pictures and videos (M13): their originals are checked and copied on their own thread
@@ -868,7 +871,8 @@ class MainWindow(QWidget):
         from ..audio import list_sources
 
         dialog = SettingsDialog(self.settings, self.show_data.folder, self, show=self.show_data, audio_sources=list_sources(),
-                                audio_values=lambda: dict(self.last_frame.audio) if self.last_frame is not None else {})
+                                audio_values=lambda: dict(self.last_frame.audio) if self.last_frame is not None else {},
+                                shows=self.list_shows())
         result = dialog.exec()
         try:
             self._settings_closed(dialog, result)
@@ -891,6 +895,8 @@ class MainWindow(QWidget):
         audio_before = (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release)
         dialog.apply_to(self.settings)
         self.engine.submit(SetCountdownLength(self.settings.countdown))
+        self.engine.submit(SetDefaultShow(self.settings.default_show))
+        self.automation_page.set_default_show(self.settings.default_show)
         if (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release) != audio_before:
             log_info(f"Audio source: {self.settings.audio_source or 'off'}")
             self.restart_audio()
@@ -1162,6 +1168,8 @@ class MainWindow(QWidget):
             if item.name not in KEEP_ON_THIS_PC:
                 setattr(self.settings, item.name, getattr(imported, item.name))
         self.engine.submit(SetCountdownLength(self.settings.countdown))
+        self.engine.submit(SetDefaultShow(self.settings.default_show))
+        self.automation_page.set_default_show(self.settings.default_show)
         self.editor_page.timeline.ndi_default = self.settings.ndi_default
         if (self.settings.audio_source, self.settings.audio_attack, self.settings.audio_release) != audio_before:
             self.restart_audio()

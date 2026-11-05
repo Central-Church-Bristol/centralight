@@ -544,6 +544,7 @@ class AutomationPage(QWidget):
         self.engine = engine
         self._sources = sources_provider or (lambda: [])
         self._shows = shows_provider or (lambda: [])
+        self.default_show = ""  # Settings' default show (M14: the week schedule fills the gaps with it)
         self.scope = SHOW  # which list the selected automation is in
         self.selected = ""
         self._shown_key: tuple | None = None  # what refresh() last showed
@@ -1098,7 +1099,12 @@ class AutomationPage(QWidget):
     def _fill_schedule(self) -> None:
         """The week schedule follows the global automations (only worked out while it's on screen)."""
         if self.global_document is not None and self.right_tabs.currentWidget() is self.schedule:
-            self.schedule.set_data(self.global_document.show, self._show_names())
+            self.schedule.set_data(self.global_document.show, self._show_names(), self.default_show)
+
+    def set_default_show(self, show_id: str) -> None:
+        """Settings' default show (M14): the week schedule fills the gaps with it."""
+        self.default_show = show_id or ""
+        self._fill_schedule()
 
     def _ticked(self, item, scope: str) -> None:
         automation_id = item.data(Qt.ItemDataRole.UserRole)

@@ -40,6 +40,7 @@ never been opened by this work. The Wednesday checklist is in `docs/WEDNESDAY_TE
 | — 9 a Colour element, and Paint without a fill | **done** (5 Nov, 01:05; a test-suite crash found on the way was fixed first; 853 tests pass twice) |
 | — 8 shapes in masks (Show / Hide rectangles and ellipses, Start with, Mask mode with Layer mode's tools) | **done** (5 Nov, 01:25; 866 tests pass) |
 | — 6 which week of the month (1st, 2nd, 3rd, 4th, Last) in Days of the week | **done** (5 Nov, 01:35; 875 tests pass) |
+| — 5 a default show (opens when the PC starts, comes back after a schedule) | **done** (5 Nov, 01:50; 889 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -158,6 +159,22 @@ The small ones first (3, 1, 2, 7):
 - **The week schedule and Coming up** follow (the schedule's later weeks show only the right Wednesdays), and an
   overnight time range still belongs to the day it started (the 1st Wednesday's 23:00–01:00 carries on into Thursday).
 - The AI guides explain `"weeks"`. Automations from before stay "Every week" (the setting is left out of the file).
+
+**5. A default show.**
+- **Settings → Starting and quitting → Default show:** "None: open the last show" (as before), or one of the shows.
+- **When the PC starts,** the default show opens instead of the last one. Global automations then run as before, with
+  catch-up, and win: one that's under way (Sunday 10:00, say) loads its show.
+- **After a schedule ends:** when the global automation that loaded the show stops matching, the default show loads
+  again, with the usual countdown (Load now / Wait 10 min / Skip) and freeze. Not if:
+  - someone has loaded a show by hand since (the Show menu, the Stream Deck, the phone page): **manual wins**, and a
+    show loaded by hand during the default's countdown stops it;
+  - that automation's own "When it stops matching" loads a show: **that wins**;
+  - another automation that loads a show matches then (back-to-back schedules): its show stays, and the default comes
+    when that one ends.
+- **The week schedule** shows the default show in the gaps, drawn lighter (hover for what it is; it has no automation
+  to open).
+- **Two shows asked for in the same second** (your "When CentraLight starts → Load a show" at the top, and a schedule
+  that's under way): a test checks both load, in the automations' order, and the second stays.
 
 **A crash the tests found (fixed).** With item 9's tests added, the whole test suite crashed part-way through. The
 cause was older than M14's changes (tests had just never lined up to show it):
@@ -1330,6 +1347,18 @@ Problems the tests found and that are fixed:
     8th to the 14th, and so on; Last is the month's last seven days. The buttons are **Every week**, 1st, 2nd, 3rd,
     4th and Last beside the days; picking a week turns Every week off, and Every week clears the picked ones. With
     every day ticked, the summary says e.g. "1st week of the month".
+  - **Proposed (default show):** manual wins; the automation's own "When it stops matching" wins; the week schedule
+    shows the default show lighter in the gaps; two loads in the same second are tested.
+  - **The default show opens when the PC starts, not every time CentraLight starts:** reopening CentraLight after a
+    quit or a crash carries on with the show that was loaded (what the app already does for everything else, and what
+    item 10 says for show variables), so a crash in the middle of a service doesn't change the lights. "The PC starts"
+    is the same moment as the automations' "The PC starts".
+  - **Only an automation that loads a show for as long as it matches** (a time range, days, a feed being lost …)
+    hands back to the default show when it stops. One that runs at a moment ("When CentraLight starts → Load a show")
+    doesn't, so that workaround keeps its show.
+  - **The default show waits for the countdown** after a schedule ends (its banner starts then, rather than early), and
+    a show that's loaded already isn't loaded again. CentraLight remembers which automation loaded the show over a
+    restart.
 - **M13 choices** (all easy to change):
   - **The week schedule is a tab beside the automation's editor** (Automation | Week schedule) rather than squeezed
     in beside the Coming up list: at 1280×720 that panel is too short for a week, and the left column too narrow.

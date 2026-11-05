@@ -289,6 +289,8 @@ class WeekGrid(QWidget):
         missing = block.missing
         if missing:  # there's no such show: grey, with a dashed edge
             fill, ink = QColor(theme.CARD_HOVER), QColor(theme.TEXT_2)
+        elif block.default:  # the default show, between the automations' shows (M14): lighter
+            fill, ink = theme.mix(theme.WINDOW, colour.name(), 0.35), QColor(theme.TEXT_2)
         elif block.conditional:  # it might not happen: hatched
             fill, ink = theme.mix(theme.WINDOW, colour.name(), 0.3), QColor(theme.TEXT)
         else:
@@ -367,7 +369,8 @@ class WeekGrid(QWidget):
         return super().event(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
-        pointing = self.block_at(event.position()) is not None
+        under = self.block_at(event.position())
+        pointing = under is not None and not under.default  # (the default show has no automation to open)
         if pointing != self._pointing:
             self._pointing = pointing
             self.setCursor(Qt.CursorShape.PointingHandCursor if pointing else Qt.CursorShape.ArrowCursor)
@@ -375,7 +378,7 @@ class WeekGrid(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         block = self.block_at(event.position()) if event.button() == Qt.MouseButton.LeftButton else None
-        if block is not None:
+        if block is not None and not block.default:
             self.view.automation_clicked.emit(block.automation_id)
             event.accept()
             return
@@ -395,6 +398,7 @@ class ScheduleView(QWidget):
         self._fixed_now: datetime | None = None
         self._automations: list[Automation] = []
         self._shows: dict[str, str] = {}
+        self._default_show = ""  # (Settings' default show: it fills the gaps, M14)
         self._colours: dict[str, str] = {}
         self._week = monday_of(self.now().date())
         self._following = True  # showing this week, so it moves on to the next one with the clock
@@ -467,14 +471,16 @@ class ScheduleView(QWidget):
         self._fixed_now = now
         self._tick()
 
-    def set_data(self, automations: Show | Iterable[Automation], shows: Mapping[str, str] | None) -> None:
-        """The global automations (their Show, or a list in run order) and the shows there are (id -> name). It's cheap
-        to call again: nothing is worked out unless they changed."""
+    def set_data(self, automations: Show | Iterable[Automation], shows: Mapping[str, str] | None,
+                 default_show: str = "") -> None:
+        """The global automations (their Show, or a list in run order), the shows there are (id -> name), and the
+        default show's id (M14: it fills the gaps, lighter). It's cheap to call again: nothing is worked out unless
+        they changed."""
         ordered = automations.ordered_automations() if isinstance(automations, Show) else list(automations)
         names = dict(shows or {})
-        if ordered == self._automations and names == self._shows:
+        if ordered == self._automations and names == self._shows and default_show == self._default_show:
             return
-        self._automations, self._shows = ordered, names
+        self._automations, self._shows, self._default_show = ordered, names, default_show
         self._recompute()
 
     def colour_of(self, item: Block | Unplaced) -> str:
@@ -526,7 +532,8 @@ class ScheduleView(QWidget):
     # ------------------------------------------------------------ filling it in
 
     def _recompute(self) -> None:
-        self.blocks, self.unplaced = week_schedule(self._automations, self._shows, self._week, DAYS_SHOWN, self._local_time)
+        self.blocks, self.unplaced = week_schedule(self._automations, self._shows, self._week, DAYS_SHOWN, self._local_time,
+                                                   self._default_show)
         # (if the shows couldn't be listed, each show named by an action still gets its own colour)
         self._colours = show_colours(self._shows or [_show_key(item) for item in [*self.blocks, *self.unplaced]])
         self._fill_unplaced()

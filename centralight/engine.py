@@ -81,6 +81,7 @@ from .commands import (
     SetAutomationEnabled,
     SetAutomationsPaused,
     SetCountdownLength,
+    SetDefaultShow,
     SetGlobalAutomations,
     SetHouse,
     SetIdentify,
@@ -811,6 +812,8 @@ class Engine:
         elif isinstance(command, SwapShow):
             self._swap_show(command.show)
         elif isinstance(command, LoadShow):
+            if not command.automation:
+                self._global_runner.manual_load()  # (a person's choice: the default show doesn't replace it, M14)
             self._load_show(command.show, now)
             self._after_load_done(now)  # (a global automation's actions after "Load a show": in the show it loaded)
         elif isinstance(command, RequestShow):
@@ -842,6 +845,8 @@ class Engine:
             self.countdown_seconds = min(float(MAX_COUNTDOWN), max(0.0, float(command.seconds)))
             for runner in (self._global_runner, self._runner):  # (shorter now: what's counting down happens within it)
                 runner.cap_countdowns(now, self.countdown_seconds)
+        elif isinstance(command, SetDefaultShow):
+            self._global_runner.default_show = str(command.show or "").strip()
         elif isinstance(command, CountdownAction):
             self._countdown_pressed(command.what, command.countdown_id, now)
         elif isinstance(command, QuietAutomations):

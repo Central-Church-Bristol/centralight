@@ -64,6 +64,7 @@ class Block:
     show_id: str = ""  # the show's id ("" if it isn't one of the shows given)
     clash_with: tuple[str, ...] = ()  # the names of the automations it clashes with
     missing: bool = False  # there's no show by that name, so nothing loads (only said when the shows are known)
+    default: bool = False  # the default show (Settings, M14) in the time no automation loads one: drawn lighter
 
     @property
     def moment(self) -> bool:
@@ -90,11 +91,12 @@ def monday_of(day: date) -> date:
 
 def week_schedule(automations: Show | Iterable[Automation], shows: Mapping[str, str] | None, week_start: date,
                   days: int = 7, local_time: Callable[[float], datetime] = datetime.fromtimestamp,
-                  ) -> tuple[list[Block], list[Unplaced]]:
+                  default_show: str = "") -> tuple[list[Block], list[Unplaced]]:
     """The shows the automations load from week_start's midnight for `days` days (blocks, in time order), and the
     "Load a show" actions whose trigger can't go on a calendar (in the automations' order).
     automations: the global automations (their Show, or a list in their run order). shows: show id -> name.
-    local_time: the PC's clock (seconds since 1970 -> local time), to find a time the clocks skip."""
+    local_time: the PC's clock (seconds since 1970 -> local time), to find a time the clocks skip.
+    default_show: its id (Settings, M14): it fills the time between the automations' blocks (first in the list)."""
     ordered = automations.ordered_automations() if isinstance(automations, Show) else list(automations)
     names = dict(shows or {})
     infos = [ShowInfo(show_id, name, show_id) for show_id, name in names.items()]
@@ -137,11 +139,37 @@ def week_schedule(automations: Show | Iterable[Automation], shows: Mapping[str, 
             text = f"When it stops matching: {words(conditions)}" if on_end else trigger
             unplaced.append(Unplaced(automation.id, automation.name, label, text, _wanted(action), show_id, missing))
     found.sort(key=lambda item: (item[1].start, item[1].on_end, item[0]))
-    return _mark_clashes([block for _order, block in found]), unplaced
+    blocks = _mark_clashes([block for _order, block in found])
+    if default_show:
+        blocks = _default_blocks(blocks, default_show, names, first, last) + blocks
+    return blocks, unplaced
+
+
+def _default_blocks(blocks: list[Block], default_show: str, names: Mapping[str, str], first: datetime,
+                    last: datetime) -> list[Block]:
+    """The default show (M14) in the gaps: the time no automation's block covers (a show that isn't there loads
+    nothing, so it leaves a gap too). It's what loads at the PC's start and when a schedule ends."""
+    spans = sorted((b.start, b.end) for b in blocks if not b.moment and not b.missing)
+    gaps, at = [], first
+    for start, end in spans:
+        if start > at:
+            gaps.append((at, start))
+        at = max(at, end)
+    if at < last:
+        gaps.append((at, last))
+    known = default_show in names
+    return [Block("", "The default show", default_show, names.get(default_show, default_show), start, end,
+                  continues_before=start <= first, continues_after=end >= last, show_id=default_show if known else "",
+                  missing=bool(names) and not known, default=True)
+            for start, end in gaps if end - start >= MINUTE]
 
 
 def describe_block(block: Block) -> str:
     """A block's tooltip: which show loads when, from which automation, and anything else it needs."""
+    if block.default:
+        return (f"{block.show_label}: the default show (Settings), when no automation loads another\n"
+                f"{block.start:%a %d %b %H:%M} – {block.end:%a %d %b %H:%M}"
+                + ("\nThere's no show by that name, so the last show stays" if block.missing else ""))
     if block.on_end:
         lines = [f"Load {block.show_label} when it stops matching", f"{block.start:%a %d %b %H:%M}"]
     else:

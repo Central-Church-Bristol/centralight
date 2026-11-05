@@ -49,6 +49,7 @@ class Settings:
     audio_release: float = 0.3  # ... and to fall
     black_fade: float = 2.0  # seconds Fade to black takes (the header's button, and the API's default)
     countdown: int = 15  # seconds of countdown before an automation loads a show or goes to black (0 = none)
+    default_show: str = ""  # M14: the show that opens when the PC starts, and comes back after a schedule ("" = none)
     geometry: list[int] | None = None
     maximized: bool = False
     splitters: dict[str, list[int]] = field(default_factory=dict)
@@ -91,6 +92,7 @@ class Settings:
         value = self.black_fade
         self.black_fade = float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and 0.0 <= value <= 60.0 else defaults.black_fade
         self.countdown = _int(self.countdown, defaults.countdown, 0, 60)
+        self.default_show = str(self.default_show).strip() if isinstance(self.default_show, str) else ""
         self.maximized = bool(self.maximized)
         geometry = self.geometry
         if not (isinstance(geometry, list) and len(geometry) == 4 and all(isinstance(v, int) for v in geometry)):

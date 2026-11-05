@@ -434,6 +434,13 @@ Close the app first (it's holding the dongle), then:
         0 % and 60 %: switching vs fading).
   - [ ] Untick a light in **Lights** that's inside the rectangle: it stays off whatever the shape says.
   - [ ] Delete removes the selected mask shape; Ctrl+Z brings it back.
+- [ ] **Default show**: Settings → Starting and quitting → **Default show: Central Church** → OK.
+  - [ ] Automation tab → **Week schedule**: Central Church fills the gaps between the scheduled shows, lighter.
+  - [ ] Make a global automation "Days: today, from now+1 min to now+3 min → Load a show: Evening". When it starts,
+        Evening loads (after its countdown); when it ends, the countdown says "Loading Central Church" and it loads.
+  - [ ] The same again, but load another show from the Show menu while Evening is on: when the automation ends,
+        nothing changes (manual wins).
+  - [ ] Restart the PC: Central Church opens. (Quitting and reopening CentraLight carries on with the show that was on.)
 - [ ] **Which week of the month**: Automation tab → a global automation with Days of the week → tick **Wed**, then
       **1st** beside "weeks:". Its summary says "1st Wed". The **Week schedule** tab shows its block on the first
       Wednesday only: step on with the arrows (the first Wednesday of December is the 2nd). **Every week** puts it

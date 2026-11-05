@@ -459,6 +459,13 @@ def _skipped_start(start: int, previous: datetime | None, local: datetime, wall_
     return False
 
 
+def schedules_a_show(automation: Automation) -> bool:
+    """Does this automation load a show for as long as it matches (a schedule, a feed being lost …)? Not one that runs
+    at a moment ("When CentraLight starts"): that never "stops matching" in a way that means anything."""
+    return (any(isinstance(a, Mapping) and a.get("do") == "load_show" for a in automation.actions)
+            and not any(c.get("type") in EVENTS for c in automation.conditions))
+
+
 def chosen_weeks(cond: Mapping[str, Any]) -> list[str]:
     """A Days of the week condition's weeks of the month, in order ([] = every week)."""
     weeks = cond.get("weeks")
@@ -732,6 +739,9 @@ class AutomationRunner:
         self._held_events: dict[str, frozenset[str]] = {}  # start events kept for automations waiting for the feeds
         self._quiet: set[str] = set()  # just imported: taken as they are at the next check, without running
         self._stopped_at: float | None = None  # when the last CentraLight saved its state (from live.json)
+        # the default show (M14, global automations): it loads when the automation that loaded a show stops matching
+        self.default_show = ""  # its id ("" = none: as before)
+        self.loader: str | None = None  # the automation whose run loaded the show now (None: a person loaded one since)
 
     # --- saving and restoring (live.json)
 
@@ -739,6 +749,7 @@ class AutomationRunner:
         return {
             "paused": self.paused,
             "paused_since": self.paused_since,
+            **({"loader": self.loader} if self.loader else {}),
             "states": {
                 aid: {"matched": s.matched, "since": s.since, "last_run": s.last_run, "tripped": s.tripped}
                 for aid, s in self.states.items()
@@ -757,6 +768,7 @@ class AutomationRunner:
             return
         self._stopped_at = saved_at if isinstance(saved_at, (int, float)) and saved_at > 0 else None
         self.paused = bool(data.get("paused", False))
+        self.loader = str(data["loader"]) if isinstance(data.get("loader"), str) and data["loader"] else None
         since = data.get("paused_since")
         self.paused_since = float(since) if isinstance(since, (int, float)) and self.paused else None
         states = data.get("states")
@@ -780,6 +792,12 @@ class AutomationRunner:
                                                  str(item.get("what", "")), str(item.get("detail", ""))))
 
     # --- control
+
+    def manual_load(self) -> None:
+        """A person loaded a show (the picker, the Stream Deck, the phone page): it stays when the automation that
+        loaded the one before stops matching, and a default show waiting for its countdown doesn't load (M14)."""
+        self.loader = None
+        self.pending = [p for p in self.pending if not p[3].get("_default")]
 
     def set_paused(self, paused: bool, now: float) -> None:
         if paused != self.paused:
@@ -923,6 +941,7 @@ class AutomationRunner:
         # CentraLight wasn't looking for a while (asleep, closed, stuck): see whether new occurrences began meanwhile
         away_since = previous_now if previous_now is not None and situation.now - previous_now > NOT_LOOKING else None
         now_actions: list[tuple[str, dict]] = []
+        ended: Automation | None = None  # the automation that loaded the show, if it stopped matching in this check
         known = set(show.automations)
         for aid in [a for a in self.states if a not in known]:  # deleted: kept a while, in case Undo brings it back
             self._removed[aid] = (self.states.pop(aid), situation.now, self._definitions.pop(aid, None))
@@ -985,12 +1004,31 @@ class AutomationRunner:
             if self.paused:
                 continue  # paused: keep track quietly, run nothing
             if matched:
+                if schedules_a_show(automation):
+                    self.loader = automation.id  # (when it stops matching, the default show may load: M14)
                 now_actions += self._run(automation, list(automation.actions), mono_now, situation.now, "ran", ", ".join(true),
                                          lifts=self._lifts_quit_dark(automation, situation))
-            elif automation.on_end:
-                now_actions += self._run(automation, list(automation.on_end), mono_now, situation.now, "stopped matching",
-                                         count=False)
+            else:
+                if automation.on_end:
+                    now_actions += self._run(automation, list(automation.on_end), mono_now, situation.now, "stopped matching",
+                                             count=False)
+                if automation.id == self.loader:
+                    ended = automation
+        if ended is not None:  # (after them all: another automation may have started loading a show in this check)
+            self.loader = None
+            if self._default_wanted(ended, show):
+                now_actions += self._run(ended, [{"do": "load_show", "show": self.default_show, "_default": True}], mono_now,
+                                         situation.now, "stopped matching: the default show loads", count=False)
         return now_actions
+
+    def _default_wanted(self, ended: Automation, container: Show) -> bool:
+        """The automation that loaded the show has stopped matching: does the default show load now? Not if it hasn't
+        one, if that automation's own "when it stops matching" loads a show (that wins), or if another automation that
+        loads a show matches now (its show stays)."""
+        if not self.default_show or any(isinstance(a, Mapping) and a.get("do") == "load_show" for a in ended.on_end):
+            return False
+        return not any(a.id != ended.id and a.enabled and schedules_a_show(a) and self.states.get(a.id, AutomationState()).matched
+                       for a in container.ordered_automations())
 
     @staticmethod
     def _lifts_quit_dark(automation: Automation, situation: Situation) -> bool:
