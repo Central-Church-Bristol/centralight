@@ -7,9 +7,9 @@ hands-on Console. Windows only.
 
 ## Starting it
 
-Double-click `run.bat` (or `CentraLight.exe`, once `tools\build_launcher.py` has made it). The first time,
-`run.bat` sets up `.venv` with what the app needs
-(from `requirements.txt`) and copies the church fonts (below).
+Double-click `CentraLight.exe` (or `run.bat`). The first time, `run.bat` sets up `.venv` with what the app needs
+(from `requirements.txt`) and copies the church fonts (below); `CentraLight.exe` runs it for you then. Keep the exe
+in the CentraLight folder and put a shortcut to it on the desktop.
 
 - It starts with **Simulated** output: it shows what it would send without touching the lights. To drive them:
   the gear (top right) → **Output** → **Eurolite USB-DMX512 PRO** (or **Art-Net**, to MagicQ or an Art-Net node).
@@ -26,6 +26,17 @@ Double-click `run.bat` (or `CentraLight.exe`, once `tools\build_launcher.py` has
   during services.
 - When the PC has just started, the default show opens (Settings → Starting and quitting: **Last loaded**, a show,
   or **None (lights off)**) with every light black; reopening CentraLight carries on as it was.
+
+### On a new PC
+
+1. Install [Python 3](https://www.python.org/downloads/windows/) (it's built and tested on 3.14) with its `py`
+   launcher, which is on by default: the first start uses it. For Follow screen, install the
+   [NDI Runtime](https://ndi.video/tools/) too.
+2. Get CentraLight: `git clone https://github.com/Central-Church-Bristol/centralight.git` (or download it from GitHub
+   as a zip and unpack it).
+3. Double-click `CentraLight.exe` in that folder. The first time it sets everything up (`.venv` and the packages,
+   from the internet: a few minutes, in a console window), then CentraLight starts; after that it starts straight
+   away. Each PC has its own settings and shows, so copy `Documents\CentraLight Shows` across if you want the shows.
 
 ## What's in it
 
@@ -123,3 +134,5 @@ The app uses the church's Futura PT fonts. They aren't in git: `run.bat` copies 
   icon builders, the Companion module's builder, and `tick_timing.py`.
 - `Assets\` has the logo (`CentraLight Logo.svg` and PNGs at 1024 and 4096 pixels); the app uses the 1024 one, and
   `launcher\icon.ico` and `launcher\clshow.ico` are made from it.
+- `CentraLight.exe` is committed, so a fresh copy starts with a double-click. After a change to the logo or to
+  `launcher\Program.cs`, rebuild it (`.venv\Scripts\python.exe tools\build_launcher.py`) and commit it again.
