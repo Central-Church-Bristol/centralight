@@ -24,6 +24,7 @@ from datetime import date, datetime
 from typing import Any
 
 from PySide6.QtCore import QDate, Qt, QTime, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -847,18 +848,27 @@ class AutomationPage(QWidget):
             return
         self._list_keys[scope] = key
         blocked = view.blockSignals(True)
-        view.clear()
-        for automation_id, name, enabled, text, last, tripped in rows:
-            item = QListWidgetItem(f"{name}  ·  {last}\n{text}")
-            item.setData(Qt.ItemDataRole.UserRole, automation_id)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked if enabled else Qt.CheckState.Unchecked)
-            item.setToolTip(f"{name}\n{text}\n{last}\nTick = on")
-            if tripped:
-                item.setForeground(Qt.GlobalColor.red)
-            view.addItem(item)
-            if automation_id == selected:
-                view.setCurrentItem(item)
+        ids = [row[0] for row in rows]
+        if rows and [view.item(i).data(Qt.ItemDataRole.UserRole) for i in range(view.count())] == ids:
+            # The same automations in the same order: the rows change in place. (A rebuild scrolled the list back to
+            # the top, and on a click it came between the press and the release, so the release picked whatever was
+            # under the pointer by then: the wrong automation, 6 Nov.)
+            for index, (automation_id, name, enabled, text, last, tripped) in enumerate(rows):
+                self._show_row(view.item(index), name, enabled, text, last, tripped)
+                if automation_id == selected and view.currentItem() is not view.item(index):
+                    view.setCurrentItem(view.item(index))
+        else:
+            scrolled = view.verticalScrollBar().value()
+            view.clear()
+            for automation_id, name, enabled, text, last, tripped in rows:
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, automation_id)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                self._show_row(item, name, enabled, text, last, tripped)
+                view.addItem(item)
+                if automation_id == selected:
+                    view.setCurrentItem(item)
+            view.verticalScrollBar().setValue(scrolled)  # (kept: an automation added or moved doesn't jump it to the top)
         if not rows:
             empty = ("No global automations yet.\nThey can load a show at a set time, for example."
                      if scope == GLOBAL else "No show is loaded.\nLoad one from the Show menu to see its automations."
@@ -1046,6 +1056,13 @@ class AutomationPage(QWidget):
         self.reset_button.setVisible(bool(status and status.tripped))
 
     # ------------------------------------------------------------ engine frames
+
+    @staticmethod
+    def _show_row(item: QListWidgetItem, name: str, enabled: bool, text: str, last: str, tripped: bool) -> None:
+        item.setText(f"{name}  ·  {last}\n{text}")
+        item.setCheckState(Qt.CheckState.Checked if enabled else Qt.CheckState.Unchecked)
+        item.setToolTip(f"{name}\n{text}\n{last}\nTick = on")
+        item.setData(Qt.ItemDataRole.ForegroundRole, QColor(Qt.GlobalColor.red) if tripped else None)
 
     def set_frame(self, frame: EngineFrame) -> None:
         view, global_view = frame.automations, frame.global_automations

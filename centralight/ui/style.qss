@@ -538,7 +538,7 @@ QToolButton#ShowPicker::menu-indicator {
     width: 0;
 }
 
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTimeEdit, QPlainTextEdit, QTextEdit {
     background: @window;
     color: @text;
     border: 1px solid @border;
@@ -547,18 +547,65 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {
     selection-background-color: @accent;
     selection-color: @accent_text;
 }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus, QTextEdit:focus {
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTimeEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {
     border-color: @accent;
 }
-QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QTimeEdit:disabled {
     color: @text_3;
 }
-QDoubleSpinBox#NumberSpin {
+/* A number field's up / down buttons (6 Nov): room of their own, a divider, and arrow pictures beside this file
+   (they were squeezed to a sliver with dark arrows). SVGs, so they're sharp at every scaling. */
+QSpinBox, QDoubleSpinBox, QTimeEdit {
+    padding-right: 26px;
+}
+QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 22px;
+    border: none;
+    border-left: 1px solid @border;
+    background: transparent;
+}
+QAbstractSpinBox::up-button {
+    subcontrol-position: top right;
+    border-top-right-radius: 6px;
+}
+QAbstractSpinBox::down-button {
+    subcontrol-position: bottom right;
+    border-bottom-right-radius: 6px;
+}
+QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {
+    background: @card_hover;
+}
+QAbstractSpinBox::up-arrow {
+    image: url("@ui_dir/spin_up.svg");
+    width: 10px;
+    height: 6px;
+}
+QAbstractSpinBox::down-arrow {
+    image: url("@ui_dir/spin_down.svg");
+    width: 10px;
+    height: 6px;
+}
+QAbstractSpinBox::up-arrow:disabled, QAbstractSpinBox::up-arrow:off {
+    image: url("@ui_dir/spin_up_off.svg");
+}
+QAbstractSpinBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:off {
+    image: url("@ui_dir/spin_down_off.svg");
+}
+/* The compact fields (the Editor's, the automations', the variables'): no buttons, as before; type, scroll or drag */
+QSpinBox#NumberSpin, QDoubleSpinBox#NumberSpin {
     padding: 4px 6px;
 }
+QSpinBox#NumberSpin::up-button, QSpinBox#NumberSpin::down-button,
 QDoubleSpinBox#NumberSpin::up-button, QDoubleSpinBox#NumberSpin::down-button {
     width: 0px;
     border: none;
+}
+QSpinBox#NumberSpin::up-arrow, QSpinBox#NumberSpin::down-arrow,
+QDoubleSpinBox#NumberSpin::up-arrow, QDoubleSpinBox#NumberSpin::down-arrow {
+    image: none;
+    width: 0px;
+    height: 0px;
 }
 QComboBox QAbstractItemView {
     background: @card;

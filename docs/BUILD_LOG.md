@@ -70,6 +70,7 @@ never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 | The final 3-hour soak, of the version for Sunday (`d5ea6ac`: all of the above) | **done** (5 Nov, 22:44; no errors; every live command answered; memory level after 40 minutes; its higher CPU is NDI's, checked) |
 | A check at 1920×1080 (what Media Background Pane sends since its update of 5 Nov) | **done** (6 Nov, 00:10; fine: about 20 % of one core, every picture arriving, every tick on time) |
 | Your report of 6 Nov: a start-up fade froze, then jumped to full. The start-up automations now wait for the window | **done** (6 Nov, 19:58; 1096 tests pass) |
+| **M18: your changes of 6 Nov, evening** — batch 1: number fields' arrows, Settings tidied (Countdown timer, Shows and automations, Console), automation lists that keep their place | **done** (6 Nov, 21:20; 1102 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -118,6 +119,31 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
+
+## M18, batch 1: arrows, Settings, the automation lists (6 Nov, evening)
+
+Your three quick changes of the evening, and a tidy-up of Settings the supervising session suggested. The other three
+(the Overlay button set per input, dates as day, month and year, and the PC shutting down) wait for the next session.
+- **Number fields show their arrows.** The up / down buttons in Settings' number fields (Audio's Rise and Fall, the
+  countdown, Fade to black…) were squeezed into a sliver with dark arrows. They have room of their own now, a divider,
+  and light arrows (pictures, so they're sharp at every scaling: checked at 100, 150 and 200 %). The automations' time
+  fields look like the others now, arrows too. **To check:** the small number fields in the Editor, the automation
+  conditions and the variables still have no arrows, as before (you type, scroll or drag in them); say if you'd like
+  arrows there too.
+- **Settings, tidied** (the stored settings don't change, so nothing to convert):
+  - **Cut / Fade to black** holds only Fade to black's time now.
+  - **Shows and automations** (new): **Countdown timer** (it was "Countdown first", under Cut / Fade to black) and
+    **Default show** (it was under Starting and quitting), each with a shorter hint.
+  - **Console** (new): **Release takes** (it was under Cut / Fade to black).
+  - **Starting and quitting**: Start with Windows, and the quit choice now has its label, **When you quit:**.
+  - **Files and diagnostics** (it was "Files") has **Open .clshow files with CentraLight** now.
+  - **Remote: Stream Deck, Companion and phones**: its hint names Companion's CentraLight module and where its steps
+    are.
+- **Clicking an automation in a scrolled list picks that one.** Clicking one rebuilt both lists, and a rebuilt list
+  jumps back to the top: between the mouse going down and coming up, so the click landed on whatever was under the
+  pointer by then. The lists now change their rows in place (and keep their place when an automation is added or a
+  "last ran" changes). Both lists, the show's and the global one. A test clicks near the bottom of a scrolled list of
+  30: the old code jumped and picked the wrong one.
 
 ## A start-up fade that froze (6 Nov, evening)
 

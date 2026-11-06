@@ -305,7 +305,7 @@ in `Documents\CentraLight Shows`. Changes save by themselves: there's no Save.
       (The phone page shows the same banner.)
 - [ ] Set its time again and try the buttons when the banner shows: **Skip** (nothing happens this time; it runs
       as normal next time), **Wait 10 min** (the banner goes, and comes back 10 minutes later), **Do it now**.
-      Settings → **Countdown first** changes the 15 s (0 = none). **Run now** never counts down. Set its time once more
+      Settings → Shows and automations → **Countdown timer** changes the 15 s (None = none). **Run now** never counts down. Set its time once more
       and, while the banner counts, switch the automation off (its tick in the list): the banner goes, and nothing
       fades. Delete it afterwards.
 - [ ] **Week schedule**: Automation tab → the **Week schedule** tab (beside **Automation**): the global automation
@@ -448,7 +448,7 @@ The old console script (`ndi_pixel_mapper.py`) went with the clean-up (M17), so 
 - [ ] **Show variables, keep or reset**: Editor → Show variables → a number variable on the Dashboard → **When the show
       loads: Go back to its starting value**. Set it to something else on the Dashboard, load another show, then load
       this one again: it's back at its starting value. One left on **Keep its last value** keeps what you set.
-- [ ] **Default show**: Settings → Starting and quitting → **Default show: Central Church** → OK.
+- [ ] **Default show**: Settings → Shows and automations → **Default show: Central Church** → OK.
   - [ ] Automation tab → **Week schedule**: Central Church fills the gaps between the scheduled shows, lighter.
   - [ ] Make a global automation "Days: today, from now+1 min to now+3 min → Load a show: Evening". When it starts,
         Evening loads (after its countdown); when it ends, the countdown says "Loading Central Church" and it loads.
@@ -459,7 +459,7 @@ The old console script (`ndi_pixel_mapper.py`) went with the clean-up (M17), so 
   - [ ] Restart the PC: Central Church opens. (Quitting and reopening CentraLight carries on with the show that was on.)
   - [ ] Restart the PC while a global automation that loads another show is under way (one for the next hour, say):
         Central Church opens, then that automation's show loads straight after.
-- [ ] **No show (None (lights off))**: Settings → Starting and quitting → **Default show**: it lists **Last loaded**,
+- [ ] **No show (None (lights off))**: Settings → Shows and automations → **Default show**: it lists **Last loaded**,
       **None (lights off)** and your shows. Choose **None (lights off)** → OK.
   - [ ] Show ▾ → **None (lights off)**: the lights fade off (the Festoon and Key lights too), then every tab but
         Automation says **No show loaded**, with a Load button for each show, New show… and Import a show…, and a line
@@ -538,6 +538,16 @@ The old console script (`ndi_pixel_mapper.py`) went with the clean-up (M17), so 
       hand within 10 minutes of the PC starting. Nothing changes on the lights until the window appears (or the tray
       icon, when Windows starts it); then the start-up automations run, and Default's "Start Up" fades its input in
       smoothly: no stop part-way, no jump to full.
+
+## 20f. M18, batch 1 (6 Nov, evening)
+
+- [ ] Settings (the gear): every number field with up / down buttons shows clear arrows (Audio's **Rise** and **Fall**,
+      **Fade to black takes**, **Countdown timer**…), and clicking them changes the number.
+- [ ] The groups: **Cut / Fade to black** (just its time), **Shows and automations** (**Countdown timer**, **Default
+      show**), **Console** (**Release takes**), **Starting and quitting** (**When you quit:**), **Files and
+      diagnostics** (the .clshow tick). Change the Countdown timer, **OK**, open Settings again: it kept it.
+- [ ] Automation tab: with enough automations to scroll (make a few if needed), scroll down and click one near the
+      bottom: that one opens, and the list stays where it was. Try the show's list too.
 
 ## 21. Afterwards: updating the main folder
 

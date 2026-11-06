@@ -24,7 +24,7 @@ in the CentraLight folder and put a shortcut to it on the desktop.
   options → turn off **Require Windows Hello sign-in for Microsoft accounts**, then try again.) Anyone who switches
   the PC on then gets the desktop without a password. Windows Update's **active hours** stop it restarting the PC
   during services.
-- When the PC has just started, the default show opens (Settings → Starting and quitting: **Last loaded**, a show,
+- When the PC has just started, the default show opens (Settings → Shows and automations: **Last loaded**, a show,
   or **None (lights off)**) with every light black; reopening CentraLight carries on as it was.
 
 ### On a new PC

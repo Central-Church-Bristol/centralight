@@ -154,7 +154,7 @@ class SettingsDialog(QDialog):
         ndi_form.addRow("Feed for new NDI elements", self.ndi_default)
 
         # --- the remote (Stream Deck, phones)
-        remote_box = QGroupBox("Remote: Stream Deck and phones")
+        remote_box = QGroupBox("Remote: Stream Deck, Companion and phones")
         self.remote_port = QSpinBox()
         self.remote_port.setRange(1024, 65535)
         self.remote_port.setValue(settings.remote_port)
@@ -181,7 +181,9 @@ class SettingsDialog(QDialog):
         remote_layout.addLayout(remote_form)
         remote_layout.addWidget(hint(
             "In the Stream Deck app, add a Website action with a URL like http://127.0.0.1:8746/api/input/warm-white "
-            "and tick “GET request in background”. The remote page lists every URL."
+            "and tick “GET request in background”. The remote page lists every URL. With Bitfocus Companion, "
+            "CentraLight's own module does more (keys that light up, presets): in Companion, Modules → Import module "
+            "package → companion\\centralight-1.0.0.tgz in the CentraLight folder (companion\\README.md has the steps)."
         ))
         remote_buttons = QHBoxLayout()
         remote_buttons.addWidget(open_remote)
@@ -249,23 +251,31 @@ class SettingsDialog(QDialog):
         black_form.addRow(hint("The header's buttons: a click sends the colour lights to black; holding one sends "
                                "everything, the Festoon and Key lights too. The next input lights things again. "
                                "The Stream Deck's /api/black/fade takes this time too, unless its URL gives ?seconds=."))
-        self.countdown = QSpinBox()
-        self.countdown.setRange(0, 60)
-        self.countdown.setSuffix(" s")
-        self.countdown.setSpecialValueText("None")
-        self.countdown.setValue(settings.countdown)
-        black_form.addRow("Countdown first", self.countdown)
         self.release_fade = QDoubleSpinBox()
         self.release_fade.setRange(0.0, 60.0)
         self.release_fade.setSingleStep(0.5)
         self.release_fade.setDecimals(1)
         self.release_fade.setSuffix(" s")
         self.release_fade.setValue(settings.release_fade)
-        black_form.addRow("Console: Release takes", self.release_fade)
-        black_form.addRow(hint("Before an automation loads a show, or cuts or fades to black, a banner counts down (on the "
-                               "window and the phone page): Load now, Wait 10 min or Skip. A change that's on a schedule "
-                               "still lands on time: its banner starts early. Not for Run now, or just after CentraLight "
-                               "starts. 0 = no countdown."))
+        console_box = QGroupBox("Console")  # (6 Nov: it was under Cut / Fade to black)
+        console_form = QFormLayout(console_box)
+        console_form.addRow("Release takes", self.release_fade)
+        console_form.addRow(hint("Release and Release all hand the lights back to the inputs over this time."))
+
+        # (6 Nov: the countdown was "Countdown first", under Cut / Fade to black; the default show was under Starting
+        # and quitting. Both are about shows changing by themselves.)
+        automations_box = QGroupBox("Shows and automations")
+        automations_form = QFormLayout(automations_box)
+        self.countdown = QSpinBox()
+        self.countdown.setRange(0, 60)
+        self.countdown.setSuffix(" s")
+        self.countdown.setSpecialValueText("None")
+        self.countdown.setValue(settings.countdown)
+        automations_form.addRow("Countdown timer", self.countdown)
+        automations_form.addRow(hint("Before an automation loads a show, or cuts or fades to black, a banner counts down "
+                                     "this long (in the window and on the phone page): Load now, Wait 10 min or Skip. A "
+                                     "change on a schedule still lands on time: its banner starts early. Not for Run now, "
+                                     "or just after CentraLight starts. None = no countdown."))
 
         quit_box = QGroupBox("Starting and quitting")
         self.quit_action = QComboBox()
@@ -285,25 +295,20 @@ class SettingsDialog(QDialog):
         if settings.default_show and self.default_show.findData(settings.default_show) < 0:
             self.default_show.addItem(f"{settings.default_show} (not there any more)", settings.default_show)
         self.default_show.setCurrentIndex(max(0, self.default_show.findData(settings.default_show)))
-        default_row = QHBoxLayout()
-        default_row.addWidget(QLabel("Default show"))
-        default_row.addWidget(self.default_show, 1)
+        automations_form.addRow("Default show", self.default_show)  # (6 Nov: it was under Starting and quitting)
+        automations_form.addRow(hint("Opens when the PC starts, and loads again when a global automation that loaded "
+                                     "another show stops matching. Reopening after a quit or a crash carries on as it was."))
         quit_layout = QVBoxLayout(quit_box)
-        quit_layout.addLayout(default_row)
-        quit_layout.addWidget(hint("It opens when the PC starts (instead of the last show), and loads again when a global "
-                                   "automation that loaded another show stops matching (with the countdown), unless "
-                                   "someone has loaded a show by hand since. None (lights off) is no show at all: every "
-                                   "light off, the global automations still on. Global automations still win: one that's "
-                                   "under way loads its show. Reopening CentraLight after a quit or a crash carries on as it "
-                                   "was."))
         quit_layout.addWidget(self.start_with_windows)
-        quit_layout.addWidget(self.clshow_files)
         quit_layout.addWidget(hint("Closing the window keeps CentraLight running in the tray; Quit is in the tray icon's menu."))
-        quit_layout.addWidget(self.quit_action)
+        quit_row = QHBoxLayout()
+        quit_row.addWidget(QLabel("When you quit:"))
+        quit_row.addWidget(self.quit_action, 1)
+        quit_layout.addLayout(quit_row)
         quit_layout.addWidget(hint("The Eurolite keeps showing the last look until something else is sent."))
 
         # --- files
-        files_box = QGroupBox("Files")
+        files_box = QGroupBox("Files and diagnostics")
         show_path = ElidedLabel(show_folder or "(none)")
         show_path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         open_show = QPushButton("Open show folder")
@@ -327,6 +332,7 @@ class SettingsDialog(QDialog):
         files_layout.addWidget(QLabel("The loaded show's folder"))
         files_layout.addWidget(show_path)
         files_layout.addLayout(files_buttons)
+        files_layout.addWidget(self.clshow_files)  # (6 Nov: it was under Starting and quitting)
 
         # --- AI
         ai_box = QGroupBox("AI: inputs written by an AI")
@@ -366,6 +372,8 @@ class SettingsDialog(QDialog):
         content_layout.addWidget(remote_box)
         content_layout.addWidget(audio_box)
         content_layout.addWidget(black_box)
+        content_layout.addWidget(automations_box)
+        content_layout.addWidget(console_box)
         content_layout.addWidget(quit_box)
         content_layout.addWidget(files_box)
         content_layout.addWidget(ai_box)
