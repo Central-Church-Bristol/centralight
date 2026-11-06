@@ -25,7 +25,8 @@ def follow_screen_input() -> Input:
 
 
 def add_starter_inputs(show: Show) -> Show:
-    """A show with no inputs at all gets "Follow screen" (saved to its inputs folder)."""
+    """A show with no inputs at all gets "Follow screen" (saved to its inputs folder). For the soak and timing tools
+    and tests: since 6 Nov a new show starts with no inputs (you asked for that), and an empty show stays empty."""
     if show.inputs or show.read_only or not show.folder:
         return show
     inp = follow_screen_input()
@@ -89,14 +90,11 @@ def create_show(folder: Path, name: str = "Central Church") -> Show:
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "inputs").mkdir(exist_ok=True)
     save_whole_show(show_from_patch(name=name), folder)
-    return add_starter_inputs(load_show(folder))
+    return load_show(folder)  # (no inputs: the Dashboard offers + New input, 6 Nov)
 
 
 def open_or_create_show(folder: Path, name: str | None = None) -> Show:
     folder = Path(folder)
     if (folder / SHOW_FILE).exists():
-        show = load_show(folder)
-        if not show.inputs and not show.input_errors:
-            show = add_starter_inputs(show)
-        return show
+        return load_show(folder)  # (a show with no inputs stays so: 6 Nov)
     return create_show(folder, name or folder.name)

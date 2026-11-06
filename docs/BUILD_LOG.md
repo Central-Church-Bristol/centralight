@@ -74,6 +74,7 @@ never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 | — batch 2: Send to Overlay set per input: stays until cleared (as before) or only while held; the API, phone page and Companion follow it | **done** (6 Nov, 22:10; 1158 tests pass) |
 | — batch 3: dates as a day, month and year, each with a tick and a range on demand; From … to … kept for spans over a month end; Saturday's automation unchanged | **done** (6 Nov, 22:10; 1158 tests pass) |
 | — the shutdown fade, fixed after its first real try: CentraLight now asks Windows to deal with it first | **done** (6 Nov, 22:47; 1161 tests pass) |
+| — your change of 6 Nov, late: a new show starts with no inputs (no "Follow screen") | **done** (6 Nov, 23:30; 1162 tests pass) |
 | — batch 4: the PC shutting down or going to sleep: two global automation conditions, so the lights can fade first; never held dark after | **done** (6 Nov, 22:10; 1158 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
@@ -123,6 +124,15 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
+
+## A new show starts with no inputs (6 Nov, late)
+
+As you asked: **New show** (the Show menu, and the "No show loaded" card's New show…) makes a show with the lights and
+layouts and **no inputs**, not even "Follow screen": the Dashboard shows just **+ New input**. Still no automations.
+- **The very first run** (no shows yet) makes its show the same way, with nothing on Base: the lights start black
+  until you send something. (It used to put Follow screen on Base.)
+- **A show with no inputs stays so:** opening one no longer puts Follow screen back in it.
+- **Unchanged:** your existing shows, Duplicate (it copies the inputs), imports and .clshow files.
 
 ## The shutdown fade, fixed after its first real try (6 Nov, late)
 

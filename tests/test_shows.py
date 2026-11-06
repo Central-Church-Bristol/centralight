@@ -47,11 +47,12 @@ from centralight.global_automations import GLOBAL_DIR, ORDER_FILE, load_global_a
 from centralight.layouts import import_summary, save_layout_as
 from centralight.live_state import HouseSetting, LiveState
 from centralight.model import Automation, GlobalVar, Input, MapSpot, Show
-from centralight.new_show import create_show, show_from_patch
+from centralight.new_show import show_from_patch
 from centralight.show_io import SHOW_FILE, ShowError, automation_from_dict, automation_to_dict, freeze, load_show, save_whole_show
 from centralight.shows import delete_show, duplicate_show, find_show, folder_name, list_shows, new_folder, new_show, unique_name
 from tests.fakes import FakeOutput
 from tests.test_automations import Clocks, automation, uk_local
+from tests.starter import create_show  # (their shows keep Follow screen, 6 Nov)
 
 RED, GREEN, BLUE = "#FF0000", "#00FF00", "#0000FF"
 
@@ -402,7 +403,19 @@ class ShowFolderTests(FilesCase):
             self.assertEqual(find_show(self.root, wanted).id, "evening-service", wanted)
         self.assertIsNone(find_show(self.root, "Christmas"))
 
-    def test_a_new_show_has_the_lights_and_layouts_and_follow_screen_only(self) -> None:
+    def test_a_first_run_and_an_empty_show_have_no_inputs(self) -> None:
+        from centralight.engine import Engine
+        from centralight.new_show import FOLLOW_SCREEN_ID, open_or_create_show
+        from tests.fakes import FakeOutput
+
+        first = open_or_create_show(self.root / "Central Church")  # (the very first run: no shows yet)
+        self.assertEqual(dict(first.inputs), {})  # (6 Nov: no "Follow screen"; the Dashboard offers + New input)
+        self.assertEqual(dict(open_or_create_show(self.root / "Central Church").inputs), {})  # (and it stays empty)
+        engine = Engine(first, FakeOutput(), None, initial_base=FOLLOW_SCREEN_ID)
+        engine.tick()
+        self.assertIsNone(engine._base.current)  # (Base starts black)
+
+    def test_a_new_show_has_the_lights_and_layouts_and_no_inputs(self) -> None:
         current = create_show(self.root / "Morning", "Morning")
         photo = self.root / "Morning" / "media" / "room-abc.jpg"
         photo.parent.mkdir(parents=True, exist_ok=True)
@@ -419,7 +432,7 @@ class ShowFolderTests(FilesCase):
         self.assertEqual(made.fixtures, current.fixtures)
         self.assertEqual({lay.name for lay in made.layouts}, {lay.name for lay in current.layouts})
         self.assertTrue((folder / "media" / "room-abc.jpg").is_file())  # the room photo came too
-        self.assertEqual(list(made.inputs), ["follow-screen"])
+        self.assertEqual(list(made.inputs), [])  # (6 Nov: no inputs, not even Follow screen)
         self.assertEqual((dict(made.automations), made.globals), ({}, ()))
         self.assertEqual(unique_name(self.root, "evening"), "evening 2")
 
@@ -563,7 +576,7 @@ class ShowPickerTests(WindowCase):
         with mock.patch.object(QInputDialog, "getText", return_value=("Evening", True)):
             window.ask_new_show()
         self.assertEqual(window.document.show.name, "Evening")
-        self.assertEqual(list(window.document.show.inputs), ["follow-screen"])
+        self.assertEqual(list(window.document.show.inputs), [])  # (a new show: no inputs, 6 Nov)
         with mock.patch.object(QInputDialog, "getText", return_value=("Evening copy", True)), \
                 mock.patch.object(QMessageBox, "information"):
             window.ask_duplicate_show()

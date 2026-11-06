@@ -18,7 +18,7 @@ from PySide6.QtGui import QColor, QGuiApplication, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QFileDialog, QPushButton
 
-from centralight.new_show import create_show, show_from_patch
+from centralight.new_show import show_from_patch
 from centralight.settings import Settings
 from centralight.show_edit import add_global
 from centralight.show_io import input_to_dict
@@ -31,6 +31,7 @@ from tests.fakes import FakeEngine
 from tests.gui_fixtures import with_inputs
 from tests.qt_support import process, qt_app
 from tests.test_ai_guide import RealisticReplyTests
+from tests.starter import create_show  # (their shows keep Follow screen, 6 Nov)
 
 REPLY = RealisticReplyTests.REPLY  # a chat AI's answer: words, a ```json block, a // comment, a trailing comma
 

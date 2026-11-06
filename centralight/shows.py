@@ -148,11 +148,8 @@ def set_name_in_file(folder: Path, name: str) -> None:
 
 
 def new_show(current: Show, root: Path, name: str) -> Path:
-    """A new show with the current show's lights and layouts (room photos too), "Follow screen", and nothing else:
-    no other inputs, show variables or automations. Returns its folder."""
-    from .new_show import add_starter_inputs
-    from .show_io import load_show
-
+    """A new show with the current show's lights and layouts (room photos too), and nothing else: no inputs (since
+    6 Nov: the Dashboard offers + New input), show variables or automations. Returns its folder."""
     name = unique_name(root, name)
     folder = new_folder(root, name)
     folder.mkdir(parents=True)
@@ -169,7 +166,6 @@ def new_show(current: Show, root: Path, name: str) -> Path:
     show = Show(name=name, identify_seed=current.identify_seed, fixtures=current.fixtures, house=current.house,
                 layouts=current.layouts, active_layout=current.active_layout)
     save_whole_show(show, folder)
-    add_starter_inputs(load_show(folder))
     log_info(f"New show “{name}” in {folder}")
     return folder
 

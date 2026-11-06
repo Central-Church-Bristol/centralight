@@ -118,7 +118,7 @@ class NoShowPage(QWidget):
         body.addWidget(self.none_yet)
 
         self.new_button = QPushButton("New show…")
-        self.new_button.setToolTip("A new show with the church's lights and layouts, and “Follow screen”")
+        self.new_button.setToolTip("A new show with the church's lights and layouts, and no inputs yet")
         self.new_button.clicked.connect(self.new_requested.emit)
         self.import_button = QPushButton("Import a show…")
         self.import_button.setToolTip("Import a show from a .clshow file (it comes in as a new show, not loaded)")

@@ -51,7 +51,7 @@ from centralight.global_automations import FORMAT_GLOBAL, GLOBAL_DIR, ORDER_FILE
 from centralight.layouts import save_layout_as
 from centralight.links import FORMAT_LINKS, read_stamps
 from centralight.model import Automation, GlobalVar, Input
-from centralight.new_show import create_show, show_from_patch
+from centralight.new_show import show_from_patch
 from centralight.settings import Settings
 from centralight.show_io import (
     MAX_INPUT_BYTES,
@@ -64,6 +64,7 @@ from centralight.show_io import (
     show_to_dict,
 )
 from centralight.shows import list_shows, show_id
+from tests.starter import create_show  # (their shows keep Follow screen, 6 Nov)
 
 ROOT = Path(__file__).resolve().parents[1]
 PAINT = "paint/0123456789ab.png"

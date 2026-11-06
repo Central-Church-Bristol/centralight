@@ -14,12 +14,12 @@ from centralight.commands import SwapShow
 from centralight.input_edit import add_element, delete_input, duplicate_input, new_input, set_element_value, update_input
 from centralight.layouts import delete_layout, save_layout_as, switch_layout
 from centralight.model import MapSpot
-from centralight.new_show import create_show
 from centralight.show_edit import move_lights, rename_light
 from centralight.show_io import load_show
 from centralight.ui.document import SCOPE_LAYOUT, SCOPE_SHOW, ShowDocument, input_scope, merged_text
 from tests.gui_fixtures import with_inputs
 from tests.qt_support import process, qt_app
+from tests.starter import create_show  # (their shows keep Follow screen, 6 Nov)
 
 
 class RecordingEngine:

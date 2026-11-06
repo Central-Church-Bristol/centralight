@@ -585,6 +585,11 @@ The old console script (`ndi_pixel_mapper.py`) went with the clean-up (M17), so 
       the lights fade before the PC goes off. After the next start, session.log has "Windows is shutting down,
       restarting or signing out", "Quit, as Windows logs off or shuts down" and "CentraLight closed".
 
+## 20i. A new show starts with no inputs (6 Nov, late)
+
+- [ ] Show ▾ → **New show…**: the new show's Dashboard shows only **+ New input** (no Follow screen). Load your show
+      again afterwards, and delete the test show if you like.
+
 ## 21. Afterwards: updating the main folder
 
 Everything is committed on the branch `claude/centralight-gui` (nothing on `main`, nothing pushed). The work was

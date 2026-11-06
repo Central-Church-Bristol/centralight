@@ -14,7 +14,7 @@ from centralight.fixtures import PATCH
 
 from centralight import files, show_io
 from centralight.model import Input, Transition
-from centralight.new_show import create_show, open_or_create_show, show_from_patch
+from centralight.new_show import open_or_create_show, show_from_patch
 from centralight.show_io import (
     InputFileError,
     ShowError,
@@ -28,6 +28,7 @@ from centralight.show_io import (
     save_input,
     save_show_file,
 )
+from tests.starter import create_show  # (their shows keep Follow screen, 6 Nov)
 
 
 class TempFolder(unittest.TestCase):

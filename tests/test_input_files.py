@@ -10,12 +10,12 @@ import unittest
 from pathlib import Path
 
 from centralight.input_edit import update_input
-from centralight.new_show import create_show
 from centralight.show_io import automation_to_dict, input_to_dict
 from centralight.ui.document import SCOPE_AUTOMATIONS, SCOPE_SHOW, ShowDocument, input_scope
 from centralight.ui.file_watcher import FolderWatcher
 from tests.gui_fixtures import sample_automations
 from tests.qt_support import process, qt_app
+from tests.starter import create_show  # (their shows keep Follow screen, 6 Nov)
 
 
 class RecordingEngine:

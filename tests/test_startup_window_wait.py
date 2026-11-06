@@ -77,10 +77,7 @@ os.environ["CENTRALIGHT_INSTANCE"] = f"tests-start-{os.getpid()}"
 from centralight.new_show import create_show
 folder = os.path.join(os.environ["CENTRALIGHT_SHOWS"], "Central Church")
 show = create_show(__import__("pathlib").Path(folder))
-inputs = os.path.join(folder, "inputs")
-data = json.load(open(os.path.join(inputs, "follow-screen.json"), encoding="utf-8"))
-data["tracks"][0][0]["source"] = "start-up test: no such source"
-json.dump(data, open(os.path.join(inputs, "follow-screen.json"), "w", encoding="utf-8"))
+inputs = os.path.join(folder, "inputs")  # (a new show has no inputs, so no Follow screen looking for the real feed)
 json.dump({"format": "centralight-input", "version": 1, "id": "default", "name": "Default",
            "tracks": [[{"id": "E1", "kind": "colour"}], [], [], []], "transition": {"kind": "fade", "duration": 4}},
           open(os.path.join(inputs, "default.json"), "w", encoding="utf-8"))

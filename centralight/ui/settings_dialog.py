@@ -146,7 +146,7 @@ class SettingsDialog(QDialog):
         )
         self.output_group.buttonToggled.connect(lambda *_: self._sync_enabled())
 
-        # --- the screen's NDI feed: what new NDI elements (and Follow screen in a new show) follow
+        # --- the screen's NDI feed: what new NDI elements follow
         ndi_box = QGroupBox("Screen feed (NDI)")
         ndi_form = QFormLayout(ndi_box)
         self.ndi_default = QLineEdit(settings.ndi_default)

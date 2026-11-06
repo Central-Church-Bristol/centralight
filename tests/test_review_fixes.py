@@ -14,7 +14,7 @@ from centralight.automations import AutomationRunner, Situation, describe_action
 from centralight.commands import SendToBase
 from centralight.engine import Engine, clamp01
 from centralight.model import Automation
-from centralight.new_show import create_show, show_from_patch
+from centralight.new_show import show_from_patch
 from centralight.output import to_byte
 from centralight.settings import Settings
 from centralight.show_io import automation_to_dict, input_from_dict, input_to_dict, load_automations, load_show
@@ -22,6 +22,7 @@ from centralight.ui.document import SCOPE_AUTOMATIONS, ShowDocument
 from centralight.ui.file_watcher import FolderWatcher
 from tests.fakes import FakeClock, FakeOutput
 from tests.qt_support import qt_app
+from tests.starter import create_show  # (their shows keep Follow screen, 6 Nov)
 
 
 class RecordingEngine:

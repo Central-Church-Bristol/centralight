@@ -52,11 +52,11 @@ def make_video(path: Path, seconds: float = 8.0, fps: int = 30) -> None:
 
 def make_show(shows: Path, source: str) -> None:
     """The soak's show (Follow screen on the test source), plus an input playing the test clip."""
-    from centralight.new_show import create_show
+    from centralight.new_show import add_starter_inputs, create_show
     from centralight.show_io import load_show
 
     folder = shows / "Central Church"
-    create_show(folder)
+    add_starter_inputs(create_show(folder))  # (a new show has no inputs: Follow screen is made here)
     path = folder / "inputs" / "follow-screen.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     data["tracks"][0][0]["source"] = source
