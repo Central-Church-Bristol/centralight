@@ -66,6 +66,7 @@ test('each action sends what its Stream Deck URL does', () => {
 		{ transition: 'wipe', duration: '2.5' },
 	])
 	assert.deepEqual(press('overlay', { input: 'worship-blue' }), ['input/worship-blue/overlay', {}])
+	assert.deepEqual(press('overlay_release', { input: 'worship-blue' }), ['input/worship-blue/overlay/release', {}])
 	assert.deepEqual(press('overlay_clear_input', { input: 'worship-blue' }), ['input/worship-blue/overlay/clear', {}])
 	assert.deepEqual(press('overlay_clear', {}), ['overlay/clear', {}])
 	assert.deepEqual(press('overlay_switch', { state: 'off' }), ['overlay/off', {}])
@@ -190,9 +191,11 @@ test('the presets', () => {
 	assert.ok(presets['base_warm-white'])
 	assert.equal(presets['base_warm-white'].steps[0].down[0].actionId, 'base')
 	assert.equal(presets['overlay_worship-blue'].style.text, 'Worship blue\\n+$(CentraLight PC:copies_worship-blue)')
-	const flash = presets['flash_worship-blue'].steps[0]
-	assert.equal(flash.down[0].actionId, 'overlay')
-	assert.equal(flash.up[0].actionId, 'overlay_clear_input') // (let go: it goes again)
+	// (M18: the key's release lets go of an input set to "Only while held"; the old flash keys went, the input says)
+	const step = presets['overlay_worship-blue'].steps[0]
+	assert.deepEqual(step.down, [{ actionId: 'overlay', options: { input: 'worship-blue' } }])
+	assert.deepEqual(step.up, [{ actionId: 'overlay_release', options: { input: 'worship-blue' } }])
+	assert.equal(Object.keys(presets).filter((id) => id.startsWith('flash_')).length, 0)
 	assert.ok(presets.show_evening)
 	for (const id of ['black_cut', 'black_fade', 'black_cut_all', 'black_fade_all', 'console_release', 'console_tap']) {
 		assert.ok(presets[id], id)

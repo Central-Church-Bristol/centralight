@@ -1376,7 +1376,7 @@ def action_command(action: Mapping[str, Any], show: Show, scope: str = SHOW) -> 
             duration = transition.get("duration", own.duration)
             return SendToBase(input_id, transition=Transition(transition["kind"], _num(duration, own.duration), own.direction, own.softness))
         return SendToBase(input_id)
-    if kind == "overlay":
+    if kind == "overlay":  # (a copy that stays, whatever the input's Send to Overlay says: there's no button to let go)
         return SendToOverlay(action["input"]) if action.get("input") in show.inputs else None
     if kind == "overlay_clear":
         return ClearFromOverlay(input_id=action["input"]) if isinstance(action.get("input"), str) and action.get("input") else None

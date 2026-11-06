@@ -219,7 +219,7 @@ class DashboardPage(QWidget):
     send_requested = Signal(str, bool)  # input id, cut
     clear_base_requested = Signal(bool)  # cut
     overlay_pressed = Signal(str, str)  # input id, tag: Send to Overlay (a new copy on top)
-    overlay_held = Signal(str, str)  # input id, tag: let go after holding Send to Overlay (that copy clears)
+    overlay_held = Signal(str, str)  # input id, tag: Send to Overlay let go, "Only while held" (that copy clears)
     copy_clear_requested = Signal(int)  # copy number: its red box was clicked
     overlay_input_cleared = Signal(str)  # input id: Clear from Overlay (the tile's menu)
     overlay_switched = Signal(bool)  # the Overlay's switch (off hides it without emptying it)

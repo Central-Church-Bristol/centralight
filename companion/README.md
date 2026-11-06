@@ -16,6 +16,11 @@ holding lights. Pressing a button does what CentraLight's Stream Deck URLs do (s
 
 A newer version: import its `.tgz` the same way.
 
+An input set to **Only while held** (its Send to Overlay, in CentraLight's Editor) shows on the Overlay only while its
+key is held down. Its key needs **Release (held inputs)** on its release step: the Overlay presets have it, so a key
+made from one does it. A key dragged from an Overlay preset before this version hasn't got it: drag the preset again,
+or add the action to the key's release. (The Stream Deck app's own Website action only presses, so it can't do this.)
+
 From another computer: tick "Allow other computers" in CentraLight's Settings → Remote, and put that PC's address and
 the key from there in the connection.
 

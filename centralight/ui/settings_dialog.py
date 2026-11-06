@@ -181,9 +181,10 @@ class SettingsDialog(QDialog):
         remote_layout.addLayout(remote_form)
         remote_layout.addWidget(hint(
             "In the Stream Deck app, add a Website action with a URL like http://127.0.0.1:8746/api/input/warm-white "
-            "and tick “GET request in background”. The remote page lists every URL. With Bitfocus Companion, "
-            "CentraLight's own module does more (keys that light up, presets): in Companion, Modules → Import module "
-            "package → companion\\centralight-1.0.0.tgz in the CentraLight folder (companion\\README.md has the steps)."
+            "and tick “GET request in background”. The remote page lists every URL. The Website action only presses, "
+            "so an input whose Send to Overlay is “Only while held” needs Companion or the phone page. With Bitfocus "
+            "Companion, CentraLight's own module does more (keys that light up, presets): in Companion, Modules → Import "
+            "module package → companion\\centralight-1.0.0.tgz in the CentraLight folder (companion\\README.md has the steps)."
         ))
         remote_buttons = QHBoxLayout()
         remote_buttons.addWidget(open_remote)

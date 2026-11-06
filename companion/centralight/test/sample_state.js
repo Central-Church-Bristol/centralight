@@ -12,8 +12,8 @@ module.exports = function sampleState() {
 			{ id: 'evening', name: 'Evening', loaded: false, notes: '' },
 		],
 		inputs: [
-			{ id: 'warm-white', name: 'Warm white' },
-			{ id: 'worship-blue', name: 'Worship blue' },
+			{ id: 'warm-white', name: 'Warm white', overlay: 'stays' },
+			{ id: 'worship-blue', name: 'Worship blue', overlay: 'held' }, // (M18: its Send to Overlay setting)
 		],
 		globals: [
 			{ name: 'Pulse speed', type: 'number', min: 0, max: 2, dashboard: true },

@@ -29,7 +29,7 @@ from .expressions import AUDIO_NAMES, FUNCTIONS, ExpressionError, compile_expres
 from .files import json_text, write_atomic
 from .log import log_info
 from .links import original_problem
-from .model import ROLE_COLOUR, TRACK_COUNT, TRANSITION_KINDS, Input, Show, is_device_name, slugify
+from .model import OVERLAY_MODES, ROLE_COLOUR, TRACK_COUNT, TRANSITION_KINDS, Input, Show, is_device_name, slugify
 from .schema import (
     BLEND_MODES,
     COLOUR_TYPES,
@@ -242,6 +242,9 @@ def input_schema(show: Show) -> dict[str, Any]:
             "end": {"enum": ["hold", "loop", "stop"], "description": "Timed inputs: what happens at the end"},
             "transition": {"type": "object", "description": "How it appears when sent to Base or the Overlay (on the Overlay it also leaves this way)",
                            "properties": _nested(TRANSITION)},
+            "overlay": {"enum": list(OVERLAY_MODES), "description": "What its Send to Overlay button does: \"stays\" (the "
+                        "default, also when it's left out: each press adds a copy that stays until it's cleared) or "
+                        "\"held\" (the copy shows only while the button is held down)"},
             "hotkey": {"type": "string", "description": "A key that sends it to Base, e.g. F5"},
             "ai": {"type": "boolean", "description": "Made by AI (CentraLight sets this)"},
             "house": {"type": "object", "description": "House-light levels (0-1) while it's on Base",
@@ -356,6 +359,9 @@ def guide_text(show: Show, full: bool = True) -> str:
         "- `colour`: its tile's colour on the Dashboard. `name`: shown on the tile.\n"
         "- Optional: `hotkey`, a key such as `\"F5\"` that sends it to Base while CentraLight's window is in front. "
         "Leave out `ai` (CentraLight sets it).\n"
+        "- Optional: `overlay`, what its Send to Overlay button does: `\"stays\"` (the default, also when it's left "
+        "out: each press adds a copy on top that stays until it's cleared) or `\"held\"` (the copy shows only while "
+        "the button is held down, like a flash button). Automations always add a copy that stays.\n"
         "- **Infinite or timed.** Inputs are infinite unless they say otherwise: each track holds one element, which "
         "plays until the input is replaced. A timed input has `\"infinite\": false`, a `length` in seconds and an "
         "`end`: \"hold\" (stay on the last moment; the default), \"loop\" or \"stop\" (leave Base) - on the Overlay a timed "
@@ -909,6 +915,9 @@ def describe_changes(old: Input, new: Input) -> list[str]:
         changes.append(f"Tile colour: {old.colour} → {new.colour}")
     if old.transition != new.transition:
         changes.append(f"Transition: {old.transition.kind} {old.transition.duration:g} s → {new.transition.kind} {new.transition.duration:g} s")
+    if old.overlay != new.overlay:  # (M18)
+        words = {"stays": "stays until cleared", "held": "only while held"}
+        changes.append(f"Send to Overlay: {words.get(old.overlay, old.overlay)} → {words.get(new.overlay, new.overlay)}")
     if dict(old.house) != dict(new.house):
         changes.append("House-light levels changed")
     if [dict(i) for i in old.locals] != [dict(i) for i in new.locals]:

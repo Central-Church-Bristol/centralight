@@ -30,6 +30,11 @@ END_HOLD = "hold"
 END_LOOP = "loop"
 END_STOP = "stop"
 END_BEHAVIOURS = (END_HOLD, END_LOOP, END_STOP)
+# what an input's Send to Overlay button does (M18): each press adds a copy that stays until it's cleared, or the copy
+# shows only while the button is held down (letting go clears it)
+OVERLAY_STAYS = "stays"
+OVERLAY_HELD = "held"
+OVERLAY_MODES = (OVERLAY_STAYS, OVERLAY_HELD)
 TRANSITION_KINDS = ("cut", "fade", "dip", "wipe", "iris", "random")
 GLOBAL_TYPES = ("number", "colour", "switch")
 
@@ -225,6 +230,7 @@ class Input:
     length: float = 10.0
     end: str = END_HOLD
     transition: Transition = Transition()
+    overlay: str = OVERLAY_STAYS  # its Send to Overlay button (M18): "stays" (until cleared) or "held" (while held)
     hotkey: str = ""
     ai: bool = False
     house: Mapping[str, Any] = EMPTY  # fixture id -> level Param

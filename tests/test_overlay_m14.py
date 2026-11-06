@@ -1,12 +1,13 @@
 """M14 item 4: one Overlay instead of Overlays 1-4, driven like a person would: Send to Base and Send to Overlay on each
-tile (a click on the tile itself does nothing), each send a new copy on top (up to 4 of one input), hold Send to
-Overlay for a flash, a red box per copy that clears it, the tile's menu, the padlock, dragging a tile to move it, and
-older automations brought up to date."""
+tile (a click on the tile itself does nothing), each send a new copy on top (up to 4 of one input), Send to Overlay as
+the input says (M18: a copy that stays, or one only while it's held), a red box per copy that clears it, the tile's
+menu, the padlock, dragging a tile to move it, and older automations brought up to date."""
 
 from __future__ import annotations
 
 import time
 import unittest
+from dataclasses import replace
 from unittest import mock
 
 from PySide6.QtCore import QMimeData, QPointF, Qt
@@ -16,10 +17,18 @@ from PySide6.QtTest import QTest
 from centralight.automations import action_command, check_action, describe_action
 from centralight.commands import ClearFromOverlay, ClearOverlay, SendToOverlay
 from centralight.input_edit import move_input
+from centralight.model import OVERLAY_HELD
 from centralight.new_show import show_from_patch
 from tests.gui_fixtures import with_inputs
 from tests.qt_support import process
 from tests.test_gui_editor import EditorTestCase
+
+
+def held_show(*input_ids: str):
+    """The test show, with these inputs' Send to Overlay set to "Only while held" (M18)."""
+    show = with_inputs(show_from_patch())
+    changed = {i: replace(show.inputs[i], overlay=OVERLAY_HELD) for i in input_ids}
+    return show.with_inputs({**show.inputs, **changed}, show.input_order)
 
 
 class TileTests(EditorTestCase):
@@ -59,24 +68,28 @@ class TileTests(EditorTestCase):
         self.assertTrue(tile.overlay_button.isEnabled())
         self.assertEqual(len(tile.boxes.copies()), 3)  # (the boxes to its right moved left)
 
-    def test_hold_send_to_overlay_for_a_flash(self) -> None:
-        window, engine = self.make()
-        tile = window.dashboard.grid.tiles["pillars-purple"]
-        button = tile.overlay_button
+    def test_send_to_overlay_does_what_the_input_says(self) -> None:
+        """M18: no more click-or-hold. A copy that stays (the default), however long it's held; for an input set to
+        "Only while held", a copy that goes when it's let go, however quick the click."""
+        window, engine = self.make(held_show("worship-blue"))
+        button = window.dashboard.grid.tiles["pillars-purple"].overlay_button
         QTest.mousePress(button, Qt.MouseButton.LeftButton)
         self.assertEqual(len(self.frame(window, engine).overlay.copies), 1)  # (on at once: no waiting to see)
         time.sleep(0.55)
         QTest.mouseRelease(button, Qt.MouseButton.LeftButton)
-        self.assertEqual(self.frame(window, engine).overlay.copies, ())  # held: it clears when it's let go
-        QTest.mousePress(button, Qt.MouseButton.LeftButton)
-        QTest.mouseRelease(button, Qt.MouseButton.LeftButton)  # a quick click: it stays
-        self.assertEqual(len(self.frame(window, engine).overlay.copies), 1)
+        self.assertEqual(len(self.frame(window, engine).overlay.copies), 1)  # held a while: it stays all the same
+        held = window.dashboard.grid.tiles["worship-blue"].overlay_button
+        QTest.mousePress(held, Qt.MouseButton.LeftButton)
+        self.assertEqual([c.input_id for c in self.frame(window, engine).overlay.copies], ["pillars-purple", "worship-blue"])
+        QTest.mouseRelease(held, Qt.MouseButton.LeftButton)  # (a quick click: it goes)
+        self.assertEqual([c.input_id for c in self.frame(window, engine).overlay.copies], ["pillars-purple"])
 
     def test_a_held_fourth_copy_still_clears_when_let_go(self) -> None:
-        window, engine = self.make()
+        window, engine = self.make(held_show("pillars-purple"))
         tile = window.dashboard.grid.tiles["pillars-purple"]
         for _ in range(3):
-            QTest.mouseClick(tile.overlay_button, Qt.MouseButton.LeftButton)
+            engine.submit(SendToOverlay("pillars-purple"))  # (copies that stay: from an automation, say)
+        self.frame(window, engine)
         QTest.mousePress(tile.overlay_button, Qt.MouseButton.LeftButton)
         self.assertEqual(len(self.frame(window, engine).overlay.copies), 4)
         self.assertTrue(tile.overlay_button.isEnabled())  # (held: it waits to grey out, so letting go arrives)

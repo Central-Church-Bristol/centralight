@@ -31,6 +31,8 @@ from .model import (
     COLOUR_PATTERN,
     END_BEHAVIOURS,
     END_HOLD,
+    OVERLAY_MODES,
+    OVERLAY_STAYS,
     GLOBAL_TYPES,
     ID_PATTERN,
     is_device_name,
@@ -161,6 +163,8 @@ def input_to_dict(inp: Input) -> dict[str, Any]:
         data["end"] = inp.end
     if inp.transition != Transition():
         data["transition"] = transition_to_dict(inp.transition)
+    if inp.overlay != OVERLAY_STAYS:
+        data["overlay"] = inp.overlay
     if inp.hotkey:
         data["hotkey"] = inp.hotkey
     if inp.ai:
@@ -215,6 +219,9 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
         raise InputFileError(f'"end" must be one of {", ".join(END_BEHAVIOURS)}, not {end!r}')
 
     transition = transition_from_dict(data.get("transition", {}))
+    overlay = data.get("overlay", OVERLAY_STAYS)  # (M18: an input from before it, without one, stays until cleared)
+    if overlay not in OVERLAY_MODES:
+        raise InputFileError(f'"overlay" must be one of {", ".join(OVERLAY_MODES)}, not {overlay!r}')
 
     hotkey = data.get("hotkey", "")
     if not isinstance(hotkey, str):
@@ -246,7 +253,7 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
         tracks.append(())
 
     known = {
-        "format", "version", "id", "name", "colour", "infinite", "length", "end", "transition",
+        "format", "version", "id", "name", "colour", "infinite", "length", "end", "transition", "overlay",
         "hotkey", "ai", "house", "locals", "tracks",
     }
     for key in data:
@@ -261,6 +268,7 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
         length=length,
         end=end,
         transition=transition,
+        overlay=overlay,
         hotkey=hotkey,
         ai=ai,
         house=freeze(house),

@@ -4,7 +4,7 @@
   lists its shapes (add, remove, reorder; the selected shape's settings below), and every
   element has a Lights checklist: untick a light and the element leaves it alone.
 - With nothing selected: the input's own settings (name, colour tag, hotkey, transition in,
-  house-light levels, local variables, Stream Deck URLs) and the Globals tab.
+  what Send to Overlay does, house-light levels, local variables, Stream Deck URLs) and the Globals tab.
 - "=" next to a setting gives it an expression (a formula, e.g. wave(time)); see expression_edit.py.
 
 Every change goes through the show document, so it can be undone; moving a slider is one
@@ -68,7 +68,8 @@ from ..input_edit import (
     split_changes,
     update_input,
 )
-from ..model import END_BEHAVIOURS, END_HOLD, END_LOOP, END_STOP, Input, Show, element_span
+from ..model import (END_BEHAVIOURS, END_HOLD, END_LOOP, END_STOP, OVERLAY_HELD, OVERLAY_MODES, OVERLAY_STAYS, Input, Show,
+                     element_span)
 from ..params import base_value, expression_of, is_keyframed, key_at, neighbour_key, with_base_value, with_expression
 from ..elements import mask_shapes
 from ..schema import MASK_SHAPE, SHAPE, TRANSITION, Spec, element_specs, get_path, has_background, visible
@@ -93,6 +94,7 @@ from .widgets import ElidedLabel, FlowLayout, Panel, discard
 KIND_TITLES = {"colour": "Colour", "paint": "Paint", "image": "Image", "video": "Video", "ndi": "NDI feed", "lights": "Lights"}
 MIN_WIDTH = 340
 END_CHOICES = ((END_HOLD, "Hold the last moment"), (END_LOOP, "Loop"), (END_STOP, "Stop"))
+OVERLAY_CHOICES = ((OVERLAY_STAYS, "Stays until cleared"), (OVERLAY_HELD, "Only while held"))  # (M18)
 _FILLED_KEY = None
 
 
@@ -438,6 +440,17 @@ class DetailsPanel(QScrollArea):
         transition.body.addWidget(hint("How it appears when it's sent to Base or switched on in an overlay."))
         page.addWidget(transition)
 
+        overlay = Panel("Send to Overlay")  # (M18: what its tile's Send to Overlay button does)
+        choice = ChoiceField(OVERLAY_CHOICES)
+        choice.setToolTip("What this input's Send to Overlay button does")
+        choice.edited.connect(lambda value, _final: self._set_overlay(value))
+        self._fields["input:overlay"] = choice
+        overlay.body.addWidget(choice)
+        overlay.body.addWidget(hint("Stays until cleared: each press adds a copy on top; its red box (or Clear all) "
+                                    "clears it. Only while held: the copy shows while the button is held down, and goes "
+                                    "when it's let go (on a Stream Deck, that needs Companion)."))
+        page.addWidget(overlay)
+
         house = Panel("House lights")
         house.body.addWidget(hint("While this input is on Base it sets these. Moving the fader in the header wins until the next input."))
         hform = self._form(house)
@@ -729,6 +742,8 @@ class DetailsPanel(QScrollArea):
                     length.blockSignals(blocked)
                 if "input:end" in self._fields:
                     self._fields["input:end"].set_value(inp.end)
+                if "input:overlay" in self._fields:
+                    self._fields["input:overlay"].set_value(inp.overlay)
                 if self.hotkey is not None and not self.hotkey.hasFocus():
                     self.hotkey.setKeySequence(QKeySequence(inp.hotkey))
                 for spec in TRANSITION:
@@ -1026,6 +1041,9 @@ class DetailsPanel(QScrollArea):
         lines = [f"{inp.name}: Stream Deck URLs (Website action, tick “GET request in background”)",
                  f"Send to Base:  {base}", f"Cut to Base:   {base}/cut"]
         lines += [f"Send to Overlay:  {base}/overlay", f"Clear from Overlay:  {base}/overlay/clear"]
+        if inp.overlay == OVERLAY_HELD:  # (M18: the Website action only presses, so it can't let go)
+            lines += ["Only while held: the Stream Deck app can't let go, so use Companion (its module) or the phone page.",
+                      f"Let go:  {base}/overlay/release"]
         text = "\n".join(lines)
         QGuiApplication.clipboard().setText(text)
         if button is not None:
@@ -1062,6 +1080,12 @@ class DetailsPanel(QScrollArea):
         if inp is not None and value in END_BEHAVIOURS and value != inp.end:
             label = dict(END_CHOICES).get(value, value)
             self._apply(set_length(self.show_data, self.input_id, inp.length, value), f"{inp.name}: at the end, {label.lower()}")
+
+    def _set_overlay(self, value: Any) -> None:
+        inp = self.current_input()
+        if inp is not None and value in OVERLAY_MODES and value != inp.overlay:
+            label = dict(OVERLAY_CHOICES).get(value, value)
+            self._apply(update_input(self.show_data, self.input_id, overlay=value), f"{inp.name}: Send to Overlay, {label.lower()}")
 
     def _set_transition(self, spec: Spec, value: Any) -> None:
         inp = self.current_input()

@@ -4,10 +4,10 @@ A tile shows a mini light map (the live colours while the input is on Base, othe
 the colours it showed last time), its name, and small icons for timed, sound-driven and
 AI-made inputs. A coral border means it's on Base.
 
-Its buttons (M14): Send to Base, and Send to Overlay (each press a new copy on top; held
-down, the copy shows only while it's held). A red box under them for each copy on the
-Overlay: click one to clear that copy. Clicking the tile itself does nothing; dragging it
-moves it. Right-click: more.
+Its buttons (M14): Send to Base, and Send to Overlay (each press a new copy on top, which
+stays until it's cleared; or, for an input set to "Only while held", M18, the copy shows only
+while the button is held down). A red box under them for each copy on the Overlay: click one
+to clear that copy. Clicking the tile itself does nothing; dragging it moves it. Right-click: more.
 Tiles are laid out in rows of equal width that wrap like words, and the grid scrolls
 instead of squashing them.
 """
@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..model import Input, Show
+from ..model import OVERLAY_HELD, Input, Show
 from ..output import RGB
 from . import icons, theme
 from .light_view import rgb_colour
@@ -117,14 +117,14 @@ class MiniLightMap(QWidget):
         painter.end()
 
 
-HOLD_S = 0.5  # seconds: Send to Overlay held longer than this is a flash (its copy clears when it's let go)
 COPY_BOX_HEIGHT = 10
 _tags = itertools.count(1)
 
 
 class HoldButton(QPushButton):
-    """A button that acts as soon as it's pressed (went_down), then says how long it was held when the mouse button
-    comes up, wherever the mouse is by then (let_go). The keyboard (Space) clicks it as usual (clicked)."""
+    """A button that acts as soon as it's pressed (went_down), then says how long it was held when it comes up,
+    wherever the mouse is by then (let_go). Space works the same way (M18), and losing the keyboard (another window
+    in front, say) lets it go too, so nothing stays held by mistake."""
 
     went_down = Signal()
     let_go = Signal(float)  # seconds held
@@ -143,11 +143,23 @@ class HoldButton(QPushButton):
         if self._down_at is None:
             self.setEnabled(usable)
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
+    def _press(self) -> None:
+        if self._down_at is None:
             self._down_at = time.monotonic()
             self.setDown(True)
             self.went_down.emit()
+
+    def _let_go(self) -> None:
+        if self._down_at is not None:
+            held = time.monotonic() - self._down_at
+            self._down_at = None
+            self.setDown(False)
+            self.setEnabled(self._enabled_after)
+            self.let_go.emit(held)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
+            self._press()
             event.accept()
             return
         super().mousePressEvent(event)
@@ -160,14 +172,30 @@ class HoldButton(QPushButton):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton and self._down_at is not None:
-            held = time.monotonic() - self._down_at
-            self._down_at = None
-            self.setDown(False)
-            self.setEnabled(self._enabled_after)
-            self.let_go.emit(held)
+            self._let_go()
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Space:
+            if not event.isAutoRepeat() and self.isEnabled():
+                self._press()
+            event.accept()  # (a key held down repeats: still the one press)
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Space:
+            if not event.isAutoRepeat():
+                self._let_go()
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        self._let_go()  # (a dialog or another window took over while it was held: it's let go)
+        super().focusOutEvent(event)
 
 
 class CopyBoxes(QWidget):
@@ -236,7 +264,7 @@ class CopyBoxes(QWidget):
 class InputTile(QFrame):
     base_requested = Signal(str)  # input id: Send to Base
     overlay_pressed = Signal(str, str)  # input id, tag: Send to Overlay pressed (a copy goes on at once)
-    overlay_held = Signal(str, str)  # input id, tag: let go after holding it (that copy clears)
+    overlay_held = Signal(str, str)  # input id, tag: let go, for an input set to "Only while held" (that copy clears)
     copy_clear_requested = Signal(int)  # copy number: its box was clicked
     drag_requested = Signal(str)  # input id: pressed and moved, to move the tile
     menu_requested = Signal(str, QPoint)  # input id, where (global)
@@ -258,12 +286,9 @@ class InputTile(QFrame):
         self.overlay_button = HoldButton("Send to Overlay")
         self.overlay_button.setObjectName("TileSend")
         self.overlay_button.setProperty("target", "overlay")
-        self.overlay_button.setToolTip("A copy of this input on top of what's showing (up to 4 at once).\n"
-                                       "Hold it down: the copy shows only while it's held, like a flash button")
         self.overlay_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.overlay_button.went_down.connect(self._overlay_down)
+        self.overlay_button.went_down.connect(self._overlay_down)  # (the mouse or Space)
         self.overlay_button.let_go.connect(self._overlay_up)
-        self.overlay_button.clicked.connect(lambda: self.overlay_pressed.emit(self.input.id, ""))  # (Space)
         for button in (self.base_button, self.overlay_button):
             button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self._hold_tag = ""
@@ -331,16 +356,18 @@ class InputTile(QFrame):
         self._full = False
         self.set_input(inp)
 
-    # ---------------------------------------------------------------- Send to Overlay, click or hold
+    # ---------------------------------------------------------------- Send to Overlay, as the input says (M18)
 
     def _overlay_down(self) -> None:
-        self._hold_tag = f"{self.input.id}#{next(_tags)}"
+        """A copy at once. "Only while held": named (tagged), so letting go clears just that one; otherwise it stays."""
+        held = self.input.overlay == OVERLAY_HELD
+        self._hold_tag = f"{self.input.id}#{next(_tags)}" if held else ""
         self.overlay_pressed.emit(self.input.id, self._hold_tag)
 
-    def _overlay_up(self, held: float) -> None:
+    def _overlay_up(self, _held: float) -> None:
         tag, self._hold_tag = self._hold_tag, ""
-        if tag and held >= HOLD_S:
-            self.overlay_held.emit(self.input.id, tag)  # (held: a flash, so its copy clears now)
+        if tag:  # (however briefly: what the input said when it was pressed counts, so a copy never sticks)
+            self.overlay_held.emit(self.input.id, tag)
 
     # ---------------------------------------------------------------- what it shows
 
@@ -351,6 +378,7 @@ class InputTile(QFrame):
         self._badge_labels["timed"].setVisible(not inp.infinite)
         self._badge_labels["ai"].setVisible(inp.ai)
         self._badge_labels["audio"].setVisible(_uses_audio(inp))
+        self._sync_buttons()  # (its Send to Overlay setting: the tooltip says it)
 
     def set_show(self, show: Show) -> None:
         self.map.set_show(show)
@@ -381,8 +409,10 @@ class InputTile(QFrame):
         self.overlay_button.set_usable(not self._locked and not self._full)
         self.overlay_button.setToolTip(
             "It has 4 copies on the Overlay: clear one (its red box) to send another" if self._full and not self._locked
+            else "A copy of this input on top of what's showing, only while this button is held down\n"
+                 "(the input's Send to Overlay setting, in the Editor)" if self.input.overlay == OVERLAY_HELD
             else "A copy of this input on top of what's showing (up to 4 at once).\n"
-                 "Hold it down: the copy shows only while it's held, like a flash button")
+                 "It stays until it's cleared: its red box below, or Clear all")
 
     # ---------------------------------------------------------------- size
 
@@ -570,7 +600,7 @@ class InputGrid(QWidget):
     send_requested = Signal(str, bool)  # input id, cut
     menu_requested = Signal(str, QPoint)
     overlay_pressed = Signal(str, str)  # input id, tag: Send to Overlay
-    overlay_held = Signal(str, str)  # input id, tag: let go after holding it
+    overlay_held = Signal(str, str)  # input id, tag: let go ("Only while held": that copy clears)
     copy_clear_requested = Signal(int)  # copy number
     reorder_requested = Signal(str, int)  # input id, its new place among the tiles
     edit_requested = Signal(str)
@@ -621,7 +651,7 @@ class InputGrid(QWidget):
                 tile = InputTile(inp, show, self)
                 tile.base_requested.connect(lambda input_id: self._clicked(input_id, False))
                 tile.overlay_pressed.connect(lambda input_id, tag: self._locked or self.overlay_pressed.emit(input_id, tag))
-                tile.overlay_held.connect(self.overlay_held.emit)  # (letting go always counts, so a flash never sticks)
+                tile.overlay_held.connect(self.overlay_held.emit)  # (letting go always counts, so a held copy never sticks)
                 tile.copy_clear_requested.connect(lambda number: self._locked or self.copy_clear_requested.emit(number))
                 tile.drag_requested.connect(self._drag)
                 tile.menu_requested.connect(self.menu_requested.emit)

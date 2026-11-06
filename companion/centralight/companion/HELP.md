@@ -15,6 +15,9 @@ The connection comes back by itself if CentraLight is closed and opened again.
 
 - Inputs: send one to Base (its own transition, a Cut, or one chosen here), send a copy to the Overlay, clear its copies,
   clear the Overlay, and the Overlay's on / off switch.
+- An input's Send to Overlay does what the input says in CentraLight (the Editor's Input tab): its copy stays until it's
+  cleared, or, **Only while held**, it goes when the key is let go. For that, a key needs **Release (held inputs)** on
+  its release step: the Overlay presets have it already. On an input whose copies stay, Release does nothing.
 - Load a show; Cut or Fade to black (the colour lights, or everything with the Festoon and Key lights too).
 - Master, the Festoon and Key lights (level, on / off, fade), and a show variable.
 - Automations: run one now, turn one on or off, pause or resume them all; the countdown's "Do it now", "Wait" and
@@ -39,6 +42,7 @@ opened within 5 seconds is tried again.
 
 **Presets**
 
-A button for each input (to Base, to the Overlay, and "flash while held"), each show, the four Cut / Fade to black
-buttons, the Console's Release all, Tap and Next step, and Pause automations. The input and show buttons appear once
-CentraLight is connected.
+A button for each input (to Base, and to the Overlay: as the input says, with Release on the key's release), each
+show, the four Cut / Fade to black buttons, the Console's Release all, Tap and Next step, and Pause automations. The
+input and show buttons appear once CentraLight is connected. (The "flash while held" buttons went: set the input to
+Only while held in CentraLight instead. Keys made from them before still work.)

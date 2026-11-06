@@ -127,8 +127,18 @@ function actionDefinitions(state, send, getState = () => state) {
 		},
 		overlay: {
 			name: 'Send an input to the Overlay (a copy on top)',
+			description:
+				'As the input says in CentraLight: its copy stays until it is cleared, or, "Only while held", until ' +
+				'"Release (held inputs)" lets it go: put that on the key\'s release (the presets do)',
 			options: [dropdown('input', 'Input', inputs)],
 			callback: (action) => run(path('input', action.options.input, 'overlay')),
+		},
+		// (M18: the let-go of a key that sent an input set to "Only while held"; for one whose copies stay, nothing)
+		overlay_release: {
+			name: 'Release (held inputs): an input sent to the Overlay "Only while held" goes',
+			description: "Put it on the release of the key that sends the input. Inputs whose copies stay don't mind it.",
+			options: [dropdown('input', 'Input', inputs)],
+			callback: (action) => run(path('input', action.options.input, 'overlay', 'release')),
 		},
 		overlay_clear_input: {
 			name: "Clear an input's copies from the Overlay",
@@ -458,23 +468,17 @@ function presetDefinitions(state, combine, label = 'centralight') {
 			steps: press('base', { input: i.id, how: 'own', duration: 1 }),
 			feedbacks: lit('on_base', { input: i.id }, BLACK, CORAL),
 		}
+		// (M18: as the input's Send to Overlay setting says. Let go, Release: an "Only while held" input goes, so the same
+		// key flashes it; one whose copies stay keeps its copy. The old "flash while held" keys went: the input says now)
 		presets[`overlay_${i.id}`] = {
 			type: 'button',
 			category: 'Inputs to the Overlay',
 			name: `${i.name} on the Overlay`,
 			style: style(`${i.name}\\n+$(${label}:copies_${i.id})`, WHITE, BLACK),
-			steps: press('overlay', { input: i.id }),
-			feedbacks: lit('on_overlay', { input: i.id }, BLACK, LIME),
-		}
-		presets[`flash_${i.id}`] = {
-			type: 'button',
-			category: 'Inputs: flash while held',
-			name: `Flash ${i.name}`,
-			style: style(`Flash\\n${i.name}`, WHITE, BLACK),
 			steps: [
 				{
 					down: [{ actionId: 'overlay', options: { input: i.id } }],
-					up: [{ actionId: 'overlay_clear_input', options: { input: i.id } }],
+					up: [{ actionId: 'overlay_release', options: { input: i.id } }],
 				},
 			],
 			feedbacks: lit('on_overlay', { input: i.id }, BLACK, LIME),

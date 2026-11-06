@@ -440,7 +440,7 @@ class CompanionModuleTests(unittest.TestCase):
         refused = {action: answer for action, answer in answers.items() if answer != (True, 200)}
         self.assertEqual(refused, {"countdown": (False, 409)})  # (no countdown now: the only one refused)
         self.assertEqual(len(answers), next(line["count"] for line in lines if line["step"] == "pressed"))
-        self.assertEqual(len(answers), 19)  # (every action: none of them needs a light chosen first)
+        self.assertEqual(len(answers), 20)  # (every action: none of them needs a light chosen first; M18: Release too)
         self.assertEqual(lines[-1], {"step": "closed", "code": 1000})
         self.assertEqual(len(engine.commands), len(answers) - 1)
 
@@ -465,7 +465,7 @@ class CompanionModuleTests(unittest.TestCase):
         lines = {line["step"]: line for line in map(json.loads, result.stdout.splitlines()) if line}
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("warm-white", lines["actions"]["inputs"])
-        self.assertEqual(lines["actions"]["count"], 19)
+        self.assertEqual(lines["actions"]["count"], 20)  # (M18: Release (held inputs) too)
         self.assertIs(lines["feedback"]["value"], True)  # (Warm white is on Base: its key lights)
         self.assertEqual(lines["variables"]["master"], 100)
         self.assertEqual(lines["variables"]["show"], engine.show.name)  # (connected to this test's server, not another)

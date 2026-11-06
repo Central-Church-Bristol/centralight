@@ -9,7 +9,10 @@ in a browser for a page listing every URL, with big buttons (it doubles as a pho
                                            (?transition=fade&duration=2 to choose another)
     /api/input/<id>/cut                    straight to Base, no transition
     /api/input/<id>/overlay                send a copy of it to the Overlay, on top of what's there (up to 4
-                                           copies of one input at once)
+                                           copies of one input at once), as the input's Send to Overlay setting
+                                           says (M18): it stays until it's cleared, or, "Only while held", until...
+    /api/input/<id>/overlay/release        ...this lets go of it (the key's release: Companion and the phone page
+                                           send it; for an input whose copies stay, it does nothing)
     /api/input/<id>/overlay/clear          clear its copies from the Overlay
     /api/overlay/clear                     clear the Overlay (every copy)
     /api/overlay/on, /off, /toggle         the Overlay's switch (off hides it without emptying it)
@@ -93,7 +96,7 @@ from .commands import (
 from .console import BPM_RANGE
 from .expressions import describe_value
 from .log import log_exception, log_info
-from .model import TRANSITION_KINDS, Show, Transition, slugify
+from .model import OVERLAY_HELD, TRANSITION_KINDS, Show, Transition, slugify
 from .shows import ShowInfo, find_show, list_shows, same_folder, show_id
 from .variables import coerce_global
 
@@ -196,6 +199,12 @@ def _light_ids(show: Show, raw: str) -> tuple[str, ...]:
     return tuple(found)
 
 
+def held_tag(input_id: str) -> str:
+    """What names the copies the remote sends of an input set to "Only while held" (M18): its release clears them. The
+    engine takes commands in order, so a release always finds the copy its press sent, however quick the tap."""
+    return f"remote-held:{input_id}"
+
+
 def _opacity(params: dict[str, str]) -> SetOverlayOpacity:
     fade = _fade(params)
     level = _number(params, "value")
@@ -255,8 +264,10 @@ def command_for(parts: list[str], params: dict[str, str], show: Show, frame: Any
             return SendToBase(input_id, transition=transition)
         if rest[1:] == ["cut"]:
             return SendToBase(input_id, cut=True)
-        if rest[1:] == ["overlay"]:
-            return SendToOverlay(input_id)
+        if rest[1:] == ["overlay"]:  # (as the input says, M18: a copy that stays, or one its release clears)
+            return SendToOverlay(input_id, tag=held_tag(input_id) if show.inputs[input_id].overlay == OVERLAY_HELD else "")
+        if rest[1:] == ["overlay", "release"]:  # (an input whose copies stay has none with this tag: nothing happens)
+            return ClearFromOverlay(tag=held_tag(input_id))
         if rest[1:] == ["overlay", "clear"]:
             return ClearFromOverlay(input_id=input_id)
     elif head == "overlay" and len(rest) == 1:
@@ -355,6 +366,8 @@ def command_from_json(payload: Any, show: Show, frame: Any = None, black_fade: f
             if "slot" in payload or "state" in payload:  # (Overlays 1-4, before M14: refused rather than misread)
                 raise BadRequest(400, 'there is one Overlay now: send {"op": "overlay", "id": ...} (no "slot" or "state")')
             parts.append("overlay")
+    elif op == "overlay_release":  # {"op": "overlay_release", "id": ...}: let go of an "Only while held" input (M18)
+        parts = ["input", str(payload.get("id", "")), "overlay", "release"]
     elif op == "overlay_clear":  # {"op": "overlay_clear", "id": optional: that input's copies, else every copy}
         parts = ["input", str(payload["id"]), "overlay", "clear"] if payload.get("id") else ["overlay", "clear"]
     elif op == "overlay_switch":  # {"op": "overlay_switch", "state": "on" | "off" | "toggle"}
@@ -421,7 +434,7 @@ def state_of(engine: Any, shows: list[ShowInfo] | None = None) -> dict[str, Any]
         "no_show": show.no_show,
         "notes": show.notes,
         "shows": shows_of(shows or [], show.folder),
-        "inputs": [{"id": inp.id, "name": inp.name} for inp in show.ordered_inputs()],
+        "inputs": [{"id": inp.id, "name": inp.name, "overlay": inp.overlay} for inp in show.ordered_inputs()],
         "globals": [{"name": g.name, "type": g.type, "min": g.min, "max": g.max, "dashboard": g.dashboard} for g in show.globals],
         "house": [{"id": h.fixture, "name": h.label, "slug": slugify(h.label)} for h in show.house],
     }
@@ -804,6 +817,7 @@ class RemoteServer:
         key = f"?key={self.key}" if self.lan and self.key else ""
         urls = [("Send to Base", base + key), ("Cut to Base", base + "/cut" + key)]
         urls += [("Send to Overlay", f"{base}/overlay{key}"), ("Clear from Overlay", f"{base}/overlay/clear{key}")]
+        urls += [("Let go (Only while held)", f"{base}/overlay/release{key}")]  # (M18: Companion's, not the Stream Deck app's)
         return urls
 
 
@@ -823,10 +837,12 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
     rows = []
     for inp in show.ordered_inputs():
         path = f"/api/input/{quote(inp.id)}"
+        held = inp.overlay == OVERLAY_HELD  # (M18: its Overlay button works while it's held down; see the script)
         rows.append(
             f'<div class="tile" data-id="{esc(inp.id)}" style="--tag:{esc(inp.colour)}">'
             f'{button(inp.name, path, "big")}<div class="row">{button("Cut", path + "/cut", "small")}'
-            f'{button("Overlay", path + "/overlay", "small overlay")}'
+            f'<button class="small overlay{" hold" if held else ""}" data-overlay="{esc(path)}/overlay" '
+            f'data-mode="{esc(inp.overlay)}">{"Overlay (hold)" if held else "Overlay"}</button>'
             f'{button("Clear", path + "/overlay/clear", "small clear")}</div></div>'
         )
     variables = []
@@ -857,6 +873,7 @@ def help_page(remote: RemoteServer, key: str = "") -> str:
         ("…with another transition", "/api/input/<id>?transition=fade&duration=2"),
         ("Cut an input to Base", "/api/input/<id>/cut"),
         ("Send an input to the Overlay (a copy on top)", "/api/input/<id>/overlay"),
+        ("…let go of it (inputs set to “Only while held”: Companion or this page)", "/api/input/<id>/overlay/release"),
         ("Clear an input from the Overlay", "/api/input/<id>/overlay/clear"),
         ("Clear the Overlay", "/api/overlay/clear"),
         ("The Overlay's switch", "/api/overlay/toggle  (or /on, /off: off hides it without emptying it)"),
@@ -925,6 +942,8 @@ SHOW_BODY = """<h2>Inputs: tap to send to Base</h2>
 <h2>Stream Deck URLs</h2>
 <p>Elgato Stream Deck app: add a <b>Website</b> action, paste a URL and tick <b>GET request in background</b>.
 Companion: use <b>Generic HTTP → GET</b>. House lights are called {lights}.</p>
+<p>The Website action only presses: an input whose Send to Overlay is <b>Only while held</b> needs Companion (CentraLight's
+module lets go when the key is let go) or this page (hold its Overlay button down).</p>
 <table>{url_rows}</table>
 <table>{ids}</table>
 <table>{show_urls}</table>"""
@@ -960,6 +979,8 @@ button.big {{ width: 100%; min-height: 64px; font-size: 17px; font-weight: 600; 
 button.small {{ min-width: 38px; min-height: 34px; padding: 0 8px; }}
 button.on {{ background: var(--lime); color: #1B2600; }}
 button.overlay {{ border-color: var(--lime); }}
+button.overlay.hold {{ touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }}
+button.overlay.held {{ background: var(--lime); color: #1B2600; }}
 button.clear {{ border-color: var(--red); color: var(--red); }}
 .row {{ display: flex; gap: 4px; margin-top: 6px; align-items: center; flex-wrap: wrap; }}
 .label {{ color: var(--dim); font-size: 12px; margin: 0 2px 0 6px; }}
@@ -1014,6 +1035,35 @@ async function call(path) {{
   }} catch (e) {{ document.getElementById("status").textContent = "Can't reach CentraLight"; }}
 }}
 document.querySelectorAll("button[data-path]").forEach(b => b.addEventListener("click", () => call(b.dataset.path)));
+// Send to Overlay, as each input says (M18). "Stays until cleared": a tap adds a copy that stays. "Only while held": the
+// copy shows while its button is held down and goes when it's let go (the let-go waits for the press's answer, so even
+// a quick tap can't leave it on)
+const overlayModes = {{}};
+const OVERLAY_TIPS = {{ held: "Hold it down: the copy shows while it's held", stays: "A copy on top, until it's cleared" }};
+document.querySelectorAll("button[data-overlay]").forEach(b => {{
+  const id = b.closest(".tile").dataset.id;
+  const send = b.dataset.overlay;
+  overlayModes[id] = b.dataset.mode;
+  b.title = OVERLAY_TIPS[b.dataset.mode] || "";
+  let pressed = null;  // (while it's held: the press's answer, which the let-go waits for)
+  b.addEventListener("pointerdown", e => {{
+    if (overlayModes[id] !== "held" || e.button !== 0 || pressed) return;
+    e.preventDefault();
+    try {{ b.setPointerCapture(e.pointerId); }} catch (err) {{}}
+    b.classList.add("held");
+    pressed = call(send);
+  }});
+  const letGo = () => {{
+    if (!pressed) return;
+    const sent = pressed;
+    pressed = null;
+    b.classList.remove("held");
+    sent.then(() => call(send + "/release"));
+  }};
+  ["pointerup", "pointercancel", "lostpointercapture"].forEach(name => b.addEventListener(name, letGo));
+  b.addEventListener("click", () => {{ if (overlayModes[id] !== "held") call(send); }});
+  b.addEventListener("contextmenu", e => {{ if (overlayModes[id] === "held") e.preventDefault(); }});
+}});
 // the countdown's buttons name the countdown they showed, and the banner goes at once (a second tap can't hit another)
 let countdownId = "";
 document.querySelectorAll("button[data-countdown]").forEach(b => b.addEventListener("click", () => {{
@@ -1069,10 +1119,17 @@ async function refresh() {{
     if (notes.textContent !== (state.notes || "")) notes.textContent = state.notes || "";  // (changed in CentraLight)
     document.getElementById("status").textContent = state.no_show ? "The lights are off" : "Base: " + state.base.name;
     document.querySelectorAll(".tile").forEach(t => t.classList.toggle("base", t.dataset.id === state.base.id));
+    (state.inputs || []).forEach(i => {{ if (i.overlay) overlayModes[i.id] = i.overlay; }});  // (changed in CentraLight)
     document.querySelectorAll(".tile").forEach(t => {{  // (the Overlay button lights up while it has copies there)
       const copies = state.overlay.copies.filter(c => c.id === t.dataset.id).length;
       const send = t.querySelector("button.overlay");
-      if (send) {{ send.classList.toggle("on", copies > 0 && state.overlay.on); send.textContent = copies ? "Overlay ×" + copies : "Overlay"; }}
+      const mode = overlayModes[t.dataset.id];
+      if (send) {{
+        send.classList.toggle("on", copies > 0 && state.overlay.on);
+        send.classList.toggle("hold", mode === "held");
+        send.title = OVERLAY_TIPS[mode] || "";
+        send.textContent = (mode === "held" ? "Overlay (hold)" : "Overlay") + (copies ? " ×" + copies : "");
+      }}
     }});
   }} catch (e) {{ document.getElementById("status").textContent = "Can't reach CentraLight"; }}
 }}

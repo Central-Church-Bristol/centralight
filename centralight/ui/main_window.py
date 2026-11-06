@@ -256,7 +256,7 @@ class MainWindow(QWidget):
         self.dashboard.send_requested.connect(lambda input_id, cut: self.engine.submit(SendToBase(input_id, cut=cut)))
         self.dashboard.clear_base_requested.connect(lambda cut: self.engine.submit(ClearBase(cut=cut)))
         self.dashboard.overlay_pressed.connect(lambda input_id, tag: self._locked or self.engine.submit(SendToOverlay(input_id, tag=tag)))
-        # (letting go of a held Send to Overlay always clears its copy, so a flash never sticks)
+        # (letting go of Send to Overlay, for an input set to "Only while held", always clears its copy: it never sticks)
         self.dashboard.overlay_held.connect(lambda _input_id, tag: self.engine.submit(ClearFromOverlay(tag=tag)))
         self.dashboard.copy_clear_requested.connect(lambda number: self._locked or self.engine.submit(ClearFromOverlay(copy=number)))
         self.dashboard.overlay_input_cleared.connect(

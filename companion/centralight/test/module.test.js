@@ -70,6 +70,17 @@ test('it connects, makes everything from the state and sends commands', async (t
 	assert.deepEqual(fake.commands[0], { path: 'input/worship-blue/cut', params: {} })
 })
 
+test("an Overlay preset's key: the press sends the input, the release lets it go, in that order", async (t) => {
+	const { fake, instance } = await connected(t)
+	const step = instance.presets['overlay_worship-blue'].steps[0] // (M18: as a placed preset key does it)
+	for (const action of [...step.down, ...step.up]) instance.actions[action.actionId].callback({ options: action.options })
+	await waitFor(() => fake.commands.length === 2, 'both commands')
+	assert.deepEqual(fake.commands, [
+		{ path: 'input/worship-blue/overlay', params: {} },
+		{ path: 'input/worship-blue/overlay/release', params: {} },
+	])
+})
+
 test('it keeps up with CentraLight', async (t) => {
 	const { fake, instance } = await connected(t)
 	const defined = instance.defined
