@@ -73,6 +73,7 @@ never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 | **M18: your changes of 6 Nov, evening** — batch 1: number fields' arrows, Settings tidied (Countdown timer, Shows and automations, Console), automation lists that keep their place | **done** (6 Nov, 21:20; 1102 tests pass) |
 | — batch 2: Send to Overlay set per input: stays until cleared (as before) or only while held; the API, phone page and Companion follow it | **done** (6 Nov, 22:10; 1158 tests pass) |
 | — batch 3: dates as a day, month and year, each with a tick and a range on demand; From … to … kept for spans over a month end; Saturday's automation unchanged | **done** (6 Nov, 22:10; 1158 tests pass) |
+| — the shutdown fade, fixed after its first real try: CentraLight now asks Windows to deal with it first | **done** (6 Nov, 22:47; 1161 tests pass) |
 | — batch 4: the PC shutting down or going to sleep: two global automation conditions, so the lights can fade first; never held dark after | **done** (6 Nov, 22:10; 1158 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
@@ -122,6 +123,23 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
+
+## The shutdown fade, fixed after its first real try (6 Nov, late)
+
+- **What happened:** the first real shutdown with "On PC Shutdown" on did nothing: CentraLight was never asked. In fact
+  no restart that evening had ever been written in the session log, not even "CentraLight closed".
+- **Why:** CentraLight runs under the `.venv` launcher (`.venv\Scripts\pythonw.exe`), a small program with no window
+  that starts the real Python and keeps it in a Windows "job" that ends with it. At a shutdown (Fast Startup's sign-out
+  too), Windows can end a program without a window before it asks the others, and ending the launcher ended
+  CentraLight at once. Checked: a test program started the same way dies the moment its launcher is stopped.
+- **The fix:** CentraLight asks Windows to deal with it first (the highest shutdown order an app can have), before the
+  launcher: the shutdown automations run, the lights fade, CentraLight quits and writes so in the session log, and only
+  then does Windows get to the launcher. The handling of the shutdown message also writes any error in the session log
+  now, instead of hiding it.
+- **Checked** with real Windows messages sent to a hidden window of a test copy (going to sleep, a sign-out, a shutdown
+  called off): each reaches CentraLight, the automations' event goes to the engine, and Windows gets its answer once
+  the fade is done (0.3 s in the test), well within what it waits.
+- **To check:** only a real shutdown can show it for certain: see the rig checklist, step 20h.
 
 ## M18, batches 2–4 (6 Nov, night)
 

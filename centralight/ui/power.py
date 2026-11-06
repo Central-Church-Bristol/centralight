@@ -34,6 +34,20 @@ SLEEP_WAIT = SLEEP_FADE + 0.5  # ...and going to sleep (Windows allows about 2 s
 WAIT_STEP = 0.02  # seconds between looks while it waits
 SAME_SLEEP = 30.0  # seconds: "going to sleep" told again this soon (to another window) is the same sleep
 BLOCK_REASON = "CentraLight: fading the lights out"
+SHUTDOWN_LEVEL = 0x3FF  # the highest shutdown level an app may take: Windows deals with CentraLight first
+
+
+def shut_down_first(level: int = SHUTDOWN_LEVEL) -> bool:
+    """Ask Windows to deal with CentraLight's process first when it shuts down, restarts or signs out
+    (SetProcessShutdownParameters). CentraLight runs under the .venv launcher (its pythonw.exe), which has no window and
+    keeps CentraLight in a job that ends with it: at a shutdown (Fast Startup's sign-out too) Windows could end the
+    launcher first, and that ended CentraLight before it heard anything, so no fade and no quit (6 Nov). Going first,
+    CentraLight gets the shutdown messages, fades the lights and quits; only then does Windows get to the launcher."""
+    try:
+        return bool(ctypes.WinDLL("kernel32").SetProcessShutdownParameters(level, 0))
+    except (AttributeError, OSError) as exc:  # (not Windows, or refused: carry on)
+        log_exception("the shutdown order", exc)
+        return False
 
 
 def power_event(message: int, wparam: int, lparam: int = 0) -> str:
@@ -147,6 +161,6 @@ class PowerEventFilter(QAbstractNativeEventFilter):
                 kind = power_event(msg.message, msg.wParam, msg.lParam)
                 if kind:
                     self._on_event(kind, int(msg.hwnd or 0))
-        except Exception:
-            pass  # never let a stray message break the app
+        except Exception as exc:  # (never let a stray message break the app: but say so, as it's the lights, 6 Nov)
+            log_exception("a Windows power or shutdown message", exc)
         return False, 0

@@ -196,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
     from . import startup
     from .remote import RemoteServer, new_key
     from .ui.instance import InstanceServer
-    from .ui.power import PowerDown, PowerEventFilter
+    from .ui.power import PowerDown, PowerEventFilter, shut_down_first
     from .ui.tray import Tray
 
     if not settings.remote_key:
@@ -223,6 +223,9 @@ def main(argv: list[str] | None = None) -> int:
     # sleep, wake, and (M18) Windows shutting down: the global automations about them, with Windows waiting for a fade
     window.power_filter = PowerEventFilter(PowerDown(engine.submit))
     app.installNativeEventFilter(window.power_filter)
+    # ...and Windows tells CentraLight first, before it ends the .venv launcher that ends CentraLight with it (6 Nov)
+    if not shut_down_first():
+        log_info("Windows wouldn't let CentraLight go first when it shuts down: the lights may not fade then")
     if startup.managed():
         trouble = startup.sync(settings.start_with_windows)
         if trouble:

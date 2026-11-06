@@ -579,6 +579,12 @@ The old console script (`ndi_pixel_mapper.py`) went with the clean-up (M17), so 
 - [ ] Tonight: shut the PC down without quitting CentraLight first. Saturday's PC start loads Central Church for the
       event, and its Start Up runs.
 
+## 20h. The shutdown fade (fixed 6 Nov, late)
+
+- [ ] With "On PC Shutdown" (The PC shuts down or restarts → Fade to black) on and the lights on, Start → **Shut down**:
+      the lights fade before the PC goes off. After the next start, session.log has "Windows is shutting down,
+      restarting or signing out", "Quit, as Windows logs off or shuts down" and "CentraLight closed".
+
 ## 21. Afterwards: updating the main folder
 
 Everything is committed on the branch `claude/centralight-gui` (nothing on `main`, nothing pushed). The work was
