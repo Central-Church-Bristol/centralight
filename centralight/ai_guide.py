@@ -504,8 +504,8 @@ def guide_text(show: Show, full: bool = True) -> str:
                              else next(iter(show.input_order), "follow-screen")},
                             {"do": "house", "light": show.house[-1].fixture if show.house else "dimmer-4", "level": 0.7, "fade": 2}],
             }) + "```\n\n"
-            "Days are `mon` ... `sun`. " + WEEKS_TEXT + " Times `\"HH:MM\"` (overnight ranges like 22:00-02:00 are fine); "
-            "dates `\"MM-DD\"` with an optional `year`. Sunrise / sunset (Bristol's times): `{\"type\": \"sun\", \"when\": \"after\", "
+            "Days are `mon` ... `sun`. " + WEEKS_TEXT + " Times `\"HH:MM\"` (overnight ranges like 22:00-02:00 are fine). "
+            + DATES_TEXT + " Sunrise / sunset (Bristol's times): `{\"type\": \"sun\", \"when\": \"after\", "
             "\"event\": \"sunset\", \"minutes\": -30}` is true from half an hour before sunset until midnight "
             "(`when` after / before, `event` sunset / sunrise, `minutes` -180 to 180)."
         )
@@ -518,6 +518,12 @@ WEEKS_TEXT = ("A Days condition can also pick weeks of the month: `\"weeks\": [\
               "[\"1st\"]}` is the first Wednesday of each month; `last` is the last one in the month, whether that's the 4th "
               "or the 5th. The weeks apply to every day ticked (for the 1st Wednesday and the 3rd Sunday, use two "
               "automations, or two Days conditions with `\"logic\": \"any\"`).")
+DATES_TEXT = ("A Dates condition has a `day` (1-31), `month` (1-12) and `year`, each one number or a range like `[1, 7]`, "
+              "and one left out means any: `{\"type\": \"dates\", \"day\": 25, \"month\": 12}` is every 25 Dec, "
+              "`{\"type\": \"dates\", \"day\": 7, \"month\": 11, \"year\": 2026}` is 7 Nov 2026, and `{\"type\": \"dates\", "
+              "\"day\": [1, 7]}` is the 1st to the 7th of each month. For a span across the end of a month, use month-days "
+              "instead: `{\"type\": \"dates\", \"from\": \"12-24\", \"to\": \"01-06\"}` (an optional `year` is the year it "
+              "starts).")
 
 
 def _ours(data: bytes) -> bool:
@@ -593,8 +599,8 @@ def global_guide_text(shows: list[tuple[str, str]], house_labels: list[str]) -> 
         "`release_console` hands back every light the Console page holds, with Settings' release fade.",
         "```json\n" + json_text(example) + "```",
         "## The shows\n\n" + show_rows,
-        "Days are `mon` ... `sun`. " + WEEKS_TEXT + " Times `\"HH:MM\"` (overnight ranges like 22:00-02:00 are fine); "
-        "dates `\"MM-DD\"` with an optional `year`; sunrise / sunset are Bristol's times.",
+        "Days are `mon` ... `sun`. " + WEEKS_TEXT + " Times `\"HH:MM\"` (overnight ranges like 22:00-02:00 are fine). "
+        + DATES_TEXT + " Sunrise / sunset are Bristol's times.",
     ]) + "\n"
 
 

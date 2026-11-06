@@ -111,6 +111,10 @@ SUN_EVENTS = ("sunset", "sunrise")
 SUN_WHEN = ("after", "before")
 SUN_MINUTES = 180  # how far before or after sunrise / sunset a condition can be moved
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+               "November", "December")
+# A Dates condition's day, month and year (M18): each one number, a range [from, to], or left out for any
+DATE_PARTS = (("day", 1, 31), ("month", 1, 12), ("year", 2000, 2200))
 
 LOOP_RUNS = 5  # more than this many runs...
 LOOP_WINDOW = 30.0  # ...in this many seconds pauses an automation
@@ -154,6 +158,93 @@ def parse_day_month(text: Any) -> tuple[int, int] | None:
     return month, day
 
 
+def date_part(value: Any, low: int, high: int) -> tuple[int, int] | None:
+    """A Dates condition's day, month or year (M18): 7 -> (7, 7), [1, 7] -> (1, 7); None if it isn't one."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = (value, value)
+    if (isinstance(value, (list, tuple)) and len(value) == 2
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in value) and low <= value[0] <= value[1] <= high):
+        return int(value[0]), int(value[1])
+    return None
+
+
+def is_date_span(cond: Mapping[str, Any]) -> bool:
+    """From … to …: "from" and "to" month-days, with an optional year (every Dates condition was one before M18)."""
+    return "from" in cond or "to" in cond
+
+
+def date_fields(cond: Mapping[str, Any]) -> dict[str, tuple[int, int]] | None:
+    """A Dates condition as its day, month and year (M18), e.g. {"day": (7, 7), "month": (11, 11), "year": (2026,
+    2026)}; one left out is any. A From … to … within one month is shown this way too (all of a month: any day); one
+    across a month end is None (it stays From … to …), and so is one that can't be read."""
+    if not is_date_span(cond):
+        parts = {}
+        for key, low, high in DATE_PARTS:
+            if cond.get(key) is not None:
+                part = date_part(cond.get(key), low, high)
+                if part is None:
+                    return None
+                parts[key] = part
+        return parts
+    start, end = parse_day_month(cond.get("from")), parse_day_month(cond.get("to"))
+    year = cond.get("year")
+    if not start or not end or start[0] != end[0] or start[1] > end[1] or (year is not None and date_part(year, 2000, 2200) is None):
+        return None
+    month = start[0]
+    parts = {} if (start[1], end[1]) == (1, calendar.monthrange(2024, month)[1]) else {"day": (start[1], end[1])}
+    parts["month"] = (month, month)
+    if year is not None:
+        parts["year"] = (year, year)
+    return parts
+
+
+def ordinal(number: int) -> str:
+    """1 -> '1st', 22 -> '22nd', 13 -> '13th'."""
+    return f"{number}{'th' if 10 <= number % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(number % 10, 'th')}"
+
+
+def describe_dates(cond: Mapping[str, Any]) -> str:
+    """'7 Nov 2026', 'every 25 Dec', 'every December', '1st–7th of each month', '24 Dec – 6 Jan' ('' if it can't be
+    read)."""
+    parts = date_fields(cond)
+    if parts is None:  # From … to … across a month end
+        a, b = parse_day_month(cond.get("from")), parse_day_month(cond.get("to"))
+        if not (a and b):
+            return ""
+        year = cond.get("year")
+        if isinstance(year, int) and not isinstance(year, bool):
+            if a > b:  # (the year it starts)
+                return f"{a[1]} {MONTHS[a[0] - 1]} {year} – {b[1]} {MONTHS[b[0] - 1]} {year + 1}"
+            return f"{a[1]} {MONTHS[a[0] - 1]} – {b[1]} {MONTHS[b[0] - 1]} {year}"
+        return f"{a[1]} {MONTHS[a[0] - 1]} – {b[1]} {MONTHS[b[0] - 1]}"
+    if not parts:
+        return "no day, month or year ticked"
+    day, month, year = parts.get("day"), parts.get("month"), parts.get("year")
+
+    def months(part: tuple[int, int], long: bool) -> str:
+        if part[0] == part[1]:
+            return (MONTH_NAMES if long else MONTHS)[part[0] - 1]
+        return f"{MONTHS[part[0] - 1]}–{MONTHS[part[1] - 1]}"
+
+    each = False
+    if day and month and month[0] == month[1]:  # 7 Nov, 1–7 Nov
+        text = (str(day[0]) if day[0] == day[1] else f"{day[0]}–{day[1]}") + f" {MONTHS[month[0] - 1]}"
+    elif day:  # 1st–7th of each month, 7th of Jun–Aug
+        text = (ordinal(day[0]) if day[0] == day[1] else f"{ordinal(day[0])}–{ordinal(day[1])}") + " of "
+        text += months(month, False) if month else "each month"
+        each = not month
+    elif month:  # December, Jun–Aug
+        text = months(month, True)
+    else:
+        text = ""
+    if year is None:
+        return f"every {text}" if month and (not day or month[0] == month[1]) else text
+    years = str(year[0]) if year[0] == year[1] else f"{year[0]}–{year[1]}"
+    if not text:
+        return f"all of {years}"
+    return f"{text} {years}" if year[0] == year[1] and not each else f"{text} in {years}"
+
+
 def conditions_for(scope: str = SHOW) -> dict[str, str]:
     """The conditions a show's automations (or the global ones) can have, with their names."""
     return {kind: CONDITIONS[kind] for kind in (GLOBAL_CONDITIONS if scope == GLOBAL else SHOW_CONDITIONS)}
@@ -191,13 +282,26 @@ def check_condition(cond: Mapping[str, Any], scope: str = SHOW) -> list[str]:
         weeks = cond.get("weeks")
         if weeks is not None and (not isinstance(weeks, list) or any(w not in WEEKS for w in weeks)):
             problems.append(f'"weeks" must be a list of {", ".join(WEEKS)} (or left out for every week)')
-    elif kind == "dates":
+    elif kind == "dates" and not is_date_span(cond):  # day, month and year (M18)
+        given = [(key, low, high) for key, low, high in DATE_PARTS if cond.get(key) is not None]
+        for key, low, high in given:
+            if date_part(cond.get(key), low, high) is None:
+                problems.append(f'"{key}" must be a number from {low} to {high}, or a range like [{low}, {low + 1}] '
+                                '(or left out for any)')
+        if not given:
+            problems.append('dates need a "day", "month" or "year" (or "from" and "to" month-days like "12-24")')
+        day, month = date_part(cond.get("day"), 1, 31), date_part(cond.get("month"), 1, 12)
+        if day and month and month[0] == month[1] and day[0] > calendar.monthrange(2024, month[0])[1]:
+            problems.append(f"there's no {day[0]} {MONTHS[month[0] - 1]}")
+    elif kind == "dates":  # From … to …
         for key in ("from", "to"):
             if parse_day_month(cond.get(key)) is None:
                 problems.append(f'dates "{key}" must be month-day like "12-24"')
         year = cond.get("year")
         if year is not None and (not isinstance(year, int) or isinstance(year, bool) or not 2000 <= year <= 2200):
             problems.append('"year" must be a year like 2026 (or left out for every year)')
+        if any(key in cond for key in ("day", "month")):
+            problems.append('use "from" and "to", or "day", "month" and "year", not both')
     elif kind == "sun":
         if cond.get("event", "sunset") not in SUN_EVENTS:
             problems.append('"event" must be "sunset" or "sunrise"')
@@ -304,9 +408,7 @@ def describe_condition(cond: Mapping[str, Any], show: Show | None = None, shows:
             which = " & ".join(WEEK_NAMES[w] for w in weeks)
             text = f"{which} week of the month" if len(days) == 7 else f"{which} {text}"
     elif kind == "dates":
-        a, b = parse_day_month(cond.get("from")), parse_day_month(cond.get("to"))
-        if a and b:
-            text = f"{a[1]} {MONTHS[a[0] - 1]} – {b[1]} {MONTHS[b[0] - 1]}" + (f" {cond['year']}" if cond.get("year") else "")
+        text = describe_dates(cond) or text
     elif kind == "sun":
         minutes = cond.get("minutes", 0)
         minutes = minutes if isinstance(minutes, int) and not isinstance(minutes, bool) else 0
@@ -647,6 +749,11 @@ def _variable_true(cond: Mapping[str, Any], current: Any) -> bool:
 
 
 def _dates_true(cond: Mapping[str, Any], today: date) -> bool:
+    if not is_date_span(cond):  # day, month and year (M18): each one value, a range, or any (left out)
+        given = [(date_part(cond.get(key), low, high), value) for (key, low, high), value
+                 in zip(DATE_PARTS, (today.day, today.month, today.year)) if cond.get(key) is not None]
+        return bool(given) and all(part is not None and part[0] <= value <= part[1] for part, value in given)
+    # From … to … (and every Dates condition before M18), checked exactly as before
     start, end = parse_day_month(cond.get("from")), parse_day_month(cond.get("to"))
     if not start or not end:
         return False
@@ -1451,8 +1558,9 @@ def system_uptime() -> float:
 # ---------------------------------------------------------------- editing (each returns a new Show)
 
 
-def default_condition(kind: str, show: Show, shows: Iterable[tuple[str, str]] = ()) -> dict[str, Any]:
-    """A sensible starting condition of each kind. shows: (id, name) of each show (for "This show is loaded")."""
+def default_condition(kind: str, show: Show, shows: Iterable[tuple[str, str]] = (), today: date | None = None) -> dict[str, Any]:
+    """A sensible starting condition of each kind. shows: (id, name) of each show (for "This show is loaded").
+    today: the day a new Dates condition starts at (M18; None: today)."""
     if kind == "loaded_show":
         first = next(iter(shows), None)
         return {"type": "loaded_show", "show": first[0] if first else ""}
@@ -1460,8 +1568,9 @@ def default_condition(kind: str, show: Show, shows: Iterable[tuple[str, str]] = 
         return {"type": "time", "from": "09:00", "to": "12:00"}
     if kind == "days":
         return {"type": "days", "days": ["sun"]}
-    if kind == "dates":
-        return {"type": "dates", "from": "12-01", "to": "12-31"}
+    if kind == "dates":  # today (M18): its day, month and year
+        today = today or date.today()
+        return {"type": "dates", "day": today.day, "month": today.month, "year": today.year}
     if kind == "sun":
         return {"type": "sun", "when": "after", "event": "sunset", "minutes": 0}
     if kind == "input_live":

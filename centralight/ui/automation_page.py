@@ -23,7 +23,7 @@ from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 
-from PySide6.QtCore import QDate, Qt, QTime, Signal
+from PySide6.QtCore import Qt, QTime, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..automations import (
+    DATE_PARTS,
     DAY_NAMES,
     DAYS,
     GLOBAL,
@@ -59,11 +60,14 @@ from ..automations import (
     actions_for,
     add_automation,
     conditions_for,
+    date_fields,
+    date_part,
     default_action,
     default_condition,
     describe_action,
     describe_condition,
     duplicate_automation,
+    is_date_span,
     move_automation,
     parse_day_month,
     remove_automation,
@@ -165,6 +169,107 @@ def _remove_button(tip: str) -> QToolButton:
     button.setToolTip(tip)
     button.setCursor(Qt.CursorShape.PointingHandCursor)
     return button
+
+
+def _date_spin(low: int, high: int, widest: str) -> QSpinBox:
+    """A Dates condition's day or year (M18): a plain number field, with its up / down arrows."""
+    spin = QSpinBox()
+    spin.setRange(low, high)
+    spin.setKeyboardTracking(False)  # (typed "14" is 14 when it's done, not 1 on the way: a range's other end follows)
+    spin.setFixedWidth(spin.fontMetrics().horizontalAdvance(widest) + 46)
+    return spin
+
+
+class DatePart(QWidget):
+    """One of a Dates condition's day, month and year (M18): a tick (off: any), one value, and "to…" for a range."""
+
+    changed = Signal()
+
+    def __init__(self, name: str, tip: str, value: Any, low: int, high: int, fallback: int, months: bool = False) -> None:
+        super().__init__()
+        part = date_part(value, low, high)
+        self.tick = QCheckBox(name)
+        self.tick.setToolTip(tip)
+        self.tick.setChecked(part is not None)
+        if months:
+            self.first, self.last = (_combo([(i + 1, m) for i, m in enumerate(MONTHS)], 1) for _ in range(2))
+        else:
+            self.first, self.last = (_date_spin(low, high, str(high)) for _ in range(2))
+        start, end = part or (fallback, fallback)
+        self._put(self.first, start)
+        self._put(self.last, end)
+        self.to = QPushButton("to…")
+        self.to.setObjectName("ToolToggle")
+        self.to.setCheckable(True)
+        self.to.setChecked(part is not None and isinstance(value, (list, tuple)))
+        self.to.setToolTip("A range, e.g. the 1st to the 7th (click again for just one)")
+        self.any = QLabel("any")
+        self.any.setObjectName("RowDetail")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 10, 0)  # (a gap before the next one)
+        layout.setSpacing(4)
+        for widget in (self.tick, self.first, self.to, self.last, self.any):
+            layout.addWidget(widget)
+        self._show()
+        self.tick.toggled.connect(lambda _on: self._edited())
+        self.to.toggled.connect(lambda on: (self._put(self.last, self.get(self.first)) if on else None, self._edited()))
+        for box in (self.first, self.last):
+            signal = box.currentIndexChanged if months else box.valueChanged
+            signal.connect(lambda _v, b=box: self._moved(b))
+
+    @staticmethod
+    def get(box: QWidget) -> int:
+        return int(box.currentData()) if isinstance(box, QComboBox) else box.value()
+
+    @staticmethod
+    def _put(box: QWidget, number: int) -> None:
+        blocked = box.blockSignals(True)
+        if isinstance(box, QComboBox):
+            box.setCurrentIndex(max(0, box.findData(number)))
+        else:
+            box.setValue(number)
+        box.blockSignals(blocked)
+
+    def _show(self) -> None:
+        on = self.tick.isChecked()
+        self.first.setVisible(on)
+        self.to.setVisible(on)
+        self.to.setText("to" if self.to.isChecked() else "to…")
+        self.last.setVisible(on and self.to.isChecked())
+        self.any.setVisible(not on)
+
+    def _moved(self, box: QWidget) -> None:
+        """A value changed: a range never runs backwards (the other end follows)."""
+        if self.to.isChecked() and self.get(self.first) > self.get(self.last):
+            if box is self.first:
+                self._put(self.last, self.get(self.first))
+            else:
+                self._put(self.first, self.get(self.last))
+        self.changed.emit()
+
+    def _edited(self) -> None:
+        self._show()
+        self.changed.emit()
+
+    def value(self) -> Any:
+        """What's saved: None (any), one number, or a range [from, to]."""
+        if not self.tick.isChecked():
+            return None
+        if self.to.isChecked():
+            return [self.get(self.first), self.get(self.last)]
+        return self.get(self.first)
+
+    def single(self) -> int | None:
+        """Its one value (None: any, or a range)."""
+        return self.get(self.first) if self.tick.isChecked() and not self.to.isChecked() else None
+
+    def cap(self, last: int) -> None:
+        """The day fields go up to the month's last day (29 for February), so a date is always real."""
+        for box in (self.first, self.last):
+            if isinstance(box, QSpinBox) and box.maximum() != last:
+                blocked = box.blockSignals(True)
+                box.setMaximum(last)
+                box.blockSignals(blocked)
 
 
 def _when(stamp: float | None) -> str:
@@ -310,28 +415,7 @@ class RuleRow(QFrame):
                     self._week_buttons[code] = button
                 self._add(self._text("weeks:"), self._every_week, *self._week_buttons.values())
             elif kind == "dates":
-                for key in ("from", "to"):
-                    month_day = parse_day_month(d.get(key)) or (12, 1)
-                    day = QSpinBox()
-                    day.setObjectName("NumberSpin")
-                    day.setRange(1, calendar.monthrange(2024, month_day[0])[1])
-                    day.setValue(month_day[1])
-                    day.setFixedWidth(day.fontMetrics().horizontalAdvance("31") + 24)
-                    month = _combo([(i + 1, m) for i, m in enumerate(MONTHS)], month_day[0])
-                    day.valueChanged.connect(lambda _v, k=key, a=day, b=month: self._set_date(k, a, b))
-                    month.currentIndexChanged.connect(lambda _i, k=key, a=day, b=month: self._set_date(k, a, b))
-                    self._add(self._text(key), day, month)
-                only = QCheckBox("Only in")
-                year = QSpinBox()
-                year.setObjectName("NumberSpin")
-                year.setRange(2024, 2100)
-                year.setValue(int(d.get("year") or QDate.currentDate().year()))
-                year.setFixedWidth(year.fontMetrics().horizontalAdvance("2100") + 24)
-                only.setChecked(d.get("year") is not None)
-                year.setEnabled(only.isChecked())
-                only.toggled.connect(lambda on: (year.setEnabled(on), self._set("year", year.value()) if on else self._drop("year")))
-                year.valueChanged.connect(lambda v: only.isChecked() and self._set("year", v))
-                self._add(only, year)
+                self._build_dates(d)
             elif kind == "sun":
                 when = _combo(SUN_WHEN_LABELS, d.get("when", "after"))
                 when.currentIndexChanged.connect(lambda _i: self._set("when", when.currentData()))
@@ -508,6 +592,109 @@ class RuleRow(QFrame):
             blocked = self._every_week.blockSignals(True)
             self._every_week.setChecked(True)
             self._every_week.blockSignals(blocked)
+
+    def _build_dates(self, d: dict, span: bool | None = None) -> None:
+        """Day, month and year (M18), each with a tick (off: any) and "to…" for a range; or From … to … for a span
+        across a month end (e.g. 24 Dec to 6 Jan). One from before M18 shows in the fields when it fits them (one day,
+        or days in one month), and is only saved in the new form once something here changes."""
+        fields = date_fields(d)
+        if span is None:
+            span = fields is None and is_date_span(d)
+        today = date.today()
+        self._date_parts: dict[str, DatePart] = {}
+        if span:
+            for key in ("from", "to"):
+                month_day = parse_day_month(d.get(key)) or (12, 1)
+                day = _date_spin(1, calendar.monthrange(2024, month_day[0])[1], "31")
+                day.setValue(month_day[1])
+                month = _combo([(i + 1, m) for i, m in enumerate(MONTHS)], month_day[0])
+                day.valueChanged.connect(lambda _v, k=key, a=day, b=month: self._set_date(k, a, b))
+                month.currentIndexChanged.connect(lambda _i, k=key, a=day, b=month: self._set_date(k, a, b))
+                self._add(self._text(key), day, month)
+            only = QCheckBox("Only in")
+            only.setToolTip("Only the span that starts in this year")
+            year = _date_spin(2000, 2200, "2200")
+            given = date_part(d.get("year"), 2000, 2200)
+            year.setValue(given[0] if given else today.year)
+            only.setChecked(d.get("year") is not None)
+            year.setEnabled(only.isChecked())
+            only.toggled.connect(lambda on: (year.setEnabled(on), self._set("year", year.value()) if on else self._drop("year")))
+            year.valueChanged.connect(lambda v: only.isChecked() and self._set("year", v))
+            self._add(only, year)
+        else:
+            if is_date_span(d):  # (from before M18: shown in the fields, saved as it was until something changes)
+                raw = {key: part[0] if part[0] == part[1] else list(part) for key, part in (fields or {}).items()}
+            else:
+                raw = {key: d.get(key) for key, _low, _high in DATE_PARTS}
+            names = {"day": ("Day", "Untick for any day of the month"), "month": ("Month", "Untick for any month"),
+                     "year": ("Year", "Untick for every year")}
+            fallback = {"day": today.day, "month": today.month, "year": today.year}
+            for key, low, high in DATE_PARTS:
+                part = DatePart(*names[key], raw.get(key), low, high, fallback[key], months=key == "month")
+                part.changed.connect(self._dates_changed)
+                self._date_parts[key] = part
+                self._add(part)
+            self._cap_days()
+            self._no_dates_note = _hint("Tick at least one of day, month and year: with none, this never matches.")
+            self._no_dates_note.setVisible(not any(part.tick.isChecked() for part in self._date_parts.values()))
+            self.notes.addWidget(self._no_dates_note)
+        switch = QPushButton("From … to …")
+        switch.setObjectName("ToolToggle")
+        switch.setCheckable(True)
+        switch.setChecked(span)
+        switch.setToolTip("Two dates instead, for a span across the end of a month (e.g. 24 Dec to 6 Jan)")
+        switch.toggled.connect(self._switch_dates)
+        self._add(switch)
+
+    def _cap_days(self) -> None:
+        month = self._date_parts["month"].single()
+        self._date_parts["day"].cap(calendar.monthrange(2024, month)[1] if month else 31)
+
+    def _dates_changed(self) -> None:
+        """A day, month or year changed: the condition is saved in the new form (M18)."""
+        self._cap_days()
+        data = {k: v for k, v in self.data.items() if k not in ("from", "to", "day", "month", "year")}
+        for key, part in self._date_parts.items():
+            value = part.value()
+            if value is not None:
+                data[key] = value
+        self._no_dates_note.setVisible(not any(part.tick.isChecked() for part in self._date_parts.values()))
+        if _plain(data) != _plain(self.data):
+            self.data = data
+            self.changed.emit(dict(data))
+
+    def _switch_dates(self, span: bool) -> None:
+        """From … to … on or off: the same dates as near as they go, and the row shows the other fields."""
+        d = self.data
+        new = {k: v for k, v in d.items() if k not in ("from", "to", "day", "month", "year")}
+        today = date.today()
+        fields = date_fields(d)
+        if span:  # the fields' first day to their last
+            fields = fields or {}
+            month, day = fields.get("month", (today.month, today.month)), fields.get("day")
+            first = (month[0], min(day[0] if day else 1, calendar.monthrange(2024, month[0])[1]))
+            last = (month[1], min(day[1] if day else 31, calendar.monthrange(2024, month[1])[1]))
+            new.update({"from": f"{first[0]:02d}-{first[1]:02d}", "to": f"{last[0]:02d}-{last[1]:02d}"})
+            if "year" in fields:
+                new["year"] = fields["year"][0]
+        else:
+            if fields is None:  # across a month end: its first day
+                start = parse_day_month(d.get("from")) or (today.month, today.day)
+                fields = {"day": (start[1], start[1]), "month": (start[0], start[0])}
+                year = date_part(d.get("year"), 2000, 2200)
+                if year:
+                    fields["year"] = year
+            for key, _low, _high in DATE_PARTS:
+                if key in fields:
+                    part = fields[key]
+                    new[key] = part[0] if part[0] == part[1] else list(part)
+        self.data = new
+        self.changed.emit(dict(new))
+        while self.flow.count():  # this row's fields, rebuilt for the other way
+            discard(self.flow.takeAt(0).widget())
+        while self.notes.count():
+            discard(self.notes.takeAt(0).widget())
+        self._build_dates(self.data, span)
 
     def _set_date(self, key: str, day: QSpinBox, month: QComboBox) -> None:
         last = calendar.monthrange(2024, int(month.currentData()))[1]  # (a leap year: 29 Feb is allowed)
