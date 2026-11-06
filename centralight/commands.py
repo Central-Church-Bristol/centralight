@@ -348,6 +348,11 @@ class SetReleaseFade:
     seconds: float
 
 
+@dataclass(frozen=True)
+class WindowReady:
+    """The window is built and showing (or waiting in the tray): the start-up automations may run (app.main)."""
+
+
 Command = (
     SetMaster
     | SetHouse
@@ -387,4 +392,5 @@ Command = (
     | ConsoleKeep
     | ConsoleBack
     | SetReleaseFade
+    | WindowReady
 )

@@ -25,6 +25,8 @@ from .shows import same_folder
 from .show_io import SHOW_FILE, ShowError, backup_show
 from .timing import begin_precise_timer, end_precise_timer
 
+WINDOW_READY_DELAY_MS = 250  # after the window shows: the start-up automations run then (engine.WINDOW_WAIT)
+
 
 def _prepare_windows_shell() -> None:
     if sys.platform != "win32":
@@ -184,7 +186,8 @@ def main(argv: list[str] | None = None) -> int:
     audio.start()  # off unless Settings → Audio says what to listen to
     engine = Engine(show, output, live, sources=sources, audio=audio, initial_base=FOLLOW_SCREEN_ID,
                     started_by_windows="--minimized" in argv, global_automations=global_automations,
-                    pc_start=pc_start, default_show=settings.default_show, default_opened=default_opened)
+                    pc_start=pc_start, default_show=settings.default_show, default_opened=default_opened,
+                    wait_for_window=True)  # (its automations wait for WindowReady, below)
     engine.start()
     log_info(f"CentraLight started: {'no show (lights off)' if show.no_show else 'show ' + show.folder}, output {settings.output}")
 
@@ -236,6 +239,11 @@ def main(argv: list[str] | None = None) -> int:
         window.showMaximized()
     else:
         window.show()
+    # The window is built and shown: the start-up automations may run now (a fade they start while it's being built
+    # froze while Python was held up, then jumped). A moment after the event loop starts, so its first drawing is done.
+    from .commands import WindowReady
+
+    QTimer.singleShot(WINDOW_READY_DELAY_MS, lambda: engine.submit(WindowReady()))
     if problem:
         QMessageBox.warning(window, "Show problem", problem)
     from .ui.instance import package_argument

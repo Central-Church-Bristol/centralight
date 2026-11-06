@@ -69,6 +69,7 @@ never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 | A 2-hour soak of M16 (a live connection open all along, as Companion keeps one) | **done** (5 Nov, 19:50; no errors; every command answered; memory level after 40 minutes) |
 | The final 3-hour soak, of the version for Sunday (`d5ea6ac`: all of the above) | **done** (5 Nov, 22:44; no errors; every live command answered; memory level after 40 minutes; its higher CPU is NDI's, checked) |
 | A check at 1920×1080 (what Media Background Pane sends since its update of 5 Nov) | **done** (6 Nov, 00:10; fine: about 20 % of one core, every picture arriving, every tick on time) |
+| Your report of 6 Nov: a start-up fade froze, then jumped to full. The start-up automations now wait for the window | **done** (6 Nov, 19:58; 1096 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -117,6 +118,33 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
+
+## A start-up fade that froze (6 Nov, evening)
+
+**What you saw** (the version of 4 Nov, on the lights): after a restart of the PC, the "Dioscesioan Event" loaded Default
+and its "Start Up" sent "Default" to Base. Its fade from black got about 20 % of the way, stopped for a couple of
+seconds until the window appeared, then jumped to full.
+
+**Why:** CentraLight starts its engine and the lights before it builds its window, so the lights come back first. But
+the window is built in the same Python, and just after the PC starts (everything loading from disk for the first time)
+building and showing it can hold Python up for seconds. The engine and the light output wait meanwhile, and a fade
+works out how far it should be from the clock, so afterwards it jumped to where it would have got to.
+
+**Checked** (Simulated output, temporary folders, nothing on the screen): this version, started as at a PC start,
+does the same when Python is held for 2 seconds as the window shows (as on a just-started PC): the fade stopped at 7 %
+for 2 seconds, then jumped to 75 %. (Without that hold, on this PC the window opens in 0.7 s and nothing stops.)
+
+**The fix:** at startup the automations wait until the window is up: it says so a quarter of a second after it
+appears, or once it's ready in the tray. They wait at most 20 seconds, so a fault in the window can't stop them. With
+the same 2-second hold, the lights now stay as they are while the window is built, then the fade runs smoothly from
+start to end. **On the lights:** after a restart, nothing changes until the window appears (or the tray icon, when
+Windows starts it), then the start-up fade runs smoothly: no stop part-way, no jump. The start-up actions come a
+second or two later than before. Tests check that the automations wait for the window and run soon after it (the
+whole app, started offscreen), and that they still run if it never comes.
+
+(Other heavy work in the window can still hold the lights up for a moment later on, as before; it was the start that
+took seconds. If a fade ever stops and jumps at another moment, tell Claude: fades can be made to carry on from where
+they were after a hold-up.)
 
 ## The soaks of M15–M17 (5 Nov, evening and night)
 

@@ -532,6 +532,13 @@ The old console script (`ndi_pixel_mapper.py`) went with the clean-up (M17), so 
 - [ ] Hold some lights on the Console page: **Release all** turns amber with the count; press it: they fade back.
 - [ ] Quit CentraLight: the connection goes red. Start it again: green within about 10 seconds, and the keys light up.
 
+## 20e. The start-up fade (the fix of 6 Nov)
+
+- [ ] Restart the PC, with **Start CentraLight when I sign in to Windows** ticked (step 1b), or start CentraLight by
+      hand within 10 minutes of the PC starting. Nothing changes on the lights until the window appears (or the tray
+      icon, when Windows starts it); then the start-up automations run, and Default's "Start Up" fades its input in
+      smoothly: no stop part-way, no jump to full.
+
 ## 21. Afterwards: updating the main folder
 
 Everything is committed on the branch `claude/centralight-gui` (nothing on `main`, nothing pushed). The work was

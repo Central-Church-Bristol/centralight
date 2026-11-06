@@ -68,6 +68,7 @@ from .commands import (
     ConsoleRelease,
     ConsoleSet,
     SetReleaseFade,
+    WindowReady,
     HOUSE_SLEW,
     HOUSE_SWITCH_FADE,
     QUIT_FADE,
@@ -152,6 +153,9 @@ WAKE_GAP = 60.0  # seconds: a jump this big in the clocks means the PC slept (or
 WAKE_DEBOUNCE = 60.0  # seconds: wake signals this close together are the same wake
 STARTUP_HOLD = 3.0  # seconds: at most this long at startup, nothing is sent while the screen feed's first picture comes
 FEED_WAIT = 10.0  # seconds: at startup, an automation about a feed waits at most this long for it to start sending
+# seconds: at startup the automations wait at most this long for the window to open (app.main sends WindowReady): building
+# and showing it can hold Python up for seconds just after the PC starts, and a fade started meanwhile froze and jumped
+WINDOW_WAIT = 20.0
 # seconds: a show a global automation loads; the loaded show's automations wait this long for it at most. The window
 # answers within a frame (it's loaded, or it can't be), so this only matters if it's busy (a slow sign-in, say); while
 # a dialog that's open holds the load, the window asks for longer (ShowLoadWaiting)
@@ -353,6 +357,7 @@ class Engine:
         pc_start: bool | None = None,
         default_show: str = "",
         default_opened: bool = False,
+        wait_for_window: bool = False,
     ) -> None:
         """output: a DmxOutputThread (anything with submit(bytes) and status()).
         live: what to carry on with, for this show: if live.json was saved with another show loaded, pass
@@ -369,6 +374,8 @@ class Engine:
         None: worked out here. default_show: the default show (Settings, M14), known from the first check.
         default_opened: the PC has just started and the default show opened instead of the last one, so the global
         automations under way that load a show run again (a catch-up), and their show comes back.
+        wait_for_window: the automations wait for WindowReady (at most WINDOW_WAIT seconds) before their first check,
+        so what they start at startup (a fade, say) doesn't freeze while the window is built (app.main).
 
         The PC has just started: every light starts black (house lights off, their levels kept) with nothing
         playing, and the show's "When this show loads" automations run. CentraLight reopened without a restart
@@ -426,6 +433,7 @@ class Engine:
             self._global_runner.rerun_loader()
         self._global_runner.paused, self._global_runner.paused_since = self._runner.paused, self._runner.paused_since
         self._first_check = True
+        self._window_wait: float | None = now + WINDOW_WAIT if wait_for_window else None  # (until WindowReady)
         # the countdown before an automatic show load or Cut / Fade to black (countdown.py); none just after starting
         self.countdown_seconds = float(DEFAULT_COUNTDOWN)
         self._quiet_until = now + STARTUP_QUIET
@@ -919,6 +927,8 @@ class Engine:
             self._console.put_back(now)
         elif isinstance(command, SetReleaseFade):
             self.release_fade = max(0.0, min(60.0, float(command.seconds)))
+        elif isinstance(command, WindowReady):
+            self._window_wait = None  # (the start-up automations check at the next tick)
         elif isinstance(command, CountdownAction):
             self._countdown_pressed(command.what, command.countdown_id, now)
         elif isinstance(command, QuietAutomations):
@@ -964,6 +974,11 @@ class Engine:
     def _automations(self, now: float) -> bool:
         """Check the automations (every second, and at once when what they look at changes) and
         do what they say. Also notices waking from sleep by the clocks jumping. True if anything ran."""
+        if self._window_wait is not None:  # (just started: the window is still being built, see WINDOW_WAIT)
+            if now < self._window_wait:
+                return False
+            self._window_wait = None
+            log_info(f"The window took over {WINDOW_WAIT:g} s to open: the automations start without it")
         if self._closing is not None and now >= self._closing[0]:  # (the lights have faded off: the show closes, M14)
             _when, who, automatic = self._closing
             self._closing = None
