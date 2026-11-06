@@ -66,6 +66,9 @@ never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 | A look at the Console page and the Lights element (two reviewers, 28 findings, all fixed) | **done** (5 Nov, 18:08) |
 | **M17: the repo clean-up** (the app alone: the console scripts gone, the output and patch code in the package) | **done** (5 Nov, 18:20) |
 | The last reviews: of the Console fixes (11 findings) and of M16 and M17 (7), all fixed | **done** (5 Nov, 19:22) |
+| A 2-hour soak of M16 (a live connection open all along, as Companion keeps one) | **done** (5 Nov, 19:50; no errors; every command answered; memory level after 40 minutes) |
+| The final 3-hour soak, of the version for Sunday (`d5ea6ac`: all of the above) | **done** (5 Nov, 22:44; no errors; every live command answered; memory level after 40 minutes; its higher CPU is NDI's, checked) |
+| A check at 1920×1080 (what Media Background Pane sends since its update of 5 Nov) | **done** (6 Nov, 00:10; fine: about 20 % of one core, every picture arriving, every tick on time) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -115,6 +118,60 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
 
+## The soaks of M15–M17 (5 Nov, evening and night)
+
+The whole app, as it runs for you but with Simulated output and its own temporary settings and shows (never your
+lights or files), following a test NDI picture, while the soak tool:
+- loaded the other show every 2 minutes;
+- put two copies of a linked video on the Overlay every 90 seconds and cleared them 20 seconds later;
+- set a show variable every 10 minutes so an automation counted down and faded to black, then came back;
+- replaced the linked video's original every 30 minutes;
+- **new for M16:** kept a live connection open all along, as Companion's CentraLight module does: it read every state
+  CentraLight sent, sent a command over it every 30 seconds (Release the Console, Master at full, a Tap), and every
+  minute opened a second connection that read the state and closed, as a Companion restart would.
+
+**A 2-hour soak of M16** (commit `e41c945`, 17:50–19:50):
+- **No errors:** the session log has 170 lines, none of them an error. 60 show loads, 156 Overlay copies, 10
+  countdowns (20 runs waited for theirs), and the video's original replaced 4 times.
+- **The live connection** stayed up the whole two hours (it never had to reconnect): 724 states received, 240 commands
+  sent and every one answered, and 120 second connections opened and closed.
+- **Memory** rose for the first 40 minutes as the pictures and videos filled their caches (169 MB, then 197, on
+  average per 20 minutes), then stayed level: 215, 216.1, 216.3 and 216.4 MB.
+- **Threads** stayed between 42 and 57; **CPU** averaged 10.8 % of one core (0.7 % of the PC), at most 29 %.
+
+**The final 3-hour soak** (commit `d5ea6ac`, the version for Sunday, 19:44–22:44):
+- **No errors:** the session log has 252 lines, none of them an error. 90 show loads (every one answered), 234 Overlay
+  copies (117 clears), 16 countdowns (30 runs waited for theirs), and the video's original replaced 5 times (12 copies
+  made and swapped in).
+- **The live connection** stayed up all three hours (it never had to reconnect): 1,098 states received, 359 commands
+  sent and every one answered, and 179 second connections opened and closed.
+- **Memory** rose for the first 40 minutes as before (169 MB, then 197), then stayed level: 215, 216, 216, 216, 216, 216
+  and 217 MB, 20 minutes by 20 minutes (the slow rise of under 1 MB an hour that every soak shows; it's NDI's own).
+- **Threads** stayed between 41 and 57 (47 at the end).
+- **CPU** averaged 14.8 % of one core (0.9 % of the PC), at most 25 %, against the 2-hour soak's 10.8 %. That
+  difference is NDI's, not the app's. On this PC, NDI hands the test picture over in one of two ways and switches
+  between them by itself: cheaply (receiving takes well under 1 % of one core) or by decoding it (about 11 % at
+  960×540). Either way the picture arrives in full, 24 times a second (checked every 5 seconds). The 2-hour soak mostly
+  got the cheap way (its CPU dipped to 1–4 % whenever Evening, which follows the screen, was on); this soak got the
+  decoding way all three hours. Checked afterwards:
+  - **Side by side with the 2-hour soak's version** (both at once for 20 minutes, 23:03–23:23, the same conditions for
+    both): the version for Sunday used less, 15.1 % of one core against 19.3 %: the last changes added no CPU.
+  - **Where it goes** (measured inside the app, a minute at a time): receiving the picture about 11 %, the engine 0–4 %
+    (the most while a video plays), the window almost nothing. Every tick started on time (40 a second; none more than
+    5 ms late). The NDI receiving code is the same as in the version you tried on 4 Nov.
+
+**At 1920×1080**, the size Media Background Pane sends since its update tonight (the supervising session asked for
+this check):
+- **About 20 % of one core either way** (1.2–1.4 % of the PC), against 6–15 % at 960×540. A 16-minute soak on its own
+  (23:23–23:39) averaged 19.6 % (at most 24 %), receiving the picture taking about 17 %; an 8-minute one (00:00–00:08)
+  averaged 22.0 % (at most 32 %), receiving 15 % and NDI's and OpenCV's own threads 5 %. A bigger picture costs more
+  to take in and shrink, whichever way NDI hands it over. Every picture arrived (24 a second, at 1920×1080).
+- **The engine didn't notice:** every tick started on time (2,400 a minute; in 22 minutes one was more than 5 ms late,
+  by 7 ms), and a tick's work took 0.9 ms typically and about 4.5 ms at the 99th percentile, as at 960×540 (a tick has
+  25 ms). No errors; memory and threads as usual.
+- **So 1920×1080 is fine for Sunday.** (If its CPU ever matters, the app could ask NDI for its smaller picture: it only
+  uses 320×180 of it. Not changed now: no code changes before Sunday.)
+
 ## The last reviews (5 Nov, night)
 
 Two more reviewers checked the fixes themselves, and M16 and M17: 18 findings, all fixed, with tests.
@@ -142,6 +199,9 @@ Two more reviewers checked the fixes themselves, and M16 and M17: 18 findings, a
 As you asked on 5 Nov ("a nice clean repo that just contains the centralight app"):
 - **Gone** (git's history keeps them): `ndi_pixel_mapper.py`, `usb_dmx_test.py`, `usb_dmx_patch_test.py`,
   `artnet_test.py` (the console scripts the app replaced), and `tools\ndi_follow_check.py` (a one-off check).
+- **Your decision (5 Nov, 22:06):** the old pixel-mapper script stays removed, not kept as a fallback until after
+  Sunday. If CentraLight misbehaves, the fallbacks are MagicQ or switching back to the version of 4 Nov
+  (`RIG_CHECKLIST.md`, step 20).
 - **Moved into the app's package:** `dmx_output.py` (the Eurolite USB and Art-Net output) and `fixtures.py` (the
   church's patch, now only what a new show starts from) are in `centralight\`. The test that the app sends the same
   bytes as the first scripts did now checks the moved code; the notes file (`fixture_map.csv`) is still read and
