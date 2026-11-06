@@ -549,6 +549,36 @@ The old console script (`ndi_pixel_mapper.py`) went with the clean-up (M17), so 
 - [ ] Automation tab: with enough automations to scroll (make a few if needed), scroll down and click one near the
       bottom: that one opens, and the list stays where it was. Try the show's list too.
 
+## 20g. M18, batches 2–4 (6 Nov, night)
+
+- [ ] **Overlay, per input:** Editor → an input's Input tab: **Send to Overlay** shows "Stays until cleared"; change
+      it to "Only while held"; Ctrl+Z puts it back.
+- [ ] Dashboard, a "Stays until cleared" input: hold **Send to Overlay** 2 seconds and let go: the copy stays (a red
+      box); click the box to clear it.
+- [ ] Dashboard, an "Only while held" input: hold **Send to Overlay**: the lights show it while held, and it goes when
+      let go; a quick click flashes it; nothing stays.
+- [ ] Companion: remove the old CentraLight module, import `companion\centralight-1.0.0.tgz`, and drag a held input's
+      Overlay preset onto a key: holding the key shows it, letting go clears it; a "stays" input's key leaves its copy.
+- [ ] Phone page: a held input's button reads "Overlay (hold)": hold it and it shows; let go and it goes.
+- [ ] **Dates:** Automation tab → Global automations → "Dioscesioan Event" (look only, don't change it): the condition
+      shows Day 7, Month Nov and Year 2026, all ticked with one value each, and the summary reads "7 Nov 2026".
+- [ ] Coming up lists "Sat 07 Nov 00:00 Global: Dioscesioan Event", and the week schedule shows it all day on Saturday.
+- [ ] In a test automation (not the Saturday one), add a Dates condition: it starts at today's date with Day, Month and
+      Year ticked. Untick Year: the summary says "every <day> <month>". Click **to…** next to Day, type an end day
+      (14) and press Enter: the summary shows the range. **From … to …** 24 Dec to 6 Jan: "24 Dec – 6 Jan". Then delete
+      the test automation.
+- [ ] **Shutdown:** Global automations: add one with **The PC shuts down or restarts** → **Fade to black**, 3 s,
+      "Festoon and Key lights too" ticked. The note under the condition says it can't catch a power cut, the power
+      button or a crash.
+- [ ] With the lights on, Start → **Restart**: the lights fade to black (about 3 s) before Windows restarts. After the
+      restart they come up as at any PC start (the default show or the schedule's show, and its "When this show loads").
+- [ ] Add **The PC goes to sleep** → Fade to black, then Start → **Sleep**: the lights go black within about a second.
+      Wake the PC: the "The PC wakes from sleep" automations run.
+- [ ] Settings → Starting and quitting shows the line about fading the lights when Windows shuts down, restarts or
+      sleeps.
+- [ ] Tonight: shut the PC down without quitting CentraLight first. Saturday's PC start loads Central Church for the
+      event, and its Start Up runs.
+
 ## 21. Afterwards: updating the main folder
 
 Everything is committed on the branch `claude/centralight-gui` (nothing on `main`, nothing pushed). The work was

@@ -71,6 +71,9 @@ never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 | A check at 1920×1080 (what Media Background Pane sends since its update of 5 Nov) | **done** (6 Nov, 00:10; fine: about 20 % of one core, every picture arriving, every tick on time) |
 | Your report of 6 Nov: a start-up fade froze, then jumped to full. The start-up automations now wait for the window | **done** (6 Nov, 19:58; 1096 tests pass) |
 | **M18: your changes of 6 Nov, evening** — batch 1: number fields' arrows, Settings tidied (Countdown timer, Shows and automations, Console), automation lists that keep their place | **done** (6 Nov, 21:20; 1102 tests pass) |
+| — batch 2: Send to Overlay set per input: stays until cleared (as before) or only while held; the API, phone page and Companion follow it | **done** (6 Nov, 22:10; 1158 tests pass) |
+| — batch 3: dates as a day, month and year, each with a tick and a range on demand; From … to … kept for spans over a month end; Saturday's automation unchanged | **done** (6 Nov, 22:10; 1158 tests pass) |
+| — batch 4: the PC shutting down or going to sleep: two global automation conditions, so the lights can fade first; never held dark after | **done** (6 Nov, 22:10; 1158 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -120,10 +123,92 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
 
+## M18, batches 2–4 (6 Nov, night)
+
+You asked for the rest the same evening, so three helpers built them at once, each in its own copy of the code, and they were joined and tested together.
+
+### Batch 4: the PC shutting down or going to sleep
+
+- Two new conditions for global automations: **The PC shuts down or restarts** and **The PC goes to sleep**. The lights
+  keep their last look when the PC turns off, so a global automation can now fade them out first. For example: "The
+  PC shuts down or restarts → Fade to black (3 s), Festoon and Key lights too".
+- They run at once, with no countdown. As Windows shuts down, CentraLight waits for the fade and for the last look to
+  reach the dongle, 4.5 s at most, and fades are cut to 4 s; meanwhile Windows' shutdown screen may say "CentraLight:
+  fading the lights out". Going to sleep can't be held, so fades are cut to 1 s and CentraLight waits 1.5 s at most.
+- Signing out of Windows counts as shutting down, and so does Windows closing CentraLight for an update.
+- When Windows shuts down, restarts or signs out, CentraLight never holds the lights off at the next start, whatever
+  "When you quit" says (with "Turn the lights off" they still go off, as before). The next PC start is like any other:
+  the schedule's show loads and its "When this show loads" runs. A test does exactly tomorrow's case: a "shuts down"
+  automation fades to black, Windows ends the session, and the PC start on 7 Nov 2026 loads the show of a whole-day
+  date automation (Default show None), runs its Start Up, and isn't held dark.
+- When Windows starts CentraLight in the tray, its (hidden) window now exists from the start, so the sleep and shutdown
+  messages reach it even if nobody opens the window.
+- The editor's note under each condition says what it can't catch: a power cut, the power button held down, a crash.
+  Settings → Starting and quitting points to them.
+- To check: **a quit by hand** (tray → Quit) with "Turn the lights off" still holds the lights off at the next start,
+  and a whole-day date (like Saturday's event) doesn't lift that hold. So tonight, shut the PC down without quitting
+  CentraLight first.
+- To check: signing out, and Windows closing CentraLight for an update, run "The PC shuts down or restarts" too.
+- To check: a step with a wait ("after N s") on these comes too late; a countdown under way when the PC shuts down or
+  sleeps is dropped; while automations are paused, these don't run either.
+
+### Batch 3: dates as a day, month and year
+
+- A Dates condition now has **Day**, **Month** and **Year**, each with a tick: untick one for any day of the month,
+  any month or every year. Each starts as one value; **to…** beside it makes a range (the 1st to the 7th, Jun to Aug,
+  2026 to 2027), and clicking it again goes back to one value. A new Dates condition starts at today's date with all
+  three ticked.
+- The **From … to …** button at the end of the row is kept for a span across the end of a month (24 Dec to 6 Jan),
+  with "Only in" a year as before.
+- Old automations work exactly as before: CentraLight reads both the old "from / to" form and the new one, and checks
+  an old one with the same code as before (a test compares the two day by day over 2025–2028). The editor shows an old
+  single day, or days within one month, in the new fields, and only saves the new form when you change something. A
+  span across a month end opens as From … to ….
+- Summaries read more plainly: "7 Nov 2026", "every 25 Dec", "every December", "1st–7th of each month". A From … to …
+  with a year names both years ("24 Dec 2026 – 6 Jan 2027").
+- **Saturday's automation** (Dioscesioan Event, 7 Nov 2026) has its own test, using its file exactly as it is: it reads
+  "7 Nov 2026", matches all of that day and no other (not 6 or 8 Nov, not 7 Nov 2025 or 2027), shows on the week
+  schedule (Saturday, all day) and in Coming up, and opening it in the editor leaves the file untouched.
+- To check: summaries start with a small "every" ("every 25 Dec"), as "every day" does for Days.
+- To check: unticking all three makes the condition never true (a note says so), like a Days condition with no day
+  ticked; it doesn't mean "every day".
+- To check: a From … to … within one month (say 1 to 24 Dec) opens next time as the fields (Day 1 to 24, Month Dec).
+  It means the same thing.
+- To check: a new Dates condition starts today, so if the rest of that automation is already true, it runs straight
+  away (as the old December default did during December).
+- (An older CentraLight reading a new-form condition switches that automation off as broken; old files are unaffected,
+  and they stay in the old form until changed.)
+
+### Batch 2: Send to Overlay, set per input
+
+- Each input has a new setting in the Editor's Input tab, under Transition in: **Send to Overlay: Stays until
+  cleared** (the default; every older input reads as this) or **Only while held**.
+- The Dashboard's Send to Overlay button does only what the input says now; the old click-or-hold timing is gone.
+  Stays: each press adds a copy that stays until its red box or Clear all clears it, however long it's held. Only while
+  held: the copy goes the moment the button is let go, however quick. Space works the same way, and if a dialog or
+  another window takes over while it's held, it's let go.
+- The remote: `/api/input/<id>/overlay` follows the setting, and a new `/api/input/<id>/overlay/release` lets go of a
+  held input (nothing for one whose copies stay); also as JSON (`{"op": "overlay_release"}`) and on Companion's live
+  connection. The phone page's button says "Overlay (hold)" for a held input and works while it's held down.
+- Companion: a new **Release (held inputs)** action; each input's Overlay preset has it on the key's release, so one
+  key does either. The "flash while held" presets went. The module is rebuilt (still 1.0.0).
+- The Stream Deck app's Website action only presses, so Settings → Remote, the remote page and Copy Stream Deck URLs say
+  a held input needs Companion or the phone page.
+- Automations' Send to Overlay still adds a copy that stays. Hotkeys only send to Base, so they're unchanged. The AI
+  guide and the schema know the new `"overlay"` field.
+- To check: two people holding the same input from the remote (Companion and a phone, say): the first to let go clears
+  both.
+- To check: Companion keys made from the old Overlay presets have nothing on their release (drag the preset again, or
+  add Release (held inputs)); old flash keys still work.
+- To check: the module is still 1.0.0, so remove the old one in Companion before importing the new one (or it could
+  become 1.0.1).
+- To check: the tile's right-click "Send to Overlay" adds a copy that stays, even for a held input (a menu can't be
+  held).
+
 ## M18, batch 1: arrows, Settings, the automation lists (6 Nov, evening)
 
 Your three quick changes of the evening, and a tidy-up of Settings the supervising session suggested. The other three
-(the Overlay button set per input, dates as day, month and year, and the PC shutting down) wait for the next session.
+(the Overlay button set per input, dates as day, month and year, and the PC shutting down) came later that night: see above.
 - **Number fields show their arrows.** The up / down buttons in Settings' number fields (Audio's Rise and Fall, the
   countdown, Fade to black…) were squeezed into a sliver with dark arrows. They have room of their own now, a divider,
   and light arrows (pictures, so they're sharp at every scaling: checked at 100, 150 and 200 %). The automations' time
