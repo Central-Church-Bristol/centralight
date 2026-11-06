@@ -912,13 +912,7 @@ class MainWindow(QWidget):
     def ask_new_show(self) -> None:
         if self._locked:
             return
-        if self.document.show.no_show:
-            about = ("(It has the lights and layouts of the show loaded last, and “Follow screen”. It opens straight away; "
-                     "the lights stay off until you send one of its inputs.)")
-        else:
-            about = ("(It has this show's lights and layouts, and “Follow screen”. It opens straight away; the lights hold "
-                     "what they show until you send one of its inputs.)")
-        name, ok = QInputDialog.getText(self, "New show", f"Name for the new show:\n\n{about}",
+        name, ok = QInputDialog.getText(self, "New show", "Name for the new show:",
                                         text=unique_name(self.shows_root(), "New show"))
         if not ok or not name.strip():
             return
