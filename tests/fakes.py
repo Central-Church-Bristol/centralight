@@ -318,10 +318,10 @@ class FakeEngine(Engine):
     def start(self) -> None:  # no threads in window tests
         return
 
-    def stop(self, lights_off: bool = False, fade: bool = True) -> LiveState:  # type: ignore[override]
+    def stop(self, lights_off: bool = False, fade: bool = True, hold_off: bool = True) -> LiveState:  # type: ignore[override]
         if lights_off:
             from centralight.commands import ToBlack
 
             Engine.submit(self, ToBlack(0.0, everything=True))
             self.tick()
-        return Engine.stop(self, lights_off=lights_off, fade=False)
+        return Engine.stop(self, lights_off=lights_off, fade=False, hold_off=hold_off)

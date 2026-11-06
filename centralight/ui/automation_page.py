@@ -84,6 +84,12 @@ EVENT_HINTS = {
     "pc_startup": "When Windows starts CentraLight at sign-in (Start with Windows), or CentraLight starts within 10 minutes of the PC starting.",
     "app_started": "Every time CentraLight starts (restarts too).",
     "pc_woke": "When the PC wakes from sleep.",
+    # (M18) what they can't catch, too
+    "pc_shutdown": ("When Windows shuts down, restarts or signs out. Its actions happen at once (no countdown) and "
+                    "Windows waits for a fade of up to 4 s; a step that waits first comes too late. It can't catch a "
+                    "power cut, holding the power button down, or a crash."),
+    "pc_sleep": ("When the PC goes to sleep. Its actions happen at once, with fades of 1 s at most (Windows won't wait "
+                 "longer). It can't catch a power cut, holding the power button down, or a crash."),
     "colour_black": "While nothing is on Base, the Overlay or the Console (after Cut or Fade to black, say).",
     "show_loads": ("When this show is loaded (by you, the Stream Deck or a global automation), and when the PC starts with "
                    "it. Not when CentraLight reopens after a quit or a crash: then it carries on as it was."),

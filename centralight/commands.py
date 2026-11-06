@@ -7,8 +7,9 @@ its next tick (1/40 s later). Many slider moves in one tick simply leave the las
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .model import Input, Show, Transition
@@ -18,6 +19,10 @@ HOUSE_SLEW = 0.08  # seconds: festoon / key-light fader moves are smoothed over 
 HOUSE_SWITCH_FADE = 0.5  # seconds: the on/off switches fade over this long
 BLACK_FADE = 2.0  # seconds: Fade to black's time to start with (Settings changes it)
 QUIT_FADE = 0.5  # seconds: "Turn lights off" fades everything to black this fast, then quits
+# seconds (M18): the fades of "The PC shuts down or restarts" are this short at most (Windows waits about 5 s), and of
+# "The PC goes to sleep" (Windows allows about 2 s, and can't be held)
+SHUTDOWN_FADE = 4.0
+SLEEP_FADE = 1.0
 
 
 @dataclass(frozen=True)
@@ -239,9 +244,12 @@ class SwitchLayout:
 
 @dataclass(frozen=True)
 class PowerEvent:
-    """The PC is going to sleep ("sleeping") or has woken up ("woke")."""
+    """The PC is going to sleep ("sleeping"), has woken up ("woke"), or Windows is shutting down, restarting or signing
+    out ("shutdown", M18). For "sleeping" and "shutdown" the global automations about it run at once, and done (if
+    given) is set once their fades are over and the last frame has gone to the output (Windows waits for that)."""
 
     kind: str
+    done: threading.Event | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)

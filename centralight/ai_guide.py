@@ -494,7 +494,8 @@ def guide_text(show: Show, full: bool = True) -> str:
             "`show_loads` happens when this show is loaded (by a person, the Stream Deck or a global automation) and when "
             "the PC starts with it, not when CentraLight reopens after a quit or a crash.\n\n"
             "Actions (`do`): " + ", ".join(f"`{k}` ({v.lower()})" for k, v in actions_for("show").items()) + ".\n\n"
-            "The PC starting, CentraLight starting, the PC waking and loading another show are for global automations: "
+            "The PC starting, waking, shutting down or going to sleep, CentraLight starting, and loading another show are "
+            "for global automations: "
             f"they're in `..\\{GLOBAL_DIR}` (its AI_GUIDE.md says how).\n\n"
             "```json\n" + json_text({
                 "format": "centralight-automation", "version": 1, "id": "sunday-welcome", "name": "Sunday welcome", "logic": "all",
@@ -573,7 +574,11 @@ def global_guide_text(shows: list[tuple[str, str]], house_labels: list[str]) -> 
         f"checked first, then the loaded show's. `{ORDER_FILE}` is their order (CentraLight keeps it; a new file goes at "
         "the end). The file format is the same as a show's automations.",
         "Conditions (`type`): " + ", ".join(f"`{k}` ({v.lower()})" for k, v in conditions_for("global").items()) + ". "
-        '"This show is loaded": `{"type": "loaded_show", "show": "<show id>"}`.',
+        '"This show is loaded": `{"type": "loaded_show", "show": "<show id>"}`. `pc_shutdown` (Windows shutting down, '
+        "restarting or signing out) and `pc_sleep` (the PC going to sleep) are moments: their actions happen at once, "
+        "with no countdown and fades cut short (4 s at most, 1 s going to sleep), as Windows waits only that long, so "
+        'use them for `{"do": "fade_black", "fade": 3, "all": true}` and the like (a step with a `delay` comes too '
+        "late). Nothing can catch a power cut, the power button held down, or a crash.",
         "Actions (`do`): " + ", ".join(f"`{k}` ({v.lower()})" for k, v in actions_for("global").items()) + ". "
         'Load a show: `{"do": "load_show", "show": "<show id>"}` (the lights hold what they show until one of its inputs is '
         "sent; its own automations are checked straight away, `show_loads` among them). The Festoon and Key lights are "

@@ -1927,16 +1927,19 @@ class MainWindow(QWidget):
 
     def quit_without_asking(self, why: str) -> None:
         """Windows logging off or shutting down: stop cleanly without asking, as Settings say (turning the lights off
-        only if they say so). Written in the session log first, as every quit is."""
+        only if they say so). Written in the session log first, as every quit is. The lights are never held off at the
+        next start (M18): the PC's next start is like any other (its automations, the default show)."""
         if self._shut_down:
             return  # (a quit that's under way already: it was written then)
         lights_off = self.settings.quit_action == QUIT_OFF
         reason = "there's no time to ask" if self.settings.quit_action == QUIT_ASK else "Settings say so"
-        log_info(f"Quit, {why}: {QUIT_WORDS[QUIT_OFF] if lights_off else QUIT_WORDS[QUIT_LEAVE]} ({reason})")
-        self.shutdown(lights_off=lights_off)
+        log_info(f"Quit, {why}: {QUIT_WORDS[QUIT_OFF] if lights_off else QUIT_WORDS[QUIT_LEAVE]} ({reason})"
+                 + ("; they aren't held off at the next start" if lights_off else ""))
+        self.shutdown(lights_off=lights_off, hold_off=False)
 
-    def shutdown(self, lights_off: bool) -> None:
-        """Stop the engine and the output, and save where everything was."""
+    def shutdown(self, lights_off: bool, hold_off: bool = True) -> None:
+        """Stop the engine and the output, and save where everything was. hold_off: lights_off holds the lights off
+        against automations at the next start (not when Windows ends the session: see Engine.stop)."""
         if self._shut_down:
             return
         self._shut_down = True
@@ -1952,7 +1955,7 @@ class MainWindow(QWidget):
         self._guide_timer.stop()
         if self.remote is not None:
             self.remote.stop()
-        state = self.engine.stop(lights_off=lights_off)
+        state = self.engine.stop(lights_off=lights_off, hold_off=hold_off)
         self.output.close(blackout=lights_off)
         close_sources = getattr(getattr(self.engine, "sources", None), "close", None)
         if close_sources is not None:

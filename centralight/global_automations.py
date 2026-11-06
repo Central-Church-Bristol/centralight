@@ -5,7 +5,8 @@ automations, and global.json for the order they're listed and run in).
 They're for things that aren't about one show: load a show at a set time ("Sunday 08:30: load Morning"),
 cut or fade to black, Master, the Festoon and Key lights (found in the loaded show by their names), and
 turning another global automation on or off. They can't touch a show's inputs, the Overlay, variables or
-layouts. Their conditions: the PC starting, CentraLight starting, the PC waking, time, days, dates,
+layouts. Their conditions: the PC starting, CentraLight starting, the PC waking, shutting down or going to
+sleep (M18), time, days, dates,
 sunrise / sunset, an NDI feed, sound, the colour lights being black, and which show is loaded. Each second
 they're checked before the loaded show's automations.
 

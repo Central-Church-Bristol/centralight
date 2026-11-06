@@ -7,7 +7,7 @@ when they stop being true. Conditions combine with All or Any, and each can be i
 When it runs:
 - States (time of day, days, dates, what's live, variables, NDI, the colour lights being black) are checked every
   second and straight away when something changes. Events (PC started, CentraLight started,
-  PC woke) are only true at the moment they happen.
+  PC woke, and (M18) the PC shutting down or going to sleep) are only true at the moment they happen.
 - An automation runs once when its combined condition goes from false to true; it doesn't repeat
   while it stays true. At startup and after waking everything is checked straight away, so a PC
   that starts at 10:00 on a Sunday still gets "Sunday 09:00-12:30" (catch-up).
@@ -69,8 +69,10 @@ CONDITIONS: dict[str, str] = {
     "app_started": "CentraLight starts",
     "pc_startup": "The PC starts",
     "pc_woke": "The PC wakes from sleep",
+    "pc_shutdown": "The PC shuts down or restarts",  # (M18: Windows shutting down, restarting or signing out)
+    "pc_sleep": "The PC goes to sleep",
 }
-EVENTS = ("pc_startup", "app_started", "pc_woke", "show_loads")
+EVENTS = ("pc_startup", "app_started", "pc_woke", "pc_shutdown", "pc_sleep", "show_loads")
 ACTIONS: dict[str, str] = {
     "base": "Send an input to Base",
     "overlay": "Send an input to the Overlay",
@@ -92,7 +94,7 @@ SHOW = "show"
 GLOBAL = "global"
 SHOW_CONDITIONS = ("time", "days", "dates", "sun", "input_live", "variable", "ndi", "colour_black", "audio", "show_loads")
 GLOBAL_CONDITIONS = ("time", "days", "dates", "sun", "ndi", "audio", "colour_black", "loaded_show", "app_started",
-                     "pc_startup", "pc_woke")
+                     "pc_startup", "pc_woke", "pc_shutdown", "pc_sleep")
 SHOW_ACTIONS = ("base", "overlay", "overlay_clear", "overlay_clear_all", "house", "master", "cut_black", "fade_black",
                 "release_console", "variable", "layout",
                 "automation")
@@ -429,7 +431,7 @@ class Situation:
     ndi: Mapping[str, bool] = field(default_factory=dict)  # feed name (lower case) -> sending now
     colour_black: bool = False  # nothing on Base, the Overlay or the Console (after a Cut / Fade to black, say)
     audio: Mapping[str, float] = field(default_factory=dict)  # audio.level and friends, now
-    events: frozenset[str] = frozenset()  # app_started, pc_startup, pc_woke happening now
+    events: frozenset[str] = frozenset()  # app_started, pc_startup, pc_woke, pc_shutdown, pc_sleep happening now
     previous_local: datetime | None = None  # local time at the last check (to spot clock changes)
     previous_now: float | None = None  # wall clock at the last check (a clock change moves local time, not this)
     ndi_known: bool = True  # False just after starting: a feed that isn't sending yet may still be connecting

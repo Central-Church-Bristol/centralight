@@ -307,6 +307,8 @@ class SettingsDialog(QDialog):
         quit_row.addWidget(self.quit_action, 1)
         quit_layout.addLayout(quit_row)
         quit_layout.addWidget(hint("The Eurolite keeps showing the last look until something else is sent."))
+        quit_layout.addWidget(hint("To fade the lights when Windows shuts down, restarts or sleeps, use a global automation: "
+                                   "The PC shuts down or restarts, or The PC goes to sleep."))  # (M18)
 
         # --- files
         files_box = QGroupBox("Files and diagnostics")

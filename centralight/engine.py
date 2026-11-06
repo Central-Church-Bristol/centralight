@@ -72,6 +72,8 @@ from .commands import (
     HOUSE_SLEW,
     HOUSE_SWITCH_FADE,
     QUIT_FADE,
+    SHUTDOWN_FADE,
+    SLEEP_FADE,
     ClearBase,
     ClearFromOverlay,
     ClearOverlay,
@@ -160,6 +162,9 @@ WINDOW_WAIT = 20.0
 # answers within a frame (it's loaded, or it can't be), so this only matters if it's busy (a slow sign-in, say); while
 # a dialog that's open holds the load, the window asks for longer (ShowLoadWaiting)
 LOAD_WAIT = 20.0
+# Windows shutting down (restarting, signing out) or the PC going to sleep (M18): the event the global automations see,
+# and how short their fades are made (Windows waits for them only a few seconds)
+POWER_DOWN = {"shutdown": ("pc_shutdown", SHUTDOWN_FADE), "sleeping": ("pc_sleep", SLEEP_FADE)}
 BLACK: RGB = (0.0, 0.0, 0.0)
 WHITE: RGB = (1.0, 1.0, 1.0)
 
@@ -444,6 +449,12 @@ class Engine:
         self._closing: tuple[float, str, bool] | None = None
         self.black_fade = BLACK_FADE
         self._woke = False
+        # Windows shutting down or the PC going to sleep (M18): its event -> the fade limit, for the next check; while
+        # that check's actions are done, their fades are this short at most; who's waiting for them to finish
+        self._power: dict[str, float] = {}
+        self._power_limit: float | None = None
+        self._power_ran = False
+        self._power_waiting: list[threading.Event] = []
         self._last_wake: float | None = None
         self._prev_mono: float | None = None
         self._prev_wall: float | None = None
@@ -522,8 +533,10 @@ class Engine:
             self._watchdog = threading.Thread(target=self._watch, name="engine-watchdog", daemon=True)
             self._watchdog.start()
 
-    def stop(self, lights_off: bool = False, fade: bool = True) -> LiveState:
-        """Stop ticking. lights_off fades everything to black first (QUIT_FADE). Returns the state to save."""
+    def stop(self, lights_off: bool = False, fade: bool = True, hold_off: bool = True) -> LiveState:
+        """Stop ticking. lights_off fades everything to black first (QUIT_FADE), and (hold_off) holds them off against
+        automations at the next start, until a time range begins after this quit. Not when Windows ends the session
+        (M18: a shutdown, restart or sign out): the next start is like any other. Returns the state to save."""
         if lights_off and fade and self._running:
             self.submit(ToBlack(QUIT_FADE, everything=True))
             time.sleep(QUIT_FADE + 0.1)  # (the engine thread fades the lights meanwhile)
@@ -541,6 +554,7 @@ class Engine:
                 log_exception("engine final tick", exc)
         if lights_off:
             self._to_black(0.0, True, self._clock())  # (black for sure, faded or not)
+        if lights_off and hold_off:
             if not self._quit_dark:
                 self._quit_at = self._wall()  # a new quit (one still held from an earlier quit keeps that quit's time)
             self._quit_dark = True
@@ -626,6 +640,8 @@ class Engine:
             self._holding = False  # every feed has a picture (or it's been long enough): from now on, always send
         if not self._holding:
             self.output.submit(dmx)
+        if self._power_waiting:  # (Windows is waiting for the lights: M18)
+            self._power_settled(now, dmx)
 
         if now - self._last_tidy >= TIDY_INTERVAL:
             self._last_tidy = now
@@ -723,6 +739,52 @@ class Engine:
             else:
                 canvases[layer_kind(ctx)] = composite(self._base.render(now, ctx), [self._overlay.render(now, ctx)])
         return frozen_mix(canvases, contexts, name=self.show.name)
+
+    def _fading(self, now: float) -> bool:
+        """A fade under way: on Base (a Fade to black, say), Master or a house light."""
+        return (self._base.transitioning(now) or self._master.moving(now)
+                or any(house.level.moving(now) or house.switch.moving(now) for house in self._house.values()))
+
+    def _power_down(self, command: PowerEvent) -> None:
+        """Windows is shutting down (restarting, signing out) or the PC is going to sleep (M18): the global automations
+        about it run at the next check, at once (no countdown), with their fades cut short; a countdown under way is
+        dropped (what it waited for won't come). command.done is set once their fades are over and the last frame has
+        gone out (_power_settled)."""
+        event, limit = POWER_DOWN[command.kind]
+        self._power[event] = min(limit, self._power.get(event, limit))
+        why = "Windows is shutting down" if command.kind == "shutdown" else "the PC is going to sleep"
+        for runner in (self._global_runner, self._runner):
+            runner.drop_countdowns(why)
+        if command.done is not None:
+            self._power_waiting.append(command.done)
+        log_info(f"{why[0].upper()}{why[1:]}: the global automations about it run now")
+
+    def _power_settled(self, now: float, dmx: bytes) -> None:
+        """Windows is waiting for the lights (M18): it may carry on once the automations about it have run, their fades
+        are over, and this frame has gone out (the dongle keeps showing it)."""
+        if self._power or (self._power_ran and self._fading(now)):
+            return
+        sent = getattr(self.output, "last_sent", None)
+        if callable(sent) and sent() != dmx and self.output.status().ok:
+            return  # (the output thread sends it meanwhile: the next tick sees. Not connected: nothing to wait for)
+        waiting, self._power_waiting = self._power_waiting, []
+        self._power_ran = False
+        for done in waiting:
+            done.set()
+        log_info("The lights have got there: Windows can carry on")
+
+    @staticmethod
+    def _quicker(command: Any, limit: float, release_fade: float) -> Any:
+        """The same change with its fade cut to `limit` seconds at most (M18: Windows won't wait longer)."""
+        if isinstance(command, ToBlack):
+            return replace(command, seconds=min(float(command.seconds), limit))
+        if isinstance(command, SetMaster):
+            return replace(command, fade=min(float(command.fade), limit))
+        if isinstance(command, SetHouse) and command.fade is not None:
+            return replace(command, fade=min(float(command.fade), limit))
+        if isinstance(command, ConsoleRelease):
+            return replace(command, fade=min(release_fade if command.fade is None else float(command.fade), limit))
+        return command
 
     def _end_quit_dark(self, why: str) -> None:
         if self._quit_dark:
@@ -951,6 +1013,8 @@ class Engine:
             self.gui_requests.put(("Stream Deck", {"do": "layout", "layout": command.layout_id}))
         elif isinstance(command, PowerEvent) and command.kind == "woke":
             self._on_wake()
+        elif isinstance(command, PowerEvent) and command.kind in POWER_DOWN:
+            self._power_down(command)
         elif isinstance(command, SetIdentify):
             self._identify = bool(command.on)
             if command.seed is not None:
@@ -1002,6 +1066,8 @@ class Engine:
                 events.add("pc_startup")
         if self._woke:
             events.add("pc_woke")
+        power = dict(self._power)  # (Windows shutting down or the PC going to sleep, M18)
+        events.update(power)
         show_events = frozenset(self._show_events)
         ran = False
         situation = None
@@ -1027,11 +1093,20 @@ class Engine:
             )
             self._first_check = False
             self._woke = False
+            self._power.clear()
+            # (shutting down or going to sleep: what this check does happens at once, its fades cut short)
+            self._power_limit = min(power.values()) if power else None
+            if power:
+                self._power_ran = False
             # the global automations first (one may load another show)...
             self._set_countdown(now)
-            for who, action in self._global_runner.check(self.global_automations, situation, now):
-                self._global_action(who, action, now)
-                ran = True
+            try:
+                for who, action in self._global_runner.check(self.global_automations, situation, now):
+                    self._global_action(who, action, now)
+                    ran = True
+                    self._power_ran = self._power_ran or bool(power)
+            finally:
+                self._power_limit = None
             self._announce(now, situation, "global", self._global_runner, self.global_automations)
         for who, action in self._global_runner.due(now):
             self._global_action(who, action, now)
@@ -1053,8 +1128,10 @@ class Engine:
     # ------------------------------------------------------------ the countdown before automatic changes (M13)
 
     def _counting(self, now: float) -> bool:
-        """Do automatic changes get a countdown now? Not when it's off, just after starting, or while paused."""
-        return self.countdown_seconds > 0.0 and now >= self._quiet_until and not self._runner.paused
+        """Do automatic changes get a countdown now? Not when it's off, just after starting, while paused, or as Windows
+        shuts down or the PC goes to sleep (M18: there's no time)."""
+        return (self.countdown_seconds > 0.0 and now >= self._quiet_until and not self._runner.paused
+                and self._power_limit is None)
 
     def _set_countdown(self, now: float) -> None:
         """Before a check: tell each runner the countdown's length now (0 = none) and which actions get one."""
@@ -1254,6 +1331,8 @@ class Engine:
             house = self._house.get(command.fixture)
             if house is not None:
                 house.mirror = None  # automations set house lights their own way, whatever the blackout was
+        if self._power_limit is not None:  # (Windows is shutting down or the PC going to sleep: M18)
+            command = self._quicker(command, self._power_limit, self.release_fade)
         self._apply(command, now)
 
     def _on_wake(self) -> None:

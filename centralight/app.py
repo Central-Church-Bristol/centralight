@@ -194,10 +194,9 @@ def main(argv: list[str] | None = None) -> int:
     from PySide6.QtWidgets import QSystemTrayIcon
 
     from . import startup
-    from .commands import PowerEvent
     from .remote import RemoteServer, new_key
     from .ui.instance import InstanceServer
-    from .ui.power import PowerEventFilter
+    from .ui.power import PowerDown, PowerEventFilter
     from .ui.tray import Tray
 
     if not settings.remote_key:
@@ -207,7 +206,8 @@ def main(argv: list[str] | None = None) -> int:
 
     window = MainWindow(settings, show, engine, output, remote=remote, global_automations=global_automations,
                         shows_root=shows_root())
-    # Windows logging off or shutting down: stop cleanly without asking (written in the session log, as every quit is)
+    # Windows logging off or shutting down: stop cleanly without asking (written in the session log, as every quit is),
+    # never holding the lights off at the next start (M18)
     app.aboutToQuit.connect(lambda: window.quit_without_asking("as Windows logs off or shuts down"))
 
     # Always running: the tray, a second launch showing this window, sleep / wake, start with Windows
@@ -220,7 +220,8 @@ def main(argv: list[str] | None = None) -> int:
     # (a double-clicked .clshow file: asked about once the ping itself is done)
     window.instance_server = InstanceServer(window.bring_to_front, on_open=lambda path: QTimer.singleShot(
         0, lambda: window.ask_import_package(path)))
-    window.power_filter = PowerEventFilter(lambda kind: engine.submit(PowerEvent(kind)) if kind == "woke" else log_info("The PC is going to sleep"))
+    # sleep, wake, and (M18) Windows shutting down: the global automations about them, with Windows waiting for a fade
+    window.power_filter = PowerEventFilter(PowerDown(engine.submit))
     app.installNativeEventFilter(window.power_filter)
     if startup.managed():
         trouble = startup.sync(settings.start_with_windows)
@@ -235,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     minimized = "--minimized" in argv and tray is not None
     if minimized:
         log_info("Started in the tray (by Windows at sign-in)")
+        window.winId()  # (its window exists, hidden: Windows sends the sleep and shutdown messages to windows, M18)
     elif settings.maximized:
         window.showMaximized()
     else:
