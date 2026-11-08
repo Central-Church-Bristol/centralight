@@ -597,6 +597,12 @@ The old console script (`ndi_pixel_mapper.py`) went with the clean-up (M17), so 
 - [ ] Show ▾ → **Show variables…**: the Editor opens with the show variables showing. The Dashboard's Variables
       **Edit** does the same.
 
+## 20k. No blink at a PC start (8 Nov)
+
+- [ ] With the lights on, quit CentraLight from the tray with **Leave the lights as they are**, then sign out and back
+      in: Windows starts CentraLight, and the lights keep their look while it starts. When the schedule's show comes
+      back they stay as they were (no blink). With nothing to load, they fade to black instead.
+
 ## 21. Afterwards: updating the main folder
 
 Everything is committed on the branch `claude/centralight-gui` (nothing on `main`, nothing pushed). The work was

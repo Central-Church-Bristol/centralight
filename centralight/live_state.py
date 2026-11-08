@@ -42,6 +42,7 @@ class LiveState:
     automations: dict[str, Any] = field(default_factory=dict)  # the show's: paused, each one's state, history
     global_automations: dict[str, Any] = field(default_factory=dict)  # the global ones' state and history
     console: dict[str, Any] = field(default_factory=dict)  # what the Console held (M15): {"held": ..., "chase": ...}
+    last_frame: list[int] = field(default_factory=list)  # the DMX the lights were last sent (8 Nov: a PC start fades from it)
     saved_at: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
@@ -60,6 +61,7 @@ class LiveState:
             "automations": self.automations,
             "global_automations": self.global_automations,
             **({"console": self.console} if self.console else {}),
+            **({"last_frame": list(self.last_frame)} if self.last_frame else {}),
             "saved_at": self.saved_at,
         }
 
@@ -77,6 +79,7 @@ class LiveState:
                          global_automations=dict(self.global_automations),
                          automations={"paused": bool(self.automations.get("paused", False)),
                                       "paused_since": self.automations.get("paused_since")},
+                         last_frame=list(self.last_frame),  # (what the lights show, whatever show it came from)
                          saved_at=self.saved_at)
 
     @classmethod
@@ -110,6 +113,10 @@ class LiveState:
         state.global_automations = dict(global_automations) if isinstance(global_automations, dict) else {}
         console = data.get("console")
         state.console = dict(console) if isinstance(console, dict) else {}
+        frame = data.get("last_frame")
+        if isinstance(frame, list) and len(frame) <= 512 and all(
+                isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 255 for v in frame):
+            state.last_frame = list(frame)  # (anything odd: none, so the next PC start is as before)
         saved = data.get("saved_at", 0.0)
         state.saved_at = float(saved) if isinstance(saved, (int, float)) and not isinstance(saved, bool) else 0.0
         return state

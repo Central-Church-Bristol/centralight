@@ -232,10 +232,11 @@ class EngineTests(AutomationEngineTestCase):
             engine.tick()
         asked = [a.get("show") for a in drain(engine) if a.get("do") == "load_show"]
         self.assertEqual(asked, ["morning"])
-        self.assertEqual(engine.output.frames[-1], bytes(DMX_CHANNELS))  # (until it's loaded: every light off)
+        self.assertEqual(engine.output.frames, [])  # (8 Nov: nothing sent while it loads: the lights keep their look)
 
     def test_a_pc_start_with_no_show_sends_every_channel_at_zero(self) -> None:
         engine = FakeEngine(NO_SHOW, pc_start=True)
+        engine.settle(1.0)  # (8 Nov: once the start-up automations are done)
         self.assertEqual(engine.fake_output.frames[-1], bytes(DMX_CHANNELS))
         self.assertEqual(show_channels(NO_SHOW), DMX_CHANNELS)  # (all 512, so no light keeps an old colour)
 

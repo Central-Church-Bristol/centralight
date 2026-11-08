@@ -144,6 +144,7 @@ def _live_key(state) -> dict:
     """What decides whether live.json needs saving again: everything except the clocks, which move every frame."""
     data = state.to_dict()
     data.pop("saved_at", None)
+    data.pop("last_frame", None)  # (it moves with every picture: saved along with anything else, and at the heartbeat)
     if data.get("base") is not None:
         data["base"] = {"input": data["base"].get("input")}
     overlay = data.get("overlay")

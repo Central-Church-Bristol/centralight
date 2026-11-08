@@ -152,6 +152,7 @@ class TakeoverTests(unittest.TestCase):
         self.assertEqual(chans(again, PILLARS[0])[:3], (0, 255, 0))  # (the chase, where it was)
         fresh = FakeEngine(engine.show, live=saved, pc_start=True)
         self.assertFalse(fresh._console.active)
+        fresh.settle(fresh.black_fade + 1.0)  # (8 Nov: the start-up done, and the fade from the held look over)
         self.assertNotEqual(chans(fresh)[:3], (255, 0, 0))
 
 

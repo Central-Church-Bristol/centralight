@@ -76,6 +76,7 @@ never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 | — the shutdown fade, fixed after its first real try: CentraLight now asks Windows to deal with it first | **done** (6 Nov, 22:47; 1161 tests pass) |
 | — your change of 6 Nov, late: a new show starts with no inputs (no "Follow screen") | **done** (6 Nov, 23:30; 1162 tests pass) |
 | Your changes of 8 Nov (morning): short text with the explanations in tooltips; Show variables… in the Show menu and Edit on the Dashboard | **done** (8 Nov, 09:09; 1168 tests pass) |
+| Your report of 8 Nov: a blink at a PC start. The lights now keep their look while it starts, then fade from it | **done** (8 Nov, 10:06; 1178 tests: all but the 15 that fail on Sunday mornings pass) |
 | — batch 4: the PC shutting down or going to sleep: two global automation conditions, so the lights can fade first; never held dark after | **done** (6 Nov, 22:10; 1158 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
@@ -125,6 +126,24 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
+
+## No blink at a PC start (8 Nov, morning)
+
+- **What you saw:** after this morning's restart (Windows started CentraLight at sign-in, the Default show is None, and
+  "Sunday Morning Service" loads Default), the lights went black for a moment, then faded back in.
+- **Why:** at a PC start every light started black at once (so a PC start never leaves the lights on unasked); the
+  schedule's show and its "Start Up" came a few seconds later and faded in from black.
+- **Now:** at a PC start CentraLight sends nothing until the start-up automations have done their part (the show they
+  load, and its "When this show loads"); the lights keep their look meanwhile. Then they fade from what they were last
+  sent (CentraLight remembers it, in live.json) to what it shows now: the look that came back (no change you'd see,
+  if it's the same; over its transition's time), or black, over Fade to black's time, if nothing lit them. The house
+  lights the same way. It waits 30 seconds at most.
+- If someone presses something meanwhile (in the window, on the phone or the Stream Deck), quits, or Windows shuts
+  down or sleeps, the wait ends at once: the lights go from the look they have, and a Fade to black (or the shutdown
+  fade) gets there in its own time.
+- After a shutdown fade, or a quit with "Turn the lights off", what was last sent is black, so the lights come up from
+  black as before. Reopening without a restart is unchanged, and so is a quit's hold on the lights.
+- To check: the first PC start after this update has nothing remembered yet, so it comes up from black that once.
 
 ## Short text, and the show variables a click away (8 Nov, morning)
 

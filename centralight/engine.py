@@ -154,6 +154,11 @@ FLASH_STEPS = 6
 WAKE_GAP = 60.0  # seconds: a jump this big in the clocks means the PC slept (or the clock was changed)
 WAKE_DEBOUNCE = 60.0  # seconds: wake signals this close together are the same wake
 STARTUP_HOLD = 3.0  # seconds: at most this long at startup, nothing is sent while the screen feed's first picture comes
+# (8 Nov) at a PC start nothing is sent until the start-up automations have done their part (a show they load and its
+# "When this show loads"), then the lights fade from the frame they were last sent to what CentraLight shows: a look
+# that comes back doesn't blink off and fade in again. At most this long (seconds)...
+START_SETTLE_MAX = 30.0
+START_SETTLE_QUIET = 0.3  # ...once the start-up has been quiet this long (a show it asks for has had time to load)
 FEED_WAIT = 10.0  # seconds: at startup, an automation about a feed waits at most this long for it to start sending
 # seconds: at startup the automations wait at most this long for the window to open (app.main sends WindowReady): building
 # and showing it can hold Python up for seconds just after the PC starts, and a fade started meanwhile froze and jumped
@@ -488,6 +493,14 @@ class Engine:
         self._holding = True
         self._hold_until = now + STARTUP_HOLD
         self._feeds_until = now + FEED_WAIT
+        # (8 Nov) a PC start: the lights keep their last look until the start-up automations are done, then fade from
+        # the frame they were last sent (live.json) to what CentraLight shows, not from black (START_SETTLE_MAX)
+        self._start_hold = self._pc_start
+        self._start_until = now + START_SETTLE_MAX
+        self._start_quiet_since: float | None = None
+        self._start_frame = bytes(live.last_frame) if live.last_frame else b""
+        self._crossfade: tuple[bytes, float, float] | None = None  # (from that frame, when, seconds)
+        self._last_sent = b""  # the frame the lights were last sent (saved, for the next start)
         self._identify = False
         self._identify_seed = show.identify_seed
         self._identify_map: dict[str, RGB] = {}
@@ -554,6 +567,7 @@ class Engine:
                 log_exception("engine final tick", exc)
         if lights_off:
             self._to_black(0.0, True, self._clock())  # (black for sure, faded or not)
+            self._last_sent = bytes(len(self._last_sent or self._start_frame))  # (the output's blackout, remembered)
         if lights_off and hold_off:
             if not self._quit_dark:
                 self._quit_at = self._wall()  # a new quit (one still held from an earlier quit keeps that quit's time)
@@ -595,6 +609,7 @@ class Engine:
             automations=self._runner.to_dict(),
             global_automations=self._global_runner.to_dict(),
             console=self._console.to_dict(now),
+            last_frame=list(self._last_sent or self._start_frame),  # (8 Nov: the next PC start fades from it)
         )
 
     # ------------------------------------------------------------ the tick
@@ -609,6 +624,9 @@ class Engine:
         audio = self.audio
         self._ctx.audio = MappingProxyType(audio.latest()) if audio is not None else AUDIO_OFF
         applied = self._automations(now) or applied
+        if self._start_hold and self._start_settled(now):
+            self._end_start_hold(now)
+            applied = True
         applied = self._finish_timed(now) or applied
         self._update_driven_house(now)
 
@@ -634,12 +652,15 @@ class Engine:
         out_colours = colours
         house_out = {fid: h.out(now) for fid, h in self._house.items()}
         dmx = encode_dmx(self.show.fixtures, out_colours, house_out, extras=extras)
+        if self._crossfade is not None:  # (8 Nov: from the frame the lights were last sent, after a PC start)
+            dmx = self._crossfaded(dmx, now)
         self._last_dmx = dmx
 
         if self._holding and not (self._ctx.waiting and now < self._hold_until):
             self._holding = False  # every feed has a picture (or it's been long enough): from now on, always send
-        if not self._holding:
+        if not self._holding and not self._start_hold:
             self.output.submit(dmx)
+            self._last_sent = dmx
         if self._power_waiting:  # (Windows is waiting for the lights: M18)
             self._power_settled(now, dmx)
 
@@ -687,6 +708,68 @@ class Engine:
             return self._last_canvas
         self._last_canvas = canvas
         return canvas
+
+    def _start_settled(self, now: float) -> bool:
+        """At a PC start: the start-up automations have done their part (checked, no show still loading, a loaded
+        show's "When this show loads" run) and it's been quiet a moment since, or it's been long enough (8 Nov)."""
+        if now >= self._start_until:
+            return True
+        if (self._window_wait is not None or self._first_check or self._pending_load is not None or self._show_events
+                or self._after_load):
+            self._start_quiet_since = None
+            return False
+        if self._start_quiet_since is None:
+            self._start_quiet_since = now
+        return now - self._start_quiet_since >= START_SETTLE_QUIET
+
+    def _end_start_hold(self, now: float) -> None:
+        """The lights fade from the frame they were last sent to what CentraLight shows now: the look the start-up
+        brought (over its transition's time; at once for a cut), or black (Fade to black's time) if nothing lit them.
+        A fade that started meanwhile is finished at once: the fade from that frame takes its place."""
+        self._start_hold = False
+        seconds = self._finish_fades(now)
+        if not seconds and self._base.current is None and not self._overlay.lit(now):
+            seconds = self.black_fade  # (nothing lit them: black, as at any PC start, but faded)
+        if seconds > 0.0:  # (from black if they were sent black, after a shutdown fade say, or nothing was saved)
+            self._crossfade = (self._start_frame, now, seconds)
+
+    def _finish_fades(self, now: float) -> float:
+        """Base's fade and the house lights' ramps end at once (the fade from a PC start's frame does them instead).
+        Returns the time Base's fade had."""
+        base = self._base
+        seconds = base.transition.duration if base.transitioning(now) else 0.0
+        if seconds:
+            base.outgoing = None
+            base.transition = Transition("cut", 0.0)
+        for house in self._house.values():
+            house.level.set(house.level.target, 0.0, now)
+            house.switch.set(house.switch.target, 0.0, now)
+        return seconds
+
+    def _crossfade_to_black(self, seconds: float, now: float) -> None:
+        """A Fade to black during the fade from a PC start's frame: the lights go from the frame last sent to black in
+        its time (Base's own fade ends at once, so the two never mix: no brightening on the way)."""
+        held = self._crossfade[0]
+        self._finish_fades(now)
+        self._crossfade = (self._last_sent or held, now, seconds)
+
+    def _crossfade_within(self, seconds: float, now: float) -> None:
+        """Windows shutting down won't wait longer than `seconds`: the fade from a PC start's frame ends within them,
+        from the frame last sent, so the lights carry on from it."""
+        if self._crossfade is not None:
+            held, start, length = self._crossfade
+            if start + length - now > seconds:
+                self._crossfade = (self._last_sent or held, now, seconds)
+
+    def _crossfaded(self, dmx: bytes, now: float) -> bytes:
+        held, start, seconds = self._crossfade
+        progress = 1.0 if seconds <= 0.0 else (now - start) / seconds
+        if progress >= 1.0:
+            self._crossfade = None
+            return dmx
+        progress = max(0.0, progress)
+        held = held[:len(dmx)].ljust(len(dmx), b"\x00")
+        return bytes(int(round(h + (d - h) * progress)) for h, d in zip(held, dmx))
 
     def _to_black(self, seconds: float, everything: bool, now: float) -> None:
         """Cut or fade the colour lights to black: the mix as it is now (Base and the Overlay, as one still look)
@@ -741,8 +824,8 @@ class Engine:
         return frozen_mix(canvases, contexts, name=self.show.name)
 
     def _fading(self, now: float) -> bool:
-        """A fade under way: on Base (a Fade to black, say), Master or a house light."""
-        return (self._base.transitioning(now) or self._master.moving(now)
+        """A fade under way: on Base (a Fade to black, say), Master or a house light, or from a PC start's frame."""
+        return (self._crossfade is not None or self._base.transitioning(now) or self._master.moving(now)
                 or any(house.level.moving(now) or house.switch.moving(now) for house in self._house.values()))
 
     def _power_down(self, command: PowerEvent) -> None:
@@ -871,6 +954,8 @@ class Engine:
                 if self._quit_dark and (isinstance(command, PERSON_TAKES_CHARGE)
                                         or (isinstance(command, LoadShow) and not command.automation)):
                     self._end_quit_dark("someone took charge")
+                if self._start_hold and isinstance(command, PERSON_TAKES_CHARGE):
+                    self._end_start_hold(now)  # (someone took charge during a PC start's wait: it reaches the lights now)
                 self._apply(command, now)
                 applied = True
             except Exception as exc:
@@ -899,6 +984,8 @@ class Engine:
                 house.mirror = None  # it's on again: its switch works as normal from now on
         elif isinstance(command, ToBlack):
             self._to_black(max(0.0, float(command.seconds)), bool(command.everything), now)
+            if self._crossfade is not None:  # (8 Nov: just after a PC start)
+                self._crossfade_to_black(max(0.0, float(command.seconds)), now)
         elif isinstance(command, SendToBase):
             inp = self._input(command.input_id)
             transition = command.transition or inp.transition if inp is not None else None
@@ -1014,6 +1101,9 @@ class Engine:
         elif isinstance(command, PowerEvent) and command.kind == "woke":
             self._on_wake()
         elif isinstance(command, PowerEvent) and command.kind in POWER_DOWN:
+            if self._start_hold:  # (just after a PC start: the lights get its fade, not the held look, 8 Nov)
+                self._end_start_hold(now)
+            self._crossfade_within(POWER_DOWN[command.kind][1], now)  # (Windows won't wait for a longer one)
             self._power_down(command)
         elif isinstance(command, SetIdentify):
             self._identify = bool(command.on)
