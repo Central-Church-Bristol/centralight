@@ -618,6 +618,13 @@ four times:
 - [ ] After the update, with it unticked (30 packets a second, 76 channels).
 - [ ] After the update, with it ticked (30 a second, all 512 channels). Leave it ticked if this one is steady.
 
+## 20n. CentraLight in the taskbar (8 Nov, night)
+
+- [ ] Start CentraLight from its pin: one button, not two. If there are still two, unpin it, start CentraLight, then
+      right-click its button → **Pin to taskbar**.
+- [ ] Close the window: the "still running" message says CentraLight. Task Manager lists it as CentraLight.
+- [ ] Its tray icon may now be among the hidden icons (^): drag it back beside the clock if you want it there.
+
 ## 21. Afterwards: updating the main folder
 
 Everything is committed on the branch `claude/centralight-gui` (nothing on `main`, nothing pushed). The work was

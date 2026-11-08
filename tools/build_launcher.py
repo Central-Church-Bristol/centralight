@@ -1,9 +1,11 @@
 """Build CentraLight.exe: a small launcher with the CentraLight logo that starts the app without a console window.
+Python runs inside it (8 Nov: launcher/Program.cs), so Windows sees CentraLight, not Python.
 
     .venv\\Scripts\\python.exe tools\\build_launcher.py
 
-It uses the C# compiler that comes with Windows (.NET Framework 4), so nothing needs installing. The exe has to
-stay in the CentraLight folder, next to main.py; put a shortcut to it on the desktop or in the Start menu.
+It uses the C# compiler that comes with Windows (.NET Framework 4), so nothing needs installing. It's built for 64-bit
+Windows, like the Python it runs, with Python's own pythonw.exe manifest (launcher/CentraLight.manifest). The exe has
+to stay in the CentraLight folder, next to main.py; put a shortcut to it on the desktop or in the Start menu.
 (Adapted from Media Background Pane's launcher.)
 """
 
@@ -20,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 LOGO = ROOT / "Assets" / "CentraLight Logo 1024.png"
 ICO = ROOT / "launcher" / "icon.ico"
 SOURCE = ROOT / "launcher" / "Program.cs"
+MANIFEST = ROOT / "launcher" / "CentraLight.manifest"
 EXE = ROOT / "CentraLight.exe"
 CSC = Path(r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe")
 ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
@@ -102,8 +105,8 @@ def write_ico(image, path: Path) -> None:
 def compile_exe(out: Path = EXE, ico: Path = ICO) -> None:
     if not CSC.is_file():
         raise SystemExit(f"The C# compiler that comes with Windows wasn't found: {CSC}")
-    command = [str(CSC), "/nologo", "/target:winexe", "/optimize+", f"/win32icon:{ico}",
-               "/reference:System.Windows.Forms.dll", f"/out:{out}", str(SOURCE)]
+    command = [str(CSC), "/nologo", "/target:winexe", "/optimize+", "/platform:x64", f"/win32icon:{ico}",
+               f"/win32manifest:{MANIFEST}", "/reference:System.Windows.Forms.dll", f"/out:{out}", str(SOURCE)]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
         sys.stderr.write(result.stdout + result.stderr)

@@ -11,6 +11,10 @@ Double-click `CentraLight.exe` (or `run.bat`). The first time, `run.bat` sets up
 (from `requirements.txt`) and copies the church fonts (below); `CentraLight.exe` runs it for you then. Keep the exe
 in the CentraLight folder and put a shortcut to it on the desktop.
 
+`CentraLight.exe` runs Python inside itself (with `.venv`'s packages), so Windows sees CentraLight: one taskbar
+button with its pin, and CentraLight in Task Manager and on its notifications. It needs Python 3.14 or later; with an
+older one it starts `.venv\Scripts\pythonw.exe` as before (the session log says which).
+
 - It starts with **Simulated** output: it shows what it would send without touching the lights. To drive them:
   the gear (top right) → **Output** → **Eurolite USB-DMX512 PRO** (or **Art-Net**, to MagicQ or an Art-Net node).
   Only one program can use the dongle at a time, so close MagicQ first.

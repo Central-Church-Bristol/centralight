@@ -22,12 +22,42 @@ def managed() -> bool:
 
 
 def launch_command() -> str:
-    """What Windows runs at sign-in: the app's pythonw.exe with main.py, minimised to the tray."""
+    """What Windows runs at sign-in: CentraLight.exe, minimised to the tray (Python runs inside it, 8 Nov, so Windows
+    knows it as CentraLight); without it, the app's pythonw.exe with main.py."""
+    exe = ROOT / "CentraLight.exe"
+    if exe.is_file():
+        return f'"{exe}" --minimized'
     venv = ROOT / ".venv" / "Scripts" / "pythonw.exe"
     python = venv if venv.is_file() else Path(sys.executable).with_name("pythonw.exe")
     if not python.is_file():
         python = Path(sys.executable)
     return f'"{python}" "{ROOT / "main.py"}" --minimized'
+
+
+def process_file() -> str:
+    """The program this process is (GetModuleFileName): CentraLight.exe when Python runs inside it."""
+    if sys.platform != "win32":
+        return sys.executable
+    import ctypes
+
+    buffer = ctypes.create_unicode_buffer(32768)
+    return buffer.value if ctypes.windll.kernel32.GetModuleFileNameW(None, buffer, len(buffer)) else ""
+
+
+def inside_launcher() -> bool:
+    """Python runs inside CentraLight.exe (8 Nov), not in a python.exe or pythonw.exe of its own: Windows knows this
+    process as CentraLight, the program the taskbar pin and the Start menu start."""
+    return Path(process_file()).name.lower() == "centralight.exe"
+
+
+def how_started() -> str:
+    """For the session log."""
+    if inside_launcher():
+        return "Python runs inside CentraLight.exe"
+    separate = os.environ.get("CENTRALIGHT_SEPARATE")
+    if separate:  # (CentraLight.exe couldn't, and started the venv's pythonw.exe instead, saying why)
+        return f"CentraLight.exe couldn't run Python inside itself ({separate}), so it runs in {Path(sys.executable).name}"
+    return f"Started with {Path(sys.executable).name}"  # (run by hand, or an old CentraLight.exe)
 
 
 def is_enabled(key_path: str = RUN_KEY, value_name: str = VALUE_NAME) -> bool:

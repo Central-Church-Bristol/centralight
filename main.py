@@ -1,4 +1,5 @@
-"""Start the CentraLight app (double-click run.bat, or: .venv\\Scripts\\pythonw.exe main.py).
+"""Start the CentraLight app (double-click CentraLight.exe, which runs this inside itself; or run.bat; or
+.venv\\Scripts\\pythonw.exe main.py).
 
 Only one copy runs at a time: a second one asks the running copy to show its window, then exits.
 --minimized starts in the tray (that's how Windows starts it at sign-in).

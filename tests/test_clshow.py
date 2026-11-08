@@ -749,7 +749,7 @@ class FileTypeTests(unittest.TestCase):
     def test_the_command_is_centralights_with_the_file(self) -> None:
         command = filetype.open_command()
         self.assertTrue(command.endswith(' "%1"'), command)
-        self.assertIn(str(ROOT / "main.py"), command)
+        self.assertEqual(command, f'"{ROOT / "CentraLight.exe"}" "%1"')  # (Python inside it, 8 Nov)
         self.assertNotIn("--minimized", command)
         self.assertEqual(filetype.ICON, ROOT / "launcher" / "clshow.ico")
 

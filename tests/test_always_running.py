@@ -45,16 +45,22 @@ class StartWithWindowsTests(unittest.TestCase):
         self.assertFalse(startup.is_enabled(self.key))
         self.assertEqual(startup.sync(True, self.key), "")
         command = startup.read_command(self.key)
-        self.assertIn("main.py", command)
-        self.assertTrue(command.endswith("--minimized"))
-        self.assertIn("pythonw.exe", command)
+        self.assertEqual(command, f'"{ROOT / "CentraLight.exe"}" --minimized')  # (Python runs inside it, 8 Nov)
         self.assertTrue(startup.is_enabled(self.key))
-        startup.set_enabled(True, self.key, command='"old.exe"')  # an out-of-date entry is corrected
+        startup.set_enabled(True, self.key, command='"old.exe"')  # an out-of-date entry (pythonw.exe's) is corrected
         startup.sync(True, self.key)
         self.assertEqual(startup.read_command(self.key), command)
         self.assertEqual(startup.sync(False, self.key), "")
         self.assertFalse(startup.is_enabled(self.key))
         startup.set_enabled(False, self.key)  # removing twice is fine
+
+    def test_without_centralight_exe_it_is_pythonw_and_main_py(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            pythonw = Path(folder) / ".venv" / "Scripts" / "pythonw.exe"
+            pythonw.parent.mkdir(parents=True)
+            pythonw.write_bytes(b"")
+            with mock.patch.object(startup, "ROOT", Path(folder)):
+                self.assertEqual(startup.launch_command(), f'"{pythonw}" "{Path(folder) / "main.py"}" --minimized')
 
     def test_tests_never_touch_the_real_entry(self) -> None:
         self.assertTrue(os.environ.get("CENTRALIGHT_INSTANCE"))

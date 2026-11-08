@@ -33,7 +33,11 @@ def _prepare_windows_shell() -> None:
         return
     import ctypes
 
-    try:
+    from .startup import inside_launcher
+
+    if inside_launcher():  # (8 Nov: Windows knows it as CentraLight.exe, the program its taskbar pin starts: one button)
+        return
+    try:  # (in a pythonw.exe of its own: its own taskbar button, not Python's)
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("CentraLight.App.1")
     except (AttributeError, OSError):
         pass
@@ -194,6 +198,8 @@ def main(argv: list[str] | None = None) -> int:
     from PySide6.QtWidgets import QSystemTrayIcon
 
     from . import startup
+
+    log_info(startup.how_started())
     from .remote import RemoteServer, new_key
     from .ui.instance import InstanceServer
     from .ui.power import PowerDown, PowerEventFilter, shut_down_first
@@ -223,7 +229,8 @@ def main(argv: list[str] | None = None) -> int:
     # sleep, wake, and (M18) Windows shutting down: the global automations about them, with Windows waiting for a fade
     window.power_filter = PowerEventFilter(PowerDown(engine.submit))
     app.installNativeEventFilter(window.power_filter)
-    # ...and Windows tells CentraLight first, before it ends the .venv launcher that ends CentraLight with it (6 Nov)
+    # ...and Windows tells CentraLight first (6 Nov: before it ended the .venv launcher, which ended CentraLight with it;
+    # since 8 Nov Python runs inside CentraLight.exe, with no launcher in between, unless it couldn't)
     if not shut_down_first():
         log_info("Windows wouldn't let CentraLight go first when it shuts down: the lights may not fade then")
     if startup.managed():

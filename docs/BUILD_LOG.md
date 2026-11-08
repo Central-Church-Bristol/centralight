@@ -78,7 +78,8 @@ never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 | Your changes of 8 Nov (morning): short text with the explanations in tooltips; Show variables… in the Show menu and Edit on the Dashboard | **done** (8 Nov, 09:09; 1168 tests pass) |
 | Your report of 8 Nov: a blink at a PC start. The lights now keep their look while it starts, then fade from it | **done** (8 Nov, 10:06; 1178 tests: all but the 15 that fail on Sunday mornings pass) |
 | Your report of 8 Nov: Show variables… showed the Editor's empty page. They now open in a window of their own | **done** (8 Nov, 20:11; all 1184 tests pass) |
-| Your report of 8 Nov (evening): the festoons flickered with the NDI input. To try on the rig: 30 packets a second to the Eurolite, and all 512 channels | **ready to try** (8 Nov, 20:35; all 1189 tests pass) |
+| Your report of 8 Nov (evening): the festoons flickered with the NDI input. To try on the rig: 30 packets a second to the Eurolite, and all 512 channels | **done**: steady on the rig (8 Nov, about 21:25; installed) |
+| Your report of 8 Nov (night): two taskbar buttons with the pin, and "Python" on the notification and in Task Manager. CentraLight.exe now runs Python inside itself | **done** (8 Nov, 21:58; all 1196 tests pass) |
 | — batch 4: the PC shutting down or going to sleep: two global automation conditions, so the lights can fade first; never held dark after | **done** (6 Nov, 22:10; 1158 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
@@ -129,6 +130,21 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
 
+## CentraLight.exe runs Python inside itself (8 Nov, night)
+
+- **What you saw:** with CentraLight pinned to the taskbar, opening it gave a second button; the tray's "still running"
+  message was titled "Python"; Task Manager listed it under "Python".
+- **Why:** CentraLight.exe only started the venv's pythonw.exe, so the program running was Python, and the app gave its
+  window an ID of its own that the pin didn't have.
+- **Now:** CentraLight.exe runs Python inside itself (the venv's own Python, with its packages), so the program running
+  is CentraLight.exe: the same program the pin, the Start menu and Start with Windows start. One button; "CentraLight"
+  on the notification and in Task Manager. There's no venv launcher in between any more either (the one that used to
+  end CentraLight at a shutdown).
+- At its first start it updates Start with Windows and the .clshow file type to CentraLight.exe. The session log says
+  "Python runs inside CentraLight.exe". If it ever can't (a Python older than 3.14), it starts pythonw.exe as before
+  and the log says why.
+- It uses about 15 MB more memory than pythonw.exe did (its .NET part).
+
 ## The festoons flickering with the NDI input (8 Nov, evening)
 
 - **What you saw:** in the evening service, sending "Follow Media Background" made the festoons flash, like glitchy
@@ -142,6 +158,10 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
   newest picture (the once-a-second resend is unchanged; Art-Net is as before), and new settings send all 512
   channels. Yours keep 76 until you tick **Send all 512 channels** (Settings → Output).
 - The test on the rig is in the checklist (20m): it tells which of the two changes matters.
+- **The result (8 Nov, about 21:25):** the old version flickered with a moving background in the pane, with and without
+  "Send all 512 channels"; the new one was steady both ways. So it was how often packets went to the Eurolite, not how
+  many channels. (With nothing moving in the pane the picture doesn't change, so it was steady then: test with a
+  moving background.) Installed.
 
 ## The Show variables window (8 Nov, morning)
 

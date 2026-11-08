@@ -6,7 +6,17 @@ if not exist ".venv\Scripts\pythonw.exe" (
 )
 ".venv\Scripts\python.exe" -c "import PySide6, cv2, numpy, NDIlib, serial, stupidArtnet, pyaudiowpatch" 2>nul || ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if not exist "fonts\FuturaCyrillicBook.ttf" call :copyfonts
-start "" ".venv\Scripts\pythonw.exe" main.py %*
+if not exist ".venv\Scripts\pythonw.exe" (
+  echo CentraLight couldn't set up its Python ^(.venv^). Is Python 3.14 installed?
+  pause
+  exit /b 1
+)
+rem CentraLight.exe runs Python inside itself, so Windows sees CentraLight (8 Nov)
+if exist "CentraLight.exe" (
+  start "" "CentraLight.exe" %*
+) else (
+  start "" ".venv\Scripts\pythonw.exe" main.py %*
+)
 exit /b
 
 :copyfonts

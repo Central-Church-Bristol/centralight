@@ -4,7 +4,7 @@ a page), and double-clicking one starts CentraLight, or brings the running one f
 It's registered for this Windows user only, under HKEY_CURRENT_USER\\Software\\Classes, so no administrator is needed:
 - .clshow -> CentraLight.Show
 - CentraLight.Show: "CentraLight show", its DefaultIcon (launcher\\clshow.ico) and shell\\open\\command (the same
-  pythonw.exe and main.py that start CentraLight at sign-in, with the file: "%1")
+  CentraLight.exe that starts CentraLight at sign-in, with the file: "%1")
 
 sync() runs at start: it writes only what differs, so a CentraLight folder that has moved is put right, and tells
 Explorer only when something changed. Only the real app should call it (startup.managed()): copies run by the tests
@@ -36,8 +36,7 @@ SHCNF_IDLIST = 0x0000
 
 
 def open_command() -> str:
-    """What Windows runs to open a .clshow file: CentraLight's pythonw.exe and main.py, as at sign-in but not in the
-    tray, with the file."""
+    """What Windows runs to open a .clshow file: CentraLight.exe, as at sign-in but not in the tray, with the file."""
     command = launch_command()
     if command.endswith(" --minimized"):
         command = command[: -len(" --minimized")]
