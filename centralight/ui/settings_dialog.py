@@ -138,12 +138,10 @@ class SettingsDialog(QDialog):
         output_layout.addLayout(usb_form)
         output_layout.addWidget(self.artnet)
         output_layout.addLayout(artnet_form)
-        output_layout.addWidget(
-            hint(
-                "Only one program can use the Eurolite at a time: close MagicQ, QLC+ and the console "
-                "scripts first. Leaving the Eurolite (choosing Simulated or Art-Net) turns its lights off."
-            )
-        )
+        eurolite = hint("Only one program can use the Eurolite at a time.")  # (8 Nov: the rest is in the tooltip)
+        eurolite.setToolTip("Close MagicQ, QLC+ and the console scripts first. Leaving the Eurolite (choosing Simulated "
+                            "or Art-Net) turns its lights off.")
+        output_layout.addWidget(eurolite)
         self.output_group.buttonToggled.connect(lambda *_: self._sync_enabled())
 
         # --- the screen's NDI feed: what new NDI elements follow
@@ -179,13 +177,12 @@ class SettingsDialog(QDialog):
         remote_form.addRow("Key", key_row)
         remote_layout = QVBoxLayout(remote_box)
         remote_layout.addLayout(remote_form)
-        remote_layout.addWidget(hint(
-            "In the Stream Deck app, add a Website action with a URL like http://127.0.0.1:8746/api/input/warm-white "
-            "and tick “GET request in background”. The remote page lists every URL. The Website action only presses, "
-            "so an input whose Send to Overlay is “Only while held” needs Companion or the phone page. With Bitfocus "
-            "Companion, CentraLight's own module does more (keys that light up, presets): in Companion, Modules → Import "
-            "module package → companion\\centralight-1.0.0.tgz in the CentraLight folder (companion\\README.md has the steps)."
-        ))
+        remote_box.setToolTip(  # (8 Nov: a tooltip, not a paragraph)
+            "Stream Deck app: add a Website action with a URL like http://127.0.0.1:8746/api/input/warm-white and tick "
+            "“GET request in background”. The remote page lists every URL. The Website action only presses, so an input "
+            "whose Overlay button is “Only while held” needs Companion or the phone page.\n\nBitfocus Companion: "
+            "CentraLight's own module does more (keys that light up, presets). In Companion, Modules → Import module "
+            "package → companion\\centralight-1.0.0.tgz in the CentraLight folder (companion\\README.md has the steps).")
         remote_buttons = QHBoxLayout()
         remote_buttons.addWidget(open_remote)
         remote_buttons.addStretch(1)
@@ -249,9 +246,9 @@ class SettingsDialog(QDialog):
         self.black_fade.setSuffix(" s")
         self.black_fade.setValue(settings.black_fade)
         black_form.addRow("Fade to black takes", self.black_fade)
-        black_form.addRow(hint("The header's buttons: a click sends the colour lights to black; holding one sends "
-                               "everything, the Festoon and Key lights too. The next input lights things again. "
-                               "The Stream Deck's /api/black/fade takes this time too, unless its URL gives ?seconds=."))
+        self.black_fade.setToolTip("The header's buttons: a click sends the colour lights to black; holding one sends "
+                                   "everything, the Festoon and Key lights too. The next input lights things again. The "
+                                   "Stream Deck's /api/black/fade takes this time too, unless its URL gives ?seconds=.")
         self.release_fade = QDoubleSpinBox()
         self.release_fade.setRange(0.0, 60.0)
         self.release_fade.setSingleStep(0.5)
@@ -261,7 +258,7 @@ class SettingsDialog(QDialog):
         console_box = QGroupBox("Console")  # (6 Nov: it was under Cut / Fade to black)
         console_form = QFormLayout(console_box)
         console_form.addRow("Release takes", self.release_fade)
-        console_form.addRow(hint("Release and Release all hand the lights back to the inputs over this time."))
+        self.release_fade.setToolTip("Release and Release all hand the lights back to the inputs over this time")
 
         # (6 Nov: the countdown was "Countdown first", under Cut / Fade to black; the default show was under Starting
         # and quitting. Both are about shows changing by themselves.)
@@ -273,10 +270,10 @@ class SettingsDialog(QDialog):
         self.countdown.setSpecialValueText("None")
         self.countdown.setValue(settings.countdown)
         automations_form.addRow("Countdown timer", self.countdown)
-        automations_form.addRow(hint("Before an automation loads a show, or cuts or fades to black, a banner counts down "
-                                     "this long (in the window and on the phone page): Load now, Wait 10 min or Skip. A "
-                                     "change on a schedule still lands on time: its banner starts early. Not for Run now, "
-                                     "or just after CentraLight starts. None = no countdown."))
+        self.countdown.setToolTip("Before an automation loads a show, or cuts or fades to black, a banner counts down this "
+                                  "long (in the window and on the phone page): Load now, Wait 10 min or Skip. A change on "
+                                  "a schedule still lands on time: its banner starts early. Not for Run now, or just after "
+                                  "CentraLight starts. None = no countdown.")
 
         quit_box = QGroupBox("Starting and quitting")
         self.quit_action = QComboBox()
@@ -297,18 +294,21 @@ class SettingsDialog(QDialog):
             self.default_show.addItem(f"{settings.default_show} (not there any more)", settings.default_show)
         self.default_show.setCurrentIndex(max(0, self.default_show.findData(settings.default_show)))
         automations_form.addRow("Default show", self.default_show)  # (6 Nov: it was under Starting and quitting)
-        automations_form.addRow(hint("Opens when the PC starts, and loads again when a global automation that loaded "
-                                     "another show stops matching. Reopening after a quit or a crash carries on as it was."))
+        self.default_show.setToolTip("Opens when the PC starts, and loads again when a global automation that loaded "
+                                     "another show stops matching. Reopening after a quit or a crash carries on as it was.")
         quit_layout = QVBoxLayout(quit_box)
         quit_layout.addWidget(self.start_with_windows)
-        quit_layout.addWidget(hint("Closing the window keeps CentraLight running in the tray; Quit is in the tray icon's menu."))
         quit_row = QHBoxLayout()
-        quit_row.addWidget(QLabel("When you quit:"))
+        quit_label = QLabel("When you quit:")
+        quit_row.addWidget(quit_label)
         quit_row.addWidget(self.quit_action, 1)
         quit_layout.addLayout(quit_row)
-        quit_layout.addWidget(hint("The Eurolite keeps showing the last look until something else is sent."))
-        quit_layout.addWidget(hint("To fade the lights when Windows shuts down, restarts or sleeps, use a global automation: "
-                                   "The PC shuts down or restarts, or The PC goes to sleep."))  # (M18)
+        quit_tip = ("What Quit (in the tray icon's menu) does with the lights. Closing the window keeps CentraLight "
+                    "running in the tray.\nThe Eurolite keeps showing the last look until something else is sent.\nTo fade "
+                    "the lights when Windows shuts down, restarts or sleeps, use a global automation: The PC shuts down or "
+                    "restarts, or The PC goes to sleep.")  # (8 Nov: three paragraphs that were under it)
+        for widget in (quit_label, self.quit_action):
+            widget.setToolTip(quit_tip)
 
         # --- files
         files_box = QGroupBox("Files and diagnostics")
@@ -340,11 +340,10 @@ class SettingsDialog(QDialog):
         # --- AI
         ai_box = QGroupBox("AI: inputs written by an AI")
         ai_layout = QVBoxLayout(ai_box)
-        ai_layout.addWidget(hint(
-            "Any AI chat can write inputs: use Create with AI on the Dashboard. AI tools such as Claude Code or Cursor "
-            "can work in the show folder: they read AI_GUIDE.md there, and inputs they write appear straight away. "
-            "Global automations have a guide of their own, in the shows folder's “_Global automations”."
-        ))
+        ai_box.setToolTip("Any AI chat can write inputs: use Create with AI on the Dashboard. AI tools such as Claude Code "
+                          "or Cursor can work in the show folder: they read AI_GUIDE.md there, and inputs they write appear "
+                          "straight away. Global automations have a guide of their own, in the shows folder's "
+                          "“_Global automations”.")  # (8 Nov: a tooltip, not a paragraph)
         ai_buttons = QHBoxLayout()
         ai_folder = QPushButton("Open show folder")
         ai_folder.setToolTip("Point Claude Code or Cursor at this folder")

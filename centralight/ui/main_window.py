@@ -271,6 +271,7 @@ class MainWindow(QWidget):
         self.dashboard.delete_requested.connect(self.delete_input)
         self.dashboard.rename_requested.connect(self.ask_rename_input)
         self.dashboard.variable_changed.connect(lambda name, value: self.engine.submit(SetVariable(name, value)))
+        self.dashboard.variables.edit_requested.connect(self.show_variables)
         self.dashboard.ai_requested.connect(self.open_ai_dialog)
         self.dashboard.import_requested.connect(lambda: self.import_from_show(INPUTS))
         self.dashboard.notes_panel.set_folded(bool(settings.ui.get("notes_folded", False)))  # (as it was left)
@@ -337,6 +338,7 @@ class MainWindow(QWidget):
         picker.rename_requested.connect(self.ask_rename_show)
         picker.delete_requested.connect(self.ask_delete_show)
         picker.notes_requested.connect(self.edit_notes)
+        picker.variables_requested.connect(self.show_variables)
         picker.export_requested.connect(lambda everything: self.export_package(everything))
         picker.import_requested.connect(lambda: self.ask_import_package(""))
         picker.close_requested.connect(self.close_show)
@@ -458,6 +460,14 @@ class MainWindow(QWidget):
     def open_editor(self, input_id: str) -> None:
         self.editor_page.open_input(input_id)
         self.show_page("editor")
+
+    def show_variables(self) -> None:
+        """Show ▾ → Show variables…, or Edit on the Dashboard's Variables: the Editor, nothing selected, with the show
+        variables showing (8 Nov). Not with no show loaded, or while locked."""
+        if self._locked or self.document.show.no_show:
+            return
+        self.show_page("editor")
+        self.editor_page.show_variables()
 
     # ------------------------------------------------------------ inputs
 

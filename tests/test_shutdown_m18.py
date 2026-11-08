@@ -380,8 +380,9 @@ class WindowQuitTests(WindowTestCase):
         dialog = SettingsDialog(Settings(), "")
         self.addCleanup(dialog.deleteLater)
         group = dialog.quit_action.parentWidget()
-        texts = [label.text() for label in group.findChildren(QLabel)]
-        self.assertTrue(any("The PC shuts down or restarts" in t and "The PC goes to sleep" in t for t in texts))
+        texts = [label.toolTip() for label in group.findChildren(QLabel)] + [dialog.quit_action.toolTip()]
+        self.assertTrue(any("The PC shuts down or restarts" in t and "The PC goes to sleep" in t for t in texts))  # (8 Nov:
+        # in the quit choice's tooltip)
 
     def test_the_editors_note_says_what_they_cant_catch(self) -> None:
         from centralight.ui.automation_page import EVENT_HINTS

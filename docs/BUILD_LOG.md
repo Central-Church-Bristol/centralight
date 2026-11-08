@@ -75,6 +75,7 @@ never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 | — batch 3: dates as a day, month and year, each with a tick and a range on demand; From … to … kept for spans over a month end; Saturday's automation unchanged | **done** (6 Nov, 22:10; 1158 tests pass) |
 | — the shutdown fade, fixed after its first real try: CentraLight now asks Windows to deal with it first | **done** (6 Nov, 22:47; 1161 tests pass) |
 | — your change of 6 Nov, late: a new show starts with no inputs (no "Follow screen") | **done** (6 Nov, 23:30; 1162 tests pass) |
+| Your changes of 8 Nov (morning): short text with the explanations in tooltips; Show variables… in the Show menu and Edit on the Dashboard | **done** (8 Nov, 09:09; 1168 tests pass) |
 | — batch 4: the PC shutting down or going to sleep: two global automation conditions, so the lights can fade first; never held dark after | **done** (6 Nov, 22:10; 1158 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
@@ -124,6 +125,23 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
+
+## Short text, and the show variables a click away (8 Nov, morning)
+
+Your rule: the text on screen is short, explanations go in tooltips, and labels say what they refer to.
+- **The Input tab:** the Send to Overlay paragraph is now a labelled choice, **Overlay button** (the Dashboard tile's
+  Send to Overlay button), with the explanation in its tooltip. Transition in, House lights and the input's own
+  variables keep their explanations in tooltips too (hover the panel).
+- **Settings:** every paragraph moved into the tooltip of what it explains (Fade to black takes, Release takes,
+  Countdown timer, Default show, When you quit:, and the Remote and AI groups). One line stays, as it's a safety
+  matter: "Only one program can use the Eurolite at a time." (the rest is in its tooltip).
+- **Show variables…** is in the Show ▾ menu now: it opens the Editor with nothing selected and the show variables
+  showing (with no input open, under the "Open an input" line). The Dashboard's Variables panel has an **Edit** button
+  beside its title, doing the same; the panel is always there (with "None here yet." when nothing is ticked "On the
+  dashboard"), so Edit is always in reach. Greyed out with no show loaded; the padlock stops both, as it stops other
+  edits.
+- (A test of the Editor's Send button failed this morning for a reason of its own: the sample show's "Sunday
+  09:00–12:30 → Warm white" ran during it on a Sunday morning. The test pauses automations now.)
 
 ## A new show starts with no inputs (6 Nov, late)
 

@@ -242,7 +242,10 @@ class EditorControlsTests(EditorTestCase):
         self.assertNotIn("element:fill.type", page.details._fields)
 
     def test_solo_live_banner_and_send(self) -> None:
+        from centralight.commands import SetAutomationsPaused
+
         window, engine = self.make()
+        engine.submit(SetAutomationsPaused(True))  # (the sample's "Sunday 09:00–12:30 → Warm white" ran on Sunday mornings)
         window.open_editor("worship-blue")
         page = window.editor_page
         QTest.mouseClick(page.solo_button, Qt.MouseButton.LeftButton)

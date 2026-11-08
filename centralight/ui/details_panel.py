@@ -294,6 +294,9 @@ class DetailsPanel(QScrollArea):
             panel = Panel("Details")
             panel.body.addWidget(hint("Open an input to edit it: the pencil on a Dashboard tile, or New input."))
             layout.addWidget(panel)
+            if self._tab == 1:  # (the Show variables, with no input open: Show ▾ → Show variables…, 8 Nov)
+                self.globals_panel = GlobalsPanel(self.document, self._url_base)  # (its own panel and heading)
+                layout.addWidget(self.globals_panel)
         elif self.current_element() is None:
             layout.addWidget(self._input_tabs(inp))
         else:
@@ -437,22 +440,27 @@ class DetailsPanel(QScrollArea):
             field = self._field_for(spec, lambda value, final, s=spec: self._set_transition(s, value))
             self._fields[f"transition:{spec.path}"] = field
             tform.addRow(self._label(spec.label), field)
-        transition.body.addWidget(hint("How it appears when it's sent to Base or switched on in an overlay."))
+        transition.setToolTip("How it appears when it's sent to Base or switched on in the Overlay")  # (8 Nov: not a line)
         page.addWidget(transition)
 
-        overlay = Panel("Send to Overlay")  # (M18: what its tile's Send to Overlay button does)
+        # (M18: what its tile's Send to Overlay button does; 8 Nov: a labelled choice, the explanation in its tooltip)
+        overlay = Panel("Overlay")
+        oform = self._form(overlay)
         choice = ChoiceField(OVERLAY_CHOICES)
-        choice.setToolTip("What this input's Send to Overlay button does")
+        tip = ("What this input's Send to Overlay button on the Dashboard does.\nStays until cleared: each press adds a "
+               "copy on top; its red box (or Clear all) clears it.\nOnly while held: the copy shows while the button is "
+               "held down, and goes when it's let go (on a Stream Deck, that needs Companion).")
+        choice.setToolTip(tip)
         choice.edited.connect(lambda value, _final: self._set_overlay(value))
         self._fields["input:overlay"] = choice
-        overlay.body.addWidget(choice)
-        overlay.body.addWidget(hint("Stays until cleared: each press adds a copy on top; its red box (or Clear all) "
-                                    "clears it. Only while held: the copy shows while the button is held down, and goes "
-                                    "when it's let go (on a Stream Deck, that needs Companion)."))
+        label = QLabel("Overlay button")  # (in full: the form's other labels may shorten with "…")
+        label.setToolTip(tip)
+        oform.addRow(label, choice)
         page.addWidget(overlay)
 
         house = Panel("House lights")
-        house.body.addWidget(hint("While this input is on Base it sets these. Moving the fader in the header wins until the next input."))
+        house.setToolTip("While this input is on Base it sets these house lights. Moving a fader in the header wins until "
+                         "the next input.")  # (8 Nov: a tooltip, not a line)
         hform = self._form(house)
         for item in self.show_data.house:
             row = QWidget()
@@ -487,6 +495,11 @@ class DetailsPanel(QScrollArea):
     def _tab_switched(self, index: int) -> None:
         self._tab = index
         self.tab_changed.emit(index)
+
+    def show_variables(self) -> None:
+        """The Show variables tab (with no input open, the show variables under the hint), 8 Nov."""
+        self._tab = 1
+        self._rebuild()
 
     def globals_open(self) -> bool:
         """True while the Show variables tab is showing (the Editor's undo then uses the show's history)."""

@@ -213,10 +213,8 @@ class GlobalsPanel(QWidget):
         self.cards: dict[str, GlobalCard] = {}
         self._key: tuple = ()
         panel = Panel("Show variables")
-        panel.body.addWidget(_hint(
-            "Shared by every input's expressions. Set them from the Dashboard (tick “On the dashboard”), "
-            "from the Stream Deck, or here."
-        ))
+        panel.setToolTip("Shared by every input's expressions. Set them from the Dashboard (tick “On the dashboard”), "
+                         "from the Stream Deck, or here.")  # (8 Nov: a tooltip, not a paragraph)
         self.list = QVBoxLayout()
         self.list.setSpacing(8)
         panel.body.addLayout(self.list)
@@ -391,7 +389,7 @@ class LocalsPanel(Panel):
         self.input_id = ""
         self.rows: dict[str, LocalRow] = {}
         self._key: tuple = ()
-        self.body.addWidget(_hint("Only this input's expressions can use these. Each is worked out afresh at every moment."))
+        self.setToolTip("Only this input's expressions can use these. Each is worked out afresh at every moment.")  # (8 Nov)
         self.list = QVBoxLayout()
         self.list.setSpacing(8)
         self.body.addLayout(self.list)

@@ -590,6 +590,13 @@ The old console script (`ndi_pixel_mapper.py`) went with the clean-up (M17), so 
 - [ ] Show ▾ → **New show…**: the new show's Dashboard shows only **+ New input** (no Follow screen). Load your show
       again afterwards, and delete the test show if you like.
 
+## 20j. Short text, and Show variables (8 Nov)
+
+- [ ] Editor → an input's Input tab: the Overlay panel shows **Overlay button** and its choice; hover it for the
+      explanation. Settings: no paragraphs, just the Eurolite line; hover a setting for its explanation.
+- [ ] Show ▾ → **Show variables…**: the Editor opens with the show variables showing. The Dashboard's Variables
+      **Edit** does the same.
+
 ## 21. Afterwards: updating the main folder
 
 Everything is committed on the branch `claude/centralight-gui` (nothing on `main`, nothing pushed). The work was
