@@ -4,7 +4,10 @@ that just records frames. Nothing here touches real hardware."""
 from __future__ import annotations
 
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 import serial
 
@@ -288,6 +291,18 @@ class StubSources:
         return None
 
 
+TEST_LOCAL_TIME = datetime(2026, 11, 4, 14, 0)  # a Wednesday afternoon, well before sunset
+
+
+def fixed_local_time(start: datetime | None = None) -> Callable[[float], datetime]:
+    """The local time a FakeEngine's automations see: `start` (TEST_LOCAL_TIME) when it's made, then on with the real
+    clock. So the test shows' automations (the sample "Sunday welcome", Sundays 09:00-12:30, say) never run because of
+    when the suite runs: on a Sunday morning, 15 tests failed that way (8 Nov)."""
+    start = start or TEST_LOCAL_TIME
+    made = time.time()
+    return lambda wall: start + timedelta(seconds=wall - made)
+
+
 class FakeEngine(Engine):
     """A real Engine with a hand-moved clock: every submit() is applied at once.
 
@@ -296,12 +311,15 @@ class FakeEngine(Engine):
     """
 
     def __init__(self, show: Show | None = None, live: LiveState | None = None, output: FakeOutput | None = None,
-                 global_automations: Show | None = None, pc_start: bool = False) -> None:
-        """pc_start: the PC has just started (the lights start black). Otherwise Windows has been up a day."""
+                 global_automations: Show | None = None, pc_start: bool = False,
+                 local_time: Callable[[float], datetime] | None = None) -> None:
+        """pc_start: the PC has just started (the lights start black). Otherwise Windows has been up a day.
+        local_time: the local time its automations see (fixed_local_time() unless given)."""
         self.clock = FakeClock()
         self.fake_output = output or FakeOutput()
         super().__init__(show or show_from_patch(), self.fake_output, live, clock=self.clock,
-                         uptime=(lambda: 60.0) if pc_start else (lambda: 86400.0), global_automations=global_automations)
+                         uptime=(lambda: 60.0) if pc_start else (lambda: 86400.0), global_automations=global_automations,
+                         local_time=local_time or fixed_local_time())
         self.tick()
 
     def submit(self, command) -> None:  # type: ignore[override]

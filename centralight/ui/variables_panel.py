@@ -22,14 +22,14 @@ HOLD_AFTER_EDIT = 0.6  # seconds: the engine's value doesn't move a control you'
 
 class VariablesPanel(Panel):
     changed = Signal(str, object)  # name, value (a number, "#RRGGBB", or "on" / "off")
-    edit_requested = Signal()  # Edit: the show variables in the Editor (8 Nov)
+    edit_requested = Signal()  # Edit: the Show variables window (8 Nov)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Variables", parent)
         # (8 Nov: Edit beside the title, so the show variables are a click away, even with none shown here yet)
         self.edit_button = QPushButton("Edit")
-        self.edit_button.setToolTip("Add or change the show variables in the Editor. Tick “On the dashboard” for the "
-                                    "ones to show here.")
+        self.edit_button.setToolTip("Add or change the show variables. Tick “On the dashboard” for the ones to show "
+                                    "here.")
         self.edit_button.clicked.connect(self.edit_requested.emit)
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
@@ -40,7 +40,7 @@ class VariablesPanel(Panel):
         title_row.addWidget(self.edit_button)
         self.body.insertLayout(0, title_row)
         self.hint = QLabel("None here yet.")
-        self.hint.setToolTip("Show variables ticked “On the dashboard” appear here. Edit opens them in the Editor.")
+        self.hint.setToolTip("Show variables ticked “On the dashboard” appear here. Edit opens them all.")
         self.hint.setObjectName("Hint")
         self.hint.setWordWrap(True)
         self.body.addWidget(self.hint)

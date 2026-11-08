@@ -1,5 +1,5 @@
-"""8 Nov: short on-screen text (explanations in tooltips, labels that say what they refer to), and the show variables
-a click away (Show ▾ → Show variables…, and Edit on the Dashboard's Variables)."""
+"""8 Nov: short on-screen text (explanations in tooltips, labels that say what they refer to). The show variables a
+click away (Show ▾ → Show variables…, and Edit on the Dashboard's Variables): test_variables_window_m18."""
 
 from __future__ import annotations
 
@@ -48,64 +48,7 @@ class ShortTextTests(unittest.TestCase):
         self.assertEqual(long_hints, [])  # (no paragraphs on the Input tab)
 
 
-class ShowVariablesTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.app = qt_app()
-
-    def menu_action(self, window):
-        picker = window.header.show_picker
-        picker.fill_menu()
-        return next(a for a in picker.picker_menu.actions() if a.text() == "Show variables…")
-
-    def test_the_show_menu_opens_the_show_variables_with_nothing_open(self) -> None:
-        window, _engine, _tmp = make_window(self)
-        action = self.menu_action(window)
-        self.assertTrue(action.isEnabled())
-        action.trigger()
-        process(self.app, 3)
-        self.assertEqual(window._page, "editor")
-        panel = window.editor_page.details.globals_panel
-        self.assertIsNotNone(panel)
-        self.assertTrue(panel.isVisibleTo(window.editor_page.details))
-
-    def test_with_an_element_selected_it_goes_to_the_tab_with_nothing_selected(self) -> None:
-        window, _engine, _tmp = make_window(self)
-        window.open_editor("worship-blue")
-        inp = window.document.show.inputs["worship-blue"]
-        window.editor_page.select_element(str(inp.tracks[0][0]["id"]))
-        process(self.app, 3)
-        window.show_page("dashboard")
-        self.menu_action(window).trigger()
-        process(self.app, 3)
-        self.assertEqual(window._page, "editor")
-        self.assertEqual(window.editor_page.element_id, "")
-        self.assertTrue(window.editor_page.details.globals_open())
-
-    def test_the_dashboards_edit_does_the_same_and_the_padlock_stops_both(self) -> None:
-        window, _engine, _tmp = make_window(self)
-        window.show_page("dashboard")
-        button = window.dashboard.variables.edit_button
-        self.assertEqual(button.text(), "Edit")
-        self.assertTrue(button.toolTip())
-        button.click()
-        process(self.app, 3)
-        self.assertEqual(window._page, "editor")
-        window.show_page("dashboard")
-        window.set_locked(True)
-        self.assertFalse(button.isEnabledTo(window))
-        self.assertFalse(window.header.show_picker.isEnabled())
-        window.show_variables()
-        self.assertEqual(window._page, "dashboard")  # (locked: nothing happens)
-
-    def test_with_no_show_loaded_its_greyed_out(self) -> None:
-        window, _engine, _tmp = make_window(self)
-        picker = window.header.show_picker
-        picker.no_show = True
-        self.assertFalse(self.menu_action(window).isEnabled())
-
-
-def make_window(case: unittest.TestCase):
+def make_window(case: unittest.TestCase, settings=None):
     from centralight.settings import Settings
     from centralight.ui.main_window import MainWindow
     from tests.fakes import FakeEngine
@@ -114,7 +57,7 @@ def make_window(case: unittest.TestCase):
     tmp = tempfile.TemporaryDirectory()
     case.addCleanup(tmp.cleanup)
     engine = FakeEngine(held_show("worship-blue"))
-    window = MainWindow(Settings(), engine.show, engine, engine.fake_output, save_files=False,
+    window = MainWindow(settings or Settings(), engine.show, engine, engine.fake_output, save_files=False,
                         notes_path=Path(tmp.name) / "fixture_map.csv")
     window.resize(1366, 768)
     window.show()

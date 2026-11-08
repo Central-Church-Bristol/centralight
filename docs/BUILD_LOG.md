@@ -77,6 +77,7 @@ never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 | — your change of 6 Nov, late: a new show starts with no inputs (no "Follow screen") | **done** (6 Nov, 23:30; 1162 tests pass) |
 | Your changes of 8 Nov (morning): short text with the explanations in tooltips; Show variables… in the Show menu and Edit on the Dashboard | **done** (8 Nov, 09:09; 1168 tests pass) |
 | Your report of 8 Nov: a blink at a PC start. The lights now keep their look while it starts, then fade from it | **done** (8 Nov, 10:06; 1178 tests: all but the 15 that fail on Sunday mornings pass) |
+| Your report of 8 Nov: Show variables… showed the Editor's empty page. They now open in a window of their own | **done** (8 Nov, 20:11; all 1184 tests pass) |
 | — batch 4: the PC shutting down or going to sleep: two global automation conditions, so the lights can fade first; never held dark after | **done** (6 Nov, 22:10; 1158 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
@@ -126,6 +127,22 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
+
+## The Show variables window (8 Nov, morning)
+
+- **What you saw:** with no input open, Show ▾ → Show variables… (and the Dashboard's Edit) showed the Editor's "Nothing
+  to edit yet" page, so the variables couldn't be changed. My test had looked at the panel alone, which that page hides.
+- **Now:** both open a **Show variables** window on top of the main window, with the controls of the Editor's Show
+  variables tab: add and remove, the starting value, keep or reset when the show loads, "On the dashboard", Copy URL.
+  No input is needed, and the Dashboard stays in sight: a change shows there at once.
+- One at a time: pressing again brings it forward. It opens where you left it, at the size you left it. Ctrl+Z in it
+  undoes the newest step in the show's history.
+- Another show loaded: its variables. No show: "No show loaded." until one is. The padlock greys it out and stops both
+  buttons. When CentraLight goes into the tray, it closes.
+- The Editor keeps its own Show variables tab, for when an input is open. The Automation tab's note about adding show
+  variables now points to the Show menu.
+- The tests no longer depend on the real clock: this morning 15 failed because the sample show's "Sunday welcome"
+  (Sundays 09:00–12:30) ran during them. The test engine now always sees a Wednesday afternoon.
 
 ## No blink at a PC start (8 Nov, morning)
 

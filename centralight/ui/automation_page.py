@@ -443,7 +443,7 @@ class RuleRow(QFrame):
                 compare.currentIndexChanged.connect(lambda _i: (value.setVisible(compare.currentData() not in ("on", "off")), self._set("compare", compare.currentData())))
                 value.editingFinished.connect(lambda: self._set("value", _number_or_text(value.text())))
                 if not names:
-                    self._note("Add show variables in the Editor's Show variables tab first.")
+                    self._note("Add show variables first (Show ▾ → Show variables…).")
                 self._add(pick, compare, value)
             elif kind == "ndi":
                 source = QComboBox()

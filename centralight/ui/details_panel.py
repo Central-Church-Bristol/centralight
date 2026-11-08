@@ -294,9 +294,6 @@ class DetailsPanel(QScrollArea):
             panel = Panel("Details")
             panel.body.addWidget(hint("Open an input to edit it: the pencil on a Dashboard tile, or New input."))
             layout.addWidget(panel)
-            if self._tab == 1:  # (the Show variables, with no input open: Show ▾ → Show variables…, 8 Nov)
-                self.globals_panel = GlobalsPanel(self.document, self._url_base)  # (its own panel and heading)
-                layout.addWidget(self.globals_panel)
         elif self.current_element() is None:
             layout.addWidget(self._input_tabs(inp))
         else:
@@ -495,11 +492,6 @@ class DetailsPanel(QScrollArea):
     def _tab_switched(self, index: int) -> None:
         self._tab = index
         self.tab_changed.emit(index)
-
-    def show_variables(self) -> None:
-        """The Show variables tab (with no input open, the show variables under the hint), 8 Nov."""
-        self._tab = 1
-        self._rebuild()
 
     def globals_open(self) -> bool:
         """True while the Show variables tab is showing (the Editor's undo then uses the show's history)."""

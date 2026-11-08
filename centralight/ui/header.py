@@ -67,7 +67,7 @@ class ShowPicker(QToolButton):
     rename_requested = Signal()
     delete_requested = Signal(str)  # a show's folder (never the loaded one)
     notes_requested = Signal()  # Notes… (the loaded show's)
-    variables_requested = Signal()  # Show variables… (the Editor's Show variables, 8 Nov)
+    variables_requested = Signal()  # Show variables… (the Show variables window, 8 Nov)
     export_requested = Signal(bool)  # Export… (False) or Export everything… (True)
     import_requested = Signal()  # Import… (a .clshow file)
     close_requested = Signal()  # None (lights off): no show from now on (M14)
@@ -169,7 +169,7 @@ class ShowPicker(QToolButton):
             menu.addAction(f"Rename “{self._name}”…", self.rename_requested.emit)
             menu.addAction(f"Notes about “{self._name}”…", self.notes_requested.emit)
         variables = menu.addAction("Show variables…", self.variables_requested.emit)
-        variables.setToolTip("Add or change this show's variables (the Editor's Show variables tab)")
+        variables.setToolTip("Add or change this show's variables, in a window of their own")
         variables.setEnabled(not self.no_show)  # (no show loaded: no variables)
         menu.addSeparator()
         if not self.no_show:

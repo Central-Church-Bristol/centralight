@@ -55,6 +55,7 @@ class Settings:
     default_show: str = ""
     geometry: list[int] | None = None
     maximized: bool = False
+    variables_window: list[int] | None = None  # the Show variables window's place and size (8 Nov)
     splitters: dict[str, list[int]] = field(default_factory=dict)
     page: str = "dashboard"
     ui: dict[str, Any] = field(default_factory=dict)  # small remembered choices (e.g. viewport toggles)
@@ -99,9 +100,10 @@ class Settings:
         self.countdown = _int(self.countdown, defaults.countdown, 0, 60)
         self.default_show = str(self.default_show).strip() if isinstance(self.default_show, str) else ""
         self.maximized = bool(self.maximized)
-        geometry = self.geometry
-        if not (isinstance(geometry, list) and len(geometry) == 4 and all(isinstance(v, int) for v in geometry)):
-            self.geometry = None
+        for name in ("geometry", "variables_window"):
+            geometry = getattr(self, name)
+            if not (isinstance(geometry, list) and len(geometry) == 4 and all(isinstance(v, int) for v in geometry)):
+                setattr(self, name, None)
         self.splitters = _clean_splits(self.splitters)
         self.page = str(self.page or "dashboard")
         if not isinstance(self.ui, dict):

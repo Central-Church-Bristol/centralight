@@ -132,6 +132,7 @@ from .linked_media import LinkedMedia
 from .preview_page import LookPreview
 from .quit_dialog import QuitDialog
 from .settings_dialog import SettingsDialog
+from .variables_window import ShowVariablesWindow
 from .widgets import STATE_ERROR, STATE_INFO, STATE_OK, STATE_WARN, install_wheel_guard
 
 CARD_CHECK = 20.0  # seconds: how often the No show loaded card checks which global automation loads a show next (M14)
@@ -197,6 +198,7 @@ class MainWindow(QWidget):
         self._live_path = live_path
         self._shut_down = False
         self._locked = False
+        self.variables_window: ShowVariablesWindow | None = None  # (Show ▾ → Show variables…, made when first opened)
         install_wheel_guard(QApplication.instance())  # the wheel only changes controls that have been clicked into
         self._last_seq: int | None = None
         self._last_new_frame = time.monotonic()
@@ -462,13 +464,30 @@ class MainWindow(QWidget):
         self.editor_page.open_input(input_id)
         self.show_page("editor")
 
-    def show_variables(self) -> None:
-        """Show ▾ → Show variables…, or Edit on the Dashboard's Variables: the Editor, nothing selected, with the show
-        variables showing (8 Nov). Not with no show loaded, or while locked."""
+    def show_variables(self) -> ShowVariablesWindow | None:
+        """Show ▾ → Show variables…, or Edit on the Dashboard's Variables: the Show variables window, on top of this
+        one and not modal, so the Dashboard stays in sight (8 Nov). Pressed again, it comes forward. Not with no show
+        loaded, or while locked."""
         if self._locked or self.document.show.no_show:
-            return
-        self.show_page("editor")
-        self.editor_page.show_variables()
+            return None
+        window = self.variables_window
+        if window is None:
+            window = ShowVariablesWindow(self.document, lambda: f"http://127.0.0.1:{self.settings.remote_port}", self)
+            window.place(self.settings.variables_window, self.geometry())
+            window.finished.connect(lambda _result: self._remember_variables_window())
+            self.variables_window = window
+        if window.isMinimized():
+            window.showNormal()
+        else:
+            window.show()
+        window.raise_()
+        window.activateWindow()
+        return window
+
+    def _remember_variables_window(self) -> None:
+        if self.variables_window is not None:
+            self.settings.variables_window = self.variables_window.geometry_list()
+            self._save_settings()
 
     # ------------------------------------------------------------ inputs
 
@@ -1021,6 +1040,8 @@ class MainWindow(QWidget):
         self.header.show_picker.setEnabled(not locked)
         self.lock_banner.setVisible(locked)
         self.countdown_banner.set_locked(locked)
+        if self.variables_window is not None:
+            self.variables_window.set_locked(locked)
 
     def _show_name_for(self, wanted: str) -> str:
         """A show's name ("Evening") from what a "Load a show" action says (its id or name), for the countdown banner."""
@@ -1893,6 +1914,8 @@ class MainWindow(QWidget):
         self.dashboard.set_active(False)  # no drawing while hidden
         self._update_preview_wanted()
         self._leave_live_modes()
+        if not event.spontaneous() and self.variables_window is not None and self.variables_window.isVisible():
+            self.variables_window.close()  # (into the tray: it goes too. Minimised, Windows hides it, and brings it back)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._shut_down:
@@ -1983,6 +2006,8 @@ class MainWindow(QWidget):
 
     def _remember_geometry(self) -> None:
         self._remember_splits()
+        if self.variables_window is not None and self.variables_window.isVisible():
+            self.settings.variables_window = self.variables_window.geometry_list()
         self.settings.maximized = self.isMaximized()
         if not self.isMaximized() and not self.isMinimized():
             g = self.geometry()

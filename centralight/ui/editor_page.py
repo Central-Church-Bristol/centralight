@@ -277,13 +277,6 @@ class EditorPage(QWidget):
         self._sync_buttons()
         self._request()
 
-    def show_variables(self) -> None:
-        """The show variables in the details panel, with nothing selected (Show ▾ → Show variables…, 8 Nov)."""
-        if self.element_id:
-            self.select_element("")
-        self.details.show_variables()
-        self._sync_scope()
-
     def select_element(self, element_id: str) -> None:
         self.element_id = element_id or ""
         self.shape_id = ""

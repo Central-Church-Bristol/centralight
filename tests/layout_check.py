@@ -208,6 +208,17 @@ def main() -> int:
                 shots += 1
             dialog.reject()
             process(app, 1)
+        # the Show variables window (8 Nov): the size it first opens at, and as narrow as it goes
+        variables = window.show_variables()
+        for w, h in (variables.size().toTuple(), (1, 420)):
+            variables.resize(w, h)
+            process(app, 3)
+            size = f"{variables.width()}x{variables.height()}"
+            problems += layout_rules.check(variables, f"{fonts_tag} {args.scale:g}x show variables {size} {variant}")
+            variables.grab().save(str(out / f"show-variables-{size}-{variant}.png"))
+            shots += 1
+        variables.close()
+        process(app, 1)
         window.editor_page.shutdown()
         window.document.close()
         window.hide()

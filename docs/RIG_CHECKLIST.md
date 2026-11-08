@@ -594,14 +594,20 @@ The old console script (`ndi_pixel_mapper.py`) went with the clean-up (M17), so 
 
 - [ ] Editor → an input's Input tab: the Overlay panel shows **Overlay button** and its choice; hover it for the
       explanation. Settings: no paragraphs, just the Eurolite line; hover a setting for its explanation.
-- [ ] Show ▾ → **Show variables…**: the Editor opens with the show variables showing. The Dashboard's Variables
-      **Edit** does the same.
+- [ ] Show ▾ → **Show variables…**: now a window of its own (20l).
 
 ## 20k. No blink at a PC start (8 Nov)
 
 - [ ] With the lights on, quit CentraLight from the tray with **Leave the lights as they are**, then sign out and back
       in: Windows starts CentraLight, and the lights keep their look while it starts. When the schedule's show comes
       back they stay as they were (no blink). With nothing to load, they fade to black instead.
+
+## 20l. The Show variables window (8 Nov)
+
+- [ ] With no input open, Show ▾ → **Show variables…**: a window opens on top, the Dashboard still in sight. Tick **On
+      the dashboard** for a variable: it appears in the Dashboard's Variables panel at once.
+- [ ] The Dashboard's Variables **Edit** brings the same window forward. Move and resize it, close it and open it
+      again: it comes back where you left it.
 
 ## 21. Afterwards: updating the main folder
 

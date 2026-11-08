@@ -1375,7 +1375,7 @@ def import_globals(package: Package, global_dir: str | Path, *, replace: bool = 
 # what an imported settings file never changes: this PC's own things (where its shows are, its window), and anything
 # that would reach outside CentraLight (the output to the lights, the USB port, starting with Windows, the phone page
 # being open to the network, the file type)
-KEEP_ON_THIS_PC = ("show_folder", "usb_port", "geometry", "maximized", "splitters", "output", "artnet_ip",
+KEEP_ON_THIS_PC = ("show_folder", "usb_port", "geometry", "maximized", "variables_window", "splitters", "output", "artnet_ip",
                    "artnet_universe", "full_universe", "start_with_windows", "remote_lan", "remote_key", "remote_port",
                    "audio_source", "clshow_files", "page", "ui")
 
