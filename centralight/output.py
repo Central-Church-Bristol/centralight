@@ -5,7 +5,10 @@ fixtures.set_fixture (RGB, with a SlimPAR's own dimmer channel at full).
 
 DmxOutputThread sends it on its own thread ("dmx-out"):
 - only when something changed, plus once a second as a keepalive
-- trimmed to the last channel a light uses (76), so a USB packet takes ~3.6 ms
+- to the Eurolite, 30 packets a second at most (always ending on the newest frame): the
+  engine makes 40 a second while an NDI input plays
+- all 512 channels, or (Settings) trimmed to the last channel a light uses (76), so a
+  USB packet takes ~3.6 ms instead of ~22.8
 - if the dongle is unplugged or another program has it, it says so and retries
   every 2 seconds, then sends the current frame as soon as it's back
 
@@ -35,6 +38,9 @@ DMX_CHANNELS = 512
 MIN_CHANNELS = 24  # the Enttec Pro protocol needs at least 24 channels per packet
 KEEPALIVE_SECONDS = 1.0
 RETRY_SECONDS = 2.0
+# packets a second to the Eurolite at most (8 Nov: the festoons flickered while an NDI input changed the frame 40 times a
+# second; the script that worked sent 30, "the USB dongle can only manage about 40")
+USB_MAX_RATE = 30
 
 # Output states, as shown in the header chip
 CONNECTED = "connected"
@@ -147,6 +153,7 @@ class DeviceSpec:
     label: str  # what the header chip says before it connects
     factory: Callable[[], Device]
     trim: int | None = None  # channels per packet (None = all 512)
+    min_gap: float = 0.0  # seconds between packets at least (USB: 1 / USB_MAX_RATE)
 
 
 def _open_usb(port: str | None) -> Device:
@@ -172,6 +179,7 @@ def device_spec(settings: Settings, size: int) -> DeviceSpec:
             settings.usb_port or "USB",
             lambda: _open_usb(port),
             None if settings.full_universe else size,
+            1.0 / USB_MAX_RATE,
         )
     if settings.output == OUTPUT_ARTNET:
         ip, universe = settings.artnet_ip, settings.artnet_universe
@@ -234,6 +242,7 @@ class DmxOutputThread:
         self._device: Device | None = None
         self._last_sent: bytes | None = None
         self._next_keepalive = 0.0
+        self._next_send = 0.0  # (the spec's min_gap after the last packet)
         self._next_retry = 0.0
         self._sent_times: deque[float] = deque(maxlen=400)
         self._sent_total = 0
@@ -333,8 +342,8 @@ class DmxOutputThread:
                     self._open()
                 if self._device is not None and frame is not None:
                     now = self._clock()
-                    if frame != self._last_sent or now >= self._next_keepalive:
-                        self._send(frame)
+                    if (frame != self._last_sent or now >= self._next_keepalive) and now >= self._next_send:
+                        self._send(frame)  # (too soon after the last one: the newest frame goes when it's time)
             except Exception as exc:  # never let the output thread die
                 log_exception("dmx-out", exc)
                 time.sleep(0.1)
@@ -346,6 +355,8 @@ class DmxOutputThread:
             due = self._next_retry
         elif self._frame is None:
             return 1.0  # nothing to send yet; submit() wakes us
+        elif self._frame != self._last_sent:
+            due = self._next_send  # a newer frame, waiting for the gap after the last packet
         else:
             due = self._next_keepalive
         return min(1.0, max(0.005, due - now))
@@ -393,6 +404,7 @@ class DmxOutputThread:
             self._sent_times.append(now)
             self._sent_total += 1
         self._next_keepalive = now + self._keepalive
+        self._next_send = now + self._spec.min_gap
 
     def _lost(self, exc: BaseException) -> None:
         device, self._device = self._device, None
@@ -418,6 +430,7 @@ class DmxOutputThread:
     def _switch(self, spec: DeviceSpec) -> None:
         device, self._device = self._device, None
         if device is not None:
+            self._wait_gap()
             try:
                 device.close(blackout=True)  # never leave the old output's lights stuck on
             except Exception as exc:
@@ -428,11 +441,18 @@ class DmxOutputThread:
         with self._cond:
             self._status = OutputStatus(kind=spec.kind, state=CONNECTING, label=spec.label)
 
+    def _wait_gap(self) -> None:
+        """Before a last packet (the newest look, or a blackout, as an output closes): the gap after the one before."""
+        wait = self._next_send - self._clock()
+        if wait > 0.0:
+            time.sleep(min(wait, 1.0))
+
     def _finish(self, frame: bytes | None, blackout: bool) -> None:
         device, self._device = self._device, None
         if device is None:
             self._set_status(CLOSED)
             return
+        self._wait_gap()
         try:
             if not blackout and frame is not None and frame != self._last_sent:
                 trim = self._spec.trim

@@ -78,6 +78,7 @@ never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 | Your changes of 8 Nov (morning): short text with the explanations in tooltips; Show variables… in the Show menu and Edit on the Dashboard | **done** (8 Nov, 09:09; 1168 tests pass) |
 | Your report of 8 Nov: a blink at a PC start. The lights now keep their look while it starts, then fade from it | **done** (8 Nov, 10:06; 1178 tests: all but the 15 that fail on Sunday mornings pass) |
 | Your report of 8 Nov: Show variables… showed the Editor's empty page. They now open in a window of their own | **done** (8 Nov, 20:11; all 1184 tests pass) |
+| Your report of 8 Nov (evening): the festoons flickered with the NDI input. To try on the rig: 30 packets a second to the Eurolite, and all 512 channels | **ready to try** (8 Nov, 20:35; all 1189 tests pass) |
 | — batch 4: the PC shutting down or going to sleep: two global automation conditions, so the lights can fade first; never held dark after | **done** (6 Nov, 22:10; 1158 tests pass) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
@@ -127,6 +128,20 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
+
+## The festoons flickering with the NDI input (8 Nov, evening)
+
+- **What you saw:** in the evening service, sending "Follow Media Background" made the festoons flash, like glitchy
+  flickering.
+- **What we know:** the log has no output errors, every show's patch is right, and that input sets no house light. While
+  an NDI input plays, the picture changes all the time, so CentraLight sent the Eurolite a packet up to 40 times a
+  second (otherwise about once a second), each with only the first 76 channels. The script that worked sent all 512
+  channels, 30 times a second, and MagicQ sends all 512 too. The LED SlimPARs cope; the dimmer pack for the festoons
+  and key lights may not. (Others have seen a Eurolite MK2 upset an older dimmer pack's first channel.)
+- **To try (not installed yet):** CentraLight sends the Eurolite 30 packets a second at most, always ending on the
+  newest picture (the once-a-second resend is unchanged; Art-Net is as before), and new settings send all 512
+  channels. Yours keep 76 until you tick **Send all 512 channels** (Settings → Output).
+- The test on the rig is in the checklist (20m): it tells which of the two changes matters.
 
 ## The Show variables window (8 Nov, morning)
 

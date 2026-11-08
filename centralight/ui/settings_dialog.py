@@ -115,8 +115,8 @@ class SettingsDialog(QDialog):
         self.full_universe = QCheckBox("Send all 512 channels")
         self.full_universe.setChecked(settings.full_universe)
         self.full_universe.setToolTip(
-            "Normally CentraLight stops after the last light's channel (76), which is faster.\n"
-            "Tick this only if the lights behave oddly."
+            "All 512 channels, as a lighting desk sends them (ticked for new settings since 8 Nov).\n"
+            "Unticked, CentraLight stops after the last light's channel (76)."
         )
         self.artnet_ip = QLineEdit(settings.artnet_ip)
         self.artnet_universe = QSpinBox()

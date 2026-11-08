@@ -211,9 +211,13 @@ class SettingsTests(WindowTestCase):
     def test_choosing_usb_switches_the_output_without_opening_it_here(self) -> None:
         window, engine = self.make()
 
+        all_512 = True
+
         def accept_with_usb(dialog: SettingsDialog) -> int:
             dialog.usb.setChecked(True)
             dialog.port.setCurrentIndex(0)
+            self.assertTrue(dialog.full_universe.isChecked())  # (new settings send all 512 channels, 8 Nov)
+            dialog.full_universe.setChecked(all_512)
             return QDialog.DialogCode.Accepted
 
         with mock.patch.object(SettingsDialog, "exec", accept_with_usb):
@@ -221,7 +225,12 @@ class SettingsTests(WindowTestCase):
         self.assertEqual(window.settings.output, OUTPUT_USB)
         spec = engine.fake_output.specs[-1]
         self.assertEqual(spec.kind, OUTPUT_USB)
-        self.assertEqual(spec.trim, 76)
+        self.assertIsNone(spec.trim)  # (all 512)
+        self.assertAlmostEqual(spec.min_gap, 1 / 30)  # (30 packets a second at most)
+        all_512 = False
+        with mock.patch.object(SettingsDialog, "exec", accept_with_usb):
+            window.open_settings()
+        self.assertEqual(engine.fake_output.specs[-1].trim, 76)  # ("Send all 512 channels" unticked)
 
     def test_cancel_changes_nothing(self) -> None:
         window, engine = self.make()

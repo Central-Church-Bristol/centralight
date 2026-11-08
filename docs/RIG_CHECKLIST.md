@@ -609,6 +609,15 @@ The old console script (`ndi_pixel_mapper.py`) went with the clean-up (M17), so 
 - [ ] The Dashboard's Variables **Edit** brings the same window forward. Move and resize it, close it and open it
       again: it comes back where you left it.
 
+## 20m. The festoons and the NDI input (8 Nov)
+
+With the festoons on, send "Follow Media Background" (the evening show) to Base and watch the festoons for a minute,
+four times:
+- [ ] Before the update, as now. Do they flicker?
+- [ ] Before the update, with **Send all 512 channels** ticked (Settings → Output: where the DMX goes).
+- [ ] After the update, with it unticked (30 packets a second, 76 channels).
+- [ ] After the update, with it ticked (30 a second, all 512 channels). Leave it ticked if this one is steady.
+
 ## 21. Afterwards: updating the main folder
 
 Everything is committed on the branch `claude/centralight-gui` (nothing on `main`, nothing pushed). The work was

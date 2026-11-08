@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import random
+import tempfile
 import time
 import unittest
+from dataclasses import replace
+from pathlib import Path
 
+from centralight.dmx_output import build_packet
 from centralight.fixtures import PATCH, set_fixture
 
 from centralight.new_show import fixture_id, show_from_patch
@@ -15,6 +20,7 @@ from centralight.output import (
     CONNECTED,
     ERROR,
     MISSING,
+    USB_MAX_RATE,
     DeviceSpec,
     DmxOutputThread,
     SimulatedDevice,
@@ -83,9 +89,26 @@ class SpecTests(unittest.TestCase):
         self.assertIsInstance(spec.factory(), SimulatedDevice)
 
     def test_usb_trims_unless_full_universe(self) -> None:
-        self.assertEqual(device_spec(Settings(output=OUTPUT_USB), 76).trim, 76)
+        self.assertEqual(device_spec(Settings(output=OUTPUT_USB, full_universe=False), 76).trim, 76)
         self.assertIsNone(device_spec(Settings(output=OUTPUT_USB, full_universe=True), 76).trim)
         self.assertIsNone(device_spec(Settings(output=OUTPUT_ARTNET), 76).trim)
+
+    def test_new_settings_send_all_512_and_saved_ones_keep_theirs(self) -> None:
+        """8 Nov: like MagicQ and the script that worked. A settings file that says false (as the church PC's does)
+        stays false: "Send all 512 channels" ticks it."""
+        self.assertTrue(Settings().full_universe)
+        self.assertIsNone(device_spec(Settings(output=OUTPUT_USB), 76).trim)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            path.write_text(json.dumps({"output": "usb", "full_universe": False}), encoding="utf-8")
+            self.assertFalse(Settings.load(path).full_universe)
+            path.write_text(json.dumps({"output": "usb"}), encoding="utf-8")
+            self.assertTrue(Settings.load(path).full_universe)
+
+    def test_only_the_eurolite_is_held_to_30_a_second(self) -> None:
+        self.assertAlmostEqual(device_spec(Settings(output=OUTPUT_USB), 76).min_gap, 1 / 30)
+        self.assertEqual(device_spec(Settings(output=OUTPUT_ARTNET), 76).min_gap, 0.0)
+        self.assertEqual(device_spec(Settings(), 76).min_gap, 0.0)  # (Simulated)
 
     def test_specs_never_open_anything_until_asked(self) -> None:
         # Building specs is safe; only factory() would open the port (and the test guard refuses that)
@@ -187,6 +210,57 @@ class OutputThreadTests(unittest.TestCase):
         self.assertTrue(old.closed_with_blackout)
         self.assertEqual(simulated.last[4], 5)
         self.assertEqual(self.thread.status().kind, OUTPUT_SIMULATED)
+
+
+class UsbRateTests(unittest.TestCase):
+    """8 Nov: the festoons flickered while an NDI input played, the engine making a new frame 40 times a second. To the
+    Eurolite, CentraLight now sends 30 packets a second at most, always ending on the newest frame."""
+
+    def start(self, full_universe: bool = False) -> DmxOutputThread:
+        self.port = FakePort()
+        spec = device_spec(Settings(output=OUTPUT_USB, usb_port="COM9", full_universe=full_universe), 76)
+        self.thread = DmxOutputThread(replace(spec, factory=self.port.factory), retry=0.1)
+        self.thread.start()
+        self.addCleanup(self.thread.close, True, 2.0)
+        return self.thread
+
+    @staticmethod
+    def frame(value: int) -> bytes:
+        data = bytearray(512)
+        data[4] = value
+        return bytes(data)
+
+    def test_a_fast_stream_goes_out_30_a_second_at_most_ending_on_the_newest_frame(self) -> None:
+        thread = self.start()
+        end = time.monotonic() + 2.0
+        value = 0
+        while time.monotonic() < end:  # (a new frame every 12.5 ms: faster than the engine's 40 a second)
+            value = value % 250 + 1
+            thread.submit(self.frame(value))
+            time.sleep(0.0125)
+        self.assertTrue(wait_for(lambda: self.port.all_sent() and self.port.all_sent()[-1][4] == value, 0.5))  # (the last)
+        times = list(thread._sent_times)
+        busiest = max(sum(1 for t in times if start <= t < start + 1.0) for start in times)
+        self.assertLessEqual(busiest, USB_MAX_RATE)
+        self.assertGreaterEqual(busiest, 15)  # (and it keeps up)
+        gaps = [b - a for a, b in zip(times, times[1:])]
+        self.assertGreaterEqual(min(gaps), 1 / USB_MAX_RATE - 0.001)
+
+    def test_the_keepalive_is_still_once_a_second(self) -> None:
+        thread = self.start(full_universe=True)
+        thread.submit(self.frame(7))
+        time.sleep(2.5)
+        times = list(thread._sent_times)
+        self.assertEqual(len(times), 3)  # (the frame, then the same again once a second)
+        for a, b in zip(times, times[1:]):
+            self.assertAlmostEqual(b - a, 1.0, delta=0.1)
+        self.assertEqual(len(self.port.all_sent()[-1]), 512)
+
+    def test_512_channels_30_times_a_second_fit_the_link(self) -> None:
+        seconds = len(build_packet(bytes(512))) * 11 / 250000  # (250 kbaud, 8N2: 11 bits a byte)
+        self.assertAlmostEqual(seconds, 0.0228, delta=0.0002)
+        self.assertLess(seconds, 1 / USB_MAX_RATE)  # (each is sent before the next is due)
+        self.assertLess(seconds * USB_MAX_RATE, 0.7)  # (the link busy 68 % of the time, against 91 % at 40 a second)
 
 
 if __name__ == "__main__":

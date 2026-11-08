@@ -35,7 +35,9 @@ class Settings:
     usb_port: str = ""  # "" = find the Eurolite automatically
     artnet_ip: str = "192.168.1.16"
     artnet_universe: int = 0
-    full_universe: bool = False  # send all 512 channels instead of stopping after the last light
+    # send all 512 channels instead of stopping after the last light (76). True for new settings since 8 Nov, like MagicQ
+    # and the script that worked (the festoons flickered with an NDI input); a saved false stays false
+    full_universe: bool = True
     show_folder: str = ""  # "" = Documents\CentraLight Shows\Central Church
     ndi_default: str = DEFAULT_NDI_SOURCE
     quit_action: str = QUIT_ASK
