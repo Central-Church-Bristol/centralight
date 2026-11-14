@@ -145,6 +145,17 @@ function actionDefinitions(state, send, getState = () => state) {
 			options: [dropdown('input', 'Input', inputs)],
 			callback: (action) => run(path('input', action.options.input, 'overlay', 'clear')),
 		},
+		// (14 Nov: one key turns an input on and off on the Overlay, going by what CentraLight shows, so it can't get out
+		// of step when the copy is cleared in CentraLight itself)
+		overlay_toggle: {
+			name: 'Toggle an input on the Overlay (on if it is off, cleared if it is on)',
+			options: [dropdown('input', 'Input', inputs)],
+			callback: (action) => {
+				const input = action.options.input
+				const shown = copiesOf(getState(), input) > 0
+				return run(shown ? path('input', input, 'overlay', 'clear') : path('input', input, 'overlay'))
+			},
+		},
 		overlay_clear: { name: 'Clear the Overlay (every copy)', options: [], callback: () => run('overlay/clear') },
 		overlay_switch: {
 			name: "The Overlay's switch (off hides it without emptying it)",
@@ -481,6 +492,15 @@ function presetDefinitions(state, combine, label = 'centralight') {
 					up: [{ actionId: 'overlay_release', options: { input: i.id } }],
 				},
 			],
+			feedbacks: lit('on_overlay', { input: i.id }, BLACK, LIME),
+		}
+		// (14 Nov: press once for on, again for off; lit lime while it's on)
+		presets[`overlay_toggle_${i.id}`] = {
+			type: 'button',
+			category: 'Inputs to the Overlay (toggle)',
+			name: `${i.name}: on / off on the Overlay`,
+			style: style(i.name, WHITE, BLACK),
+			steps: press('overlay_toggle', { input: i.id }),
 			feedbacks: lit('on_overlay', { input: i.id }, BLACK, LIME),
 		}
 	}

@@ -8,7 +8,7 @@ holding lights. Pressing a button does what CentraLight's Stream Deck URLs do (s
 ## Putting it in Companion (once)
 
 1. Open Companion's admin page (the Companion window's **Launch GUI** button).
-2. Go to **Modules** and click **Import module package**. Pick `centralight-1.0.0.tgz` from this `companion` folder.
+2. Go to **Modules** and click **Import module package**. Pick `centralight-1.1.0.tgz` from this `companion` folder.
 3. Go to **Connections**, add **CentraLight**, and save it as it is: **CentraLight PC** `127.0.0.1` and **Port**
    `8746` (the port in CentraLight's Settings → Remote, if it was changed).
 4. The connection turns green once CentraLight is running. Then the **Presets** tab has a button for each input and

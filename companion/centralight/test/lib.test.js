@@ -68,6 +68,9 @@ test('each action sends what its Stream Deck URL does', () => {
 	assert.deepEqual(press('overlay', { input: 'worship-blue' }), ['input/worship-blue/overlay', {}])
 	assert.deepEqual(press('overlay_release', { input: 'worship-blue' }), ['input/worship-blue/overlay/release', {}])
 	assert.deepEqual(press('overlay_clear_input', { input: 'worship-blue' }), ['input/worship-blue/overlay/clear', {}])
+	// (14 Nov) toggle: worship-blue is on the Overlay in the sample, so it clears; warm-white isn't, so it's sent
+	assert.deepEqual(press('overlay_toggle', { input: 'worship-blue' }), ['input/worship-blue/overlay/clear', {}])
+	assert.deepEqual(press('overlay_toggle', { input: 'warm-white' }), ['input/warm-white/overlay', {}])
 	assert.deepEqual(press('overlay_clear', {}), ['overlay/clear', {}])
 	assert.deepEqual(press('overlay_switch', { state: 'off' }), ['overlay/off', {}])
 	assert.deepEqual(press('show', { show: 'evening' }), ['show/evening', {}])
@@ -218,4 +221,24 @@ test('the lists key changes only when a dropdown would', () => {
 	assert.equal(lib.listsKey({ ...state, master: 0.2, base: { id: 'worship-blue', name: 'Worship blue' } }), key)
 	assert.notEqual(lib.listsKey({ ...state, inputs: [...state.inputs, { id: 'new', name: 'New' }] }), key)
 	assert.notEqual(lib.listsKey({ ...state, lights: [] }), key)
+})
+
+test('each input has a toggle preset that turns it on and off on the Overlay (14 Nov)', () => {
+	const presets = lib.presetDefinitions(sampleState(), (c) => c)
+	const p = presets.overlay_toggle_warm_white || presets['overlay_toggle_warm-white']
+	assert.ok(p, 'a toggle preset for warm-white')
+	assert.equal(p.category, 'Inputs to the Overlay (toggle)')
+	assert.deepEqual(p.steps[0].down, [{ actionId: 'overlay_toggle', options: { input: 'warm-white' } }])
+	assert.equal(p.feedbacks[0].feedbackId, 'on_overlay')
+})
+
+test('toggle follows the live state, not the state the actions were made with (14 Nov)', () => {
+	const sent = []
+	let state = sampleState()
+	const actions = lib.actionDefinitions(state, (path, params) => sent.push([path, params]), () => state)
+	actions.overlay_toggle.callback({ options: { input: 'warm-white' } })
+	assert.deepEqual(sent.pop(), ['input/warm-white/overlay', {}])
+	state = { ...state, overlay: { on: true, copies: [{ copy: 1, id: 'warm-white', name: 'Warm white' }] } }
+	actions.overlay_toggle.callback({ options: { input: 'warm-white' } })
+	assert.deepEqual(sent.pop(), ['input/warm-white/overlay/clear', {}])
 })

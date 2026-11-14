@@ -1,6 +1,6 @@
 {
   "name": "centralight",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Bitfocus Companion module for CentraLight (live connection: actions, feedbacks, variables, presets)",
   "main": "main.js",
   "type": "commonjs",

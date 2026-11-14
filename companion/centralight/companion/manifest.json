@@ -3,7 +3,7 @@
   "name": "centralight",
   "shortname": "centralight",
   "description": "CentraLight: the church's lighting app (inputs, the Overlay, shows, black, Master, house lights, automations, the Console)",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "license": "MIT",
   "repository": "",
   "bugs": "",
