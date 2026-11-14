@@ -44,6 +44,7 @@ from ..console import (
     Chase,
     ChaseView,
     ConsoleView,
+    all_channels,
     channels_of,
 )
 from ..model import Show
@@ -580,7 +581,7 @@ class ConsolePage(QWidget):
         self.strobe_note = QLabel(f"⚠  {STROBE_NOTE}")
         self.strobe_note.setObjectName("Hint")
         self.strobe_note.setWordWrap(True)
-        for row, (attr, name) in enumerate(channels_of("slimpar9")):
+        for row, (attr, name) in enumerate(all_channels()):  # (_fill_channels shows the chosen lights' own)
             caption = _caption(name)
             fader = Fader()
             fader.setToolTip(f"{name}, 0 to 255")
@@ -755,6 +756,8 @@ class ConsolePage(QWidget):
         if list(show.saved_colours) != self._saved_colours or not self.saved_buttons and self.saved_flow.count() == 0:
             self.set_saved_colours(list(show.saved_colours))
         self._summarise()
+        if hasattr(self, "channel_rows"):  # (a light's type may have changed: its channels)
+            self._fill_channels()
         if hasattr(self, "chase_lights"):  # (its lights' names and groups may have changed)
             self._show_chase_lights(self._view.chase if self.owns_playing() else ChaseView(self._chase))
 
@@ -1184,22 +1187,27 @@ class ConsolePage(QWidget):
         if not chosen:
             return
         light = chosen[0]
-        names = [attr for attr, _name in channels_of("slimpar9")]
 
         def value(attr: str, usual: int) -> int:
-            found = self._before_master(light, attr, names)
+            found = self._before_master(light, attr)
             return usual if found is None else found
 
         self.set_look(value("dimmer", 255) / 255, hex_of(tuple(value(attr, 255) / 255 for attr in COLOUR)))
 
-    def _before_master(self, light: str, attr: str, names: list[str]) -> int | None:
+    def _channel_names(self, light: str) -> list[str]:
+        """The light's channels, in DMX order (from its type)."""
+        fx = self.show_data.fixture(light)
+        return [attr for attr, _name in channels_of(fx.profile if fx is not None else "")]
+
+    def _before_master(self, light: str, attr: str) -> int | None:
         """What the light's attribute is set to, before Master: what the Console holds, else what's sent with Master
         taken back out of the colour (None: not known)."""
         held = self._view.levels.get(light, {})
         if attr in held:
             return int(held[attr])
         sent = self._view.values.get(light, ())
-        if attr not in names or len(sent) != len(names):  # (a light with other channels: not this way)
+        names = self._channel_names(light)
+        if attr not in names or len(sent) != len(names):  # (it hasn't that channel, or was sent as another type)
             return None
         value = int(sent[names.index(attr)])
         if attr in COLOUR and self.master > 0.0:
@@ -1280,9 +1288,12 @@ class ConsolePage(QWidget):
 
     def _fill_channels(self) -> None:
         chosen = [i for i in self.map.selection() if i in self._view.values]
-        names = list(self.channel_rows)
+        lights = self.map.selection() or [fx.id for fx in self.show_data.colour_fixtures()]
+        present = {attr for light in lights for attr in self._channel_names(light)}  # (only the channels they have)
         for attr, (caption, fader, value) in self.channel_rows.items():
-            levels = {found for found in (self._before_master(i, attr, names) for i in chosen) if found is not None}
+            for widget in (caption, fader, value, *((self.strobe_note,) if attr == "strobe" else ())):
+                widget.setVisible(attr in present)
+            levels = {found for found in (self._before_master(i, attr) for i in chosen) if found is not None}
             if not levels:
                 fader.set_level(0.0)
                 value.setText("–")

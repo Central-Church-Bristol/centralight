@@ -30,6 +30,7 @@ from .model import (
 DEFAULT_COLOUR_PROFILE = "slimpar9"
 PROFILE_LABELS = {
     "slimpar9": "SlimPAR Q12 (9 channels)",
+    "lpc018": "Betopper LPC018 (7 channels)",
     "dimmer": "Dimmer (1 channel)",
 }
 

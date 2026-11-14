@@ -121,6 +121,9 @@ universe 1, checked in the room on 2 Nov 2026); each show keeps its own lights i
 Nothing answers on channels 2 and 3. A SlimPAR's nine channels are red, green, blue, amber, colour macro, strobe,
 program, dimmer and dimmer speed: inputs set the colour with the dimmer at full; the Console can set them all.
 
+The Layout tab's **Type** also has the **Betopper LPC018** in its 7-channel mode (dimmer, red, green, blue, strobe,
+macro, macro speed). On the light's own menu, set `7CH` and its start channel (`A077`, say).
+
 ## Fonts
 
 The app uses the church's Futura PT fonts. They aren't in git: `run.bat` copies them once from

@@ -50,6 +50,17 @@ class ShowEditTests(unittest.TestCase):
         self.assertEqual(channel_conflicts(added), {})
         self.assertEqual(len(remove_lights(added, {new_id}).fixtures), len(self.show.fixtures))
 
+    def test_six_lpc018s_added_one_after_another(self) -> None:
+        """Add a light, then Type → Betopper LPC018, six times: 7 channels each, one straight after another."""
+        show = self.show
+        for _ in range(6):
+            show, new_id = add_colour_light(show)
+            show = set_profile(show, new_id, "lpc018")
+        added = [fx for fx in show.fixtures if fx.profile == "lpc018"]
+        self.assertEqual([fx.address for fx in added], [77, 84, 91, 98, 105, 112])
+        self.assertEqual(added[-1].channel_range(), "112-118")
+        self.assertEqual(channel_conflicts(show), {})
+
     def test_conflicts_are_found_both_ways(self) -> None:
         clash = set_address(self.show, "slimpar-102", 10)
         conflicts = channel_conflicts(clash)

@@ -17,6 +17,9 @@ PROFILES = {
     # Chauvet DJ SlimPAR Q12 USB, 9-ch mode: Red, Green, Blue, Amber, Colour macro,
     # Strobe, Program, Dimmer, Dimmer speed. 0 on the extras = no macro / strobe / program.
     "slimpar9": {"channels": 9, "red": 0, "green": 1, "blue": 2, "dimmer": 7},
+    # Betopper LPC018 (54x1W RGB), 7-ch mode: Dimmer, Red, Green, Blue, Strobe (0 = none, 1-9 = LEDs off),
+    # Macro (0-50 = none, then colour jump, fade, pulse, sound), Macro speed.
+    "lpc018": {"channels": 7, "dimmer": 0, "red": 1, "green": 2, "blue": 3},
 }
 
 # group = the MagicQ group the light is in

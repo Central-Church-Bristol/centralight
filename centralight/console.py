@@ -3,7 +3,7 @@
 Like a lighting desk's programmer: what someone sets on the Console wins, per light and per attribute, until it's
 released (with a fade). Untouched attributes keep following CentraLight's inputs. Brightness is the light's own Dimmer
 channel, colour its Red, Green and Blue, and the Advanced switch reaches the rest as raw values (Amber, the colour
-macro, Strobe, the light's own programs, Dimmer speed).
+macro, Strobe, the light's own programs and their speed, Dimmer speed).
 
 Qt-free: the engine keeps a ConsoleState and the window shows a ConsoleView.
 """
@@ -34,12 +34,24 @@ CHANNELS: dict[str, tuple[tuple[str, str], ...]] = {
         ("dimmer", "Dimmer"),
         ("dimmer_speed", "Dimmer speed"),
     ),
+    # (its manual calls the light's own programs "Macro": colour jump, fade, pulse, sound)
+    "lpc018": (
+        ("dimmer", "Dimmer"),
+        ("red", "Red"),
+        ("green", "Green"),
+        ("blue", "Blue"),
+        ("strobe", "Strobe"),
+        ("program", "Program"),
+        ("program_speed", "Program speed"),
+    ),
     "dimmer": (("dimmer", "Dimmer"),),
 }
 COLOUR = ("red", "green", "blue")  # set together by the colour picker
 BRIGHTNESS = "dimmer"
-SNAP_BACK = frozenset({"macro", "strobe", "program", "dimmer_speed"})  # set and released at once, never faded
-RAW = ("dimmer", "amber", "macro", "strobe", "program", "dimmer_speed")  # sent as they are (Master scales the colour)
+# set and released at once, never faded
+SNAP_BACK = frozenset({"macro", "strobe", "program", "dimmer_speed", "program_speed"})
+# sent as they are (Master scales the colour)
+RAW = ("dimmer", "amber", "macro", "strobe", "program", "dimmer_speed", "program_speed")
 DEFAULT_VALUES = {"dimmer": 255.0}  # what CentraLight sends on an attribute nobody holds (the rest: 0)
 CHASED = ("red", "green", "blue", "dimmer")  # what a chase sets: colour and brightness
 RELEASE_FADE = 2.0  # seconds: Release and Release all hand lights back over this long (Settings changes it)
@@ -79,6 +91,21 @@ def whole_steps(position: float) -> int:
 
 def channels_of(profile: str) -> tuple[tuple[str, str], ...]:
     return CHANNELS.get(profile, ())
+
+
+def all_channels() -> tuple[tuple[str, str], ...]:
+    """Every attribute any light type has, once each: the SlimPAR's in its order, another type's after the one before
+    it there (Program speed after Program)."""
+    order: list[str] = []
+    names: dict[str, str] = {}
+    for channels in CHANNELS.values():
+        before = None
+        for attr, name in channels:
+            if attr not in names:
+                names[attr] = name
+                order.insert(order.index(before) + 1 if before in order else len(order), attr)
+            before = attr
+    return tuple((attr, names[attr]) for attr in order)
 
 
 @dataclass(frozen=True)

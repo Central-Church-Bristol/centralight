@@ -48,6 +48,33 @@ class ConsolePageTests(unittest.TestCase):
         QTest.mouseClick(self.page.map, Qt.MouseButton.LeftButton, modifier, self.dot(light))
         process(self.app)
 
+    def test_advanced_shows_each_light_its_own_channels(self) -> None:
+        from centralight.console import ConsoleView
+        from centralight.show_edit import set_profile
+
+        page = self.page
+        page.set_show(set_profile(self.show, "slimpar-101", "lpc018"))
+        page.set_advanced(True)
+        page.set_view(ConsoleView(values={"slimpar-101": (200, 255, 0, 0, 0, 120, 30),
+                                          "slimpar-102": (0, 0, 255, 0, 0, 0, 0, 255, 0)}))
+
+        def shown() -> list[str]:
+            return [attr for attr, (caption, _fader, _value) in page.channel_rows.items() if not caption.isHidden()]
+
+        page.set_selection([])
+        self.assertIn("amber", shown())  # (none chosen: every channel the show's lights have)
+        self.assertIn("program_speed", shown())
+        page.set_selection(["slimpar-101"])  # (the LPC018: dimmer first, and no amber)
+        self.assertEqual(shown(), ["red", "green", "blue", "strobe", "program", "program_speed", "dimmer"])
+        self.assertEqual((page.channel_rows["dimmer"][2].text(), page.channel_rows["program_speed"][2].text()),
+                         ("200", "30"))
+        page.set_selection(["slimpar-102"])
+        self.assertEqual(shown(), ["red", "green", "blue", "amber", "macro", "strobe", "program", "dimmer",
+                                   "dimmer_speed"])
+        self.assertEqual(page.channel_rows["dimmer"][2].text(), "255")
+        page.set_selection(["slimpar-101", "slimpar-102"])
+        self.assertEqual(page.channel_rows["red"][2].text(), "mixed")
+
     def test_click_ctrl_click_and_a_box(self) -> None:
         map_ = self.page.map
         self.click("slimpar-101")

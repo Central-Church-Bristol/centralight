@@ -17,6 +17,7 @@ from centralight.console import Chase, ChaseRun, ChaseStep, ConsoleState, chase_
 from centralight.live_state import LiveState
 from centralight.new_show import show_from_patch
 from centralight.output import encode_dmx
+from centralight.show_edit import set_profile
 from tests.fakes import FakeEngine
 from tests.gui_fixtures import with_inputs
 
@@ -409,6 +410,27 @@ class EncodeTests(unittest.TestCase):
         more = encode_dmx(fixtures, {A: (1.0, 0.5, 0.0)}, {}, extras={A: {"amber": 77, "strobe": 200, "dimmer": 128, "nope": 9}})
         self.assertEqual(tuple(more[4:13]), (255, 128, 0, 77, 0, 200, 0, 128, 0))
         self.assertEqual(more[13:], plain[13:])
+
+
+class Lpc018Tests(unittest.TestCase):
+    """A Betopper LPC018 in its 7-channel mode: dimmer first, then red, green, blue, strobe, its programs ("Macro") and
+    their speed."""
+
+    def test_inputs_and_the_console_reach_its_channels(self) -> None:
+        engine = FakeEngine(set_profile(show(), A, "lpc018"))
+        engine.submit(SendToBase("worship-blue", cut=True))
+        engine.settle(0.1)
+        sent = chans(engine)
+        self.assertEqual(len(sent), 7)
+        self.assertEqual(sent[0], 255)  # (its dimmer full: the colour is in red, green and blue)
+        self.assertGreater(sent[3], 0)
+        self.assertEqual(sent[4:], (0, 0, 0))  # (no strobe: 1-9 there would turn its LEDs off; no programs)
+        engine.submit(ConsoleSet({A: {**RED, "dimmer": 100, "program": 120, "program_speed": 200, "amber": 90}}))
+        self.assertEqual(chans(engine), (100, 255, 0, 0, 0, 120, 200))  # (amber: it has none)
+        self.assertEqual(chans(engine, B)[7], 255)  # (the SlimPAR next to it as before)
+        engine.submit(ConsoleRelease(lights=(A,), fade=0.0))
+        engine.settle(0.1)
+        self.assertEqual(chans(engine), sent)
 
 
 class GrowthTests(unittest.TestCase):

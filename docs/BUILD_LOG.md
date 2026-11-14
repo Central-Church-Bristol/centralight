@@ -130,6 +130,19 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
 
+## The Betopper LPC018 (14 Nov)
+
+- **What for:** about six Betopper LPC018s (54×1W RGB pars) going on the rig, chained on after the SlimPARs.
+- **Now:** the Layout tab's Type list has **Betopper LPC018 (7 channels)**, its 7-channel mode from its manual: dimmer,
+  red, green, blue, strobe, macro, macro speed. Inputs set the colour with its dimmer at full, as on a SlimPAR; strobe
+  and macro stay at 0 (on its strobe channel, 1–9 turns the LEDs off).
+- **The Console's Advanced faders** show the chosen lights' own channels: an LPC018 has no amber, and its Macro (colour
+  jump, fade, pulse, sound) is **Program**, with **Program speed** under it. With none chosen: every channel the show's
+  lights have.
+- **Add a light** still adds a SlimPAR: change its Type, then its name. Six added one after another go on 77, 84, 91,
+  98, 105 and 112.
+- Not tried on the lights yet.
+
 ## CentraLight.exe runs Python inside itself (8 Nov, night)
 
 - **What you saw:** with CentraLight pinned to the taskbar, opening it gave a second button; the tray's "still running"

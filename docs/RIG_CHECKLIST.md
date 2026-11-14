@@ -625,6 +625,16 @@ four times:
 - [ ] Close the window: the "still running" message says CentraLight. Task Manager lists it as CentraLight.
 - [ ] Its tray icon may now be among the hidden icons (^): drag it back beside the clock if you want it there.
 
+## 20o. The Betopper LPC018s (14 Nov)
+
+- [ ] On each LPC018's menu: `7CH`, and its start channel: `A077`, `A084`, `A091`, `A098`, `A105`, `A112`.
+- [ ] Layout → **Add a light**, then **Type** → **Betopper LPC018 (7 channels)**; its Address should match the light.
+      Rename it, give it a group, drag its dot to where it is. Once per light.
+- [ ] Click each new dot: that light flashes white three times.
+- [ ] Follow screen on Base: the new lights follow the picture under their dots, like the SlimPARs.
+- [ ] Console → Advanced, with an LPC018 chosen: no Amber; **Program** above 50 runs its own colour jump / fade /
+      pulse / sound, and **Program speed** changes how fast. Release: it's back to the input's colour.
+
 ## 21. Afterwards: updating the main folder
 
 Everything is committed on the branch `claude/centralight-gui` (nothing on `main`, nothing pushed). The work was

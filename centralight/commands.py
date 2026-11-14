@@ -309,7 +309,7 @@ class QuietAutomations:
 @dataclass(frozen=True)
 class ConsoleSet:
     """The Console (M15): hold these values, light id -> attribute -> 0-255 (red, green, blue, dimmer, amber, macro,
-    strobe, program, dimmer_speed), fading in over `fade` seconds. They win over the inputs, per light and attribute,
+    strobe, program, dimmer_speed, program_speed: those its type has), fading in over `fade` seconds. They win over the inputs, per light and attribute,
     until released; between Live changes and a chase, the later one wins."""
 
     values: Mapping[str, Mapping[str, float]]
