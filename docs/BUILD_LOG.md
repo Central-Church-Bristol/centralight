@@ -130,6 +130,16 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
 
+## Master back to 100 % at a PC start and a show load (15 Nov)
+
+- **What you saw:** after the PC started, the automation loaded Evening correctly, but Master was at 0 %, left there
+  the day before. CentraLight kept Master through everything, a PC restart included.
+- **Now:** Master goes back to 100 % when the PC starts and whenever a show loads, by a person or an automation. On a
+  show load the look the lights hold is dimmed by what Master was, so nothing jumps brighter. A show's own "When this
+  show loads" automations come after the reset, so one can still set Master.
+- **Kept as before:** CentraLight reopening after a quit or a crash carries on with Master as it was, and loading the
+  show that's already loaded changes nothing.
+
 ## The Betopper LPC018 (14 Nov)
 
 - **What for:** about six Betopper LPC018s (54×1W RGB pars) going on the rig, chained on after the SlimPARs.

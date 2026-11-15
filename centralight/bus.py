@@ -246,6 +246,19 @@ def frozen_mix(layers: dict, contexts, name: str = "") -> Frozen:
     return Frozen(layers, name=name, ids=ids)
 
 
+def dimmed(frozen: Frozen, level: float) -> Frozen:
+    """The same still look at `level` of its brightness, as Master would show it (15 Nov: a show loading takes Master
+    back to 100 %, and the look it froze is dimmed instead, so the lights don't jump)."""
+    if level >= 1.0:
+        return frozen
+    layers = {}
+    for kind, layer in frozen.canvases.items():
+        layer = np.array(layer, dtype=np.float32)  # (a copy; colour first: the lights' (4, n), a picture's (4, h, w))
+        layer[:3] *= max(0.0, level)
+        layers[kind] = layer
+    return Frozen(layers, name=frozen.name, ids=frozen.ids)
+
+
 class Bus:
     def __init__(self, name: str) -> None:
         self.name = name

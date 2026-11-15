@@ -54,6 +54,7 @@ from .bus import (
     Instance,
     OverlayLayer,
     composite,
+    dimmed,
     frozen_for_lights,
     frozen_mix,
     layer_kind,
@@ -400,7 +401,6 @@ class Engine:
         self._commands: queue.SimpleQueue[Command] = queue.SimpleQueue()
         now = clock()
         live = live or LiveState()
-        self._master = Ramp(clamp01(live.master))
         # After a "Turn lights off" quit the lights start black and stay so against automations until a time range
         # begins after the quit (e.g. Sunday 09:00), so a feed coming back at 03:00 doesn't light the church. A
         # person sending anything takes charge at once. quit_at: when that quit was (an older live.json only says
@@ -413,6 +413,9 @@ class Engine:
         booted_at = wall() - uptime()
         self._pc_start = (bool(started_by_windows) or (uptime() < STARTUP_WINDOW and not live.saved_at > booted_at)
                           if pc_start is None else bool(pc_start))
+        # Master: back to 100 % when the PC has just started (15 Nov: yesterday's 0 % mustn't carry over to the next
+        # service); reopening after a quit or a crash carries on with it
+        self._master = Ramp(1.0 if self._pc_start else clamp01(live.master))
         self._house: dict[str, _House] = {}
         self._house_driven: dict[str, str] = {}  # house light id -> the input that set it
         house = live.house
@@ -1535,8 +1538,9 @@ class Engine:
     def _load_show(self, show: Show, now: float) -> None:
         """Another show: the lights freeze on what they show (Base and the Overlay become one still look on Base,
         held until one of the new show's inputs is sent, which transitions from it). Nothing of the old show plays
-        on (its videos and feeds are let go; a feed the new show uses too stays connected). The house lights and
-        Master keep their levels. The new show's variables come back as they were when it was last loaded, and its
+        on (its videos and feeds are let go; a feed the new show uses too stays connected). The house lights keep
+        their levels. Master goes back to 100 % (15 Nov), the still look dimmed to match, so nothing jumps; the show's
+        own automations can still set it as it loads. The new show's variables come back as they were when it was last loaded, and its
         automations are checked straight away, "When this show loads" with them. A fade to black that's under way
         carries on to black."""
         old = self.show
@@ -1571,6 +1575,13 @@ class Engine:
             base.current = None
             base.outgoing = None
             base.transition = Transition("cut", 0.0)
+        master = self._master.value(now)
+        if master < 1.0:  # Master back to 100 %: what's held or fading out is dimmed by what Master was, so it looks the same
+            held = dimmed(held, master) if held is not None else None
+            if isinstance(base.outgoing, Frozen):
+                base.outgoing = dimmed(base.outgoing, master)
+            log_info(f"Master back to 100 % (it was {round(master * 100)} %) for the show loading")
+        self._master.set(1.0, 0.0, now)
         base.held = held
         self._overlay.clear_now()
         self._house_driven.clear()

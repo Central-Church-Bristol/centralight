@@ -2,10 +2,10 @@
 
 - Shows are folders: listing, finding, New, Duplicate, Rename and Delete (to the Recycle Bin, never the loaded show).
 - Loading a show never triggers an input: the lights freeze on what they show (Base and the overlays as one still look
-  on Base) until one of the new show's inputs is sent, which transitions from it. House lights and Master keep their
-  levels; the new show's variables come back as they were; its automations are checked straight away ("When this
-  show loads").
-- Start-up: the PC starting gives black with nothing playing; reopening resumes, a held look included.
+  on Base) until one of the new show's inputs is sent, which transitions from it. House lights keep their levels;
+  Master goes back to 100 % (15 Nov) with the still look dimmed to match; the new show's variables come back as they
+  were; its automations are checked straight away ("When this show loads").
+- Start-up: the PC starting gives black with nothing playing, Master at 100 %; reopening resumes, a held look included.
 - Global automations: app-wide, checked before the show's; Load a show (the show's automations wait for it), house
   lights by name, "This show is loaded"; they can't touch a show's inputs.
 - The window: the show picker, a history per show, a change meant for another show refused, the two automation lists,
@@ -140,9 +140,9 @@ class LoadingAShowTests(EngineCase):
         self.assertEqual(frame.frozen_from, "Morning")
         self.assertEqual(frame.overlay.copies, ())  # the Overlay was folded into the still look
         self.assertFalse(frame.colour_black)
-        self.assertTrue(frame.house["dimmer-4"].on)  # the house lights and Master keep their levels
+        self.assertTrue(frame.house["dimmer-4"].on)  # the house lights keep their levels
         self.assertAlmostEqual(frame.house["dimmer-4"].level, 0.6, places=3)
-        self.assertAlmostEqual(frame.master, 0.8, places=3)
+        self.assertAlmostEqual(frame.master, 1.0, places=3)  # Master back to 100 % (15 Nov), the still look as it was
         self.send(SendToBase("green"))  # its own transition (a 1 s fade) from the frozen colours
         self.run_for(0.5)
         middle = self.colours()[light]
@@ -150,8 +150,39 @@ class LoadingAShowTests(EngineCase):
         self.run_for(1.0)
         self.assertEqual(self.engine.frames.get().base, "Green")
         r, g, b = self.colours()[light]
-        self.assertAlmostEqual(g, 0.8, places=3)  # (Master 80 %)
+        self.assertAlmostEqual(g, 1.0, places=3)  # (Master 100 %)
         self.assertAlmostEqual(r + b, 0.0, places=3)
+
+    def test_master_goes_back_to_100_when_a_show_loads(self) -> None:
+        # (15 Nov: Master was left at 0 % the day before, and the evening show came up dark)
+        morning, evening = self.morning_and_evening()
+        for automatic in (False, True):
+            with self.subTest(automation=automatic):
+                self.make(morning)
+                self.send(SendToBase("red", cut=True))
+                self.send(SetMaster(0.0, 0.0))
+                self.run_for(0.1)
+                self.assertEqual(self.colours()["slimpar-101"], (0.0, 0.0, 0.0))
+                self.send(LoadShow(evening, automation=automatic))
+                self.run_for(0.1)
+                frame = self.engine.frames.get()
+                self.assertAlmostEqual(frame.master, 1.0, places=3)
+                self.assertEqual(frame.colours["slimpar-101"], (0.0, 0.0, 0.0))  # still dark: nothing jumped
+                self.send(SendToBase("green", cut=True))
+                self.run_for(0.1)
+                self.assertAlmostEqual(self.colours()["slimpar-101"][1], 1.0, places=3)  # its inputs at full
+                live = LiveState.from_dict(json.loads(json.dumps(self.engine.live_state().to_dict())))
+                self.assertAlmostEqual(live.master, 1.0)
+
+    def test_a_show_loading_can_still_set_master_itself(self) -> None:
+        dim = automation("dim", [{"type": "show_loads"}], [{"do": "master", "level": 0.4}])
+        morning = a_show("Morning", MORNING, [solid("red", RED)])
+        evening = a_show("Evening", EVENING, [solid("green", GREEN)], [dim])
+        self.make(morning)
+        self.send(SetMaster(0.7, 0.0))
+        self.send(LoadShow(evening))
+        self.run_for(1.5)
+        self.assertAlmostEqual(self.engine._master.target, 0.4)  # its "When this show loads" comes after the reset
 
     def test_a_light_in_both_shows_keeps_its_colour_and_a_new_one_is_unlit(self) -> None:
         morning, evening = self.morning_and_evening()
@@ -228,7 +259,7 @@ class StartingTests(EngineCase):
         self.assertEqual(frame.base, "Black")  # nothing playing
         self.assertFalse(frame.house["dimmer-4"].on)  # every light black: the house lights' switches off...
         self.assertAlmostEqual(frame.house["dimmer-4"].level, 0.6, places=3)  # ...their levels kept
-        self.assertAlmostEqual(frame.master, 0.9, places=3)
+        self.assertAlmostEqual(frame.master, 1.0, places=3)  # Master back to 100 % (15 Nov), not yesterday's 90 %
         self.assertEqual([h.automation for h in self.engine._runner.history], ["loads"])
 
     def test_reopening_resumes_and_doesnt_run_when_this_show_loads(self) -> None:
@@ -238,6 +269,7 @@ class StartingTests(EngineCase):
         frame = self.engine.frames.get()
         self.assertEqual(frame.base, "Red")
         self.assertTrue(frame.house["dimmer-4"].on)
+        self.assertAlmostEqual(frame.master, 0.9, places=3)  # (Master too: only a PC start or a show load resets it)
         self.assertEqual(list(self.engine._runner.history), [])  # a crash restart doesn't change the lights
 
     def test_a_held_look_comes_back_when_it_reopens(self) -> None:
