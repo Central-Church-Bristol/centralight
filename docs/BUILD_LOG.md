@@ -81,6 +81,7 @@ never been opened by this work. The rig checklist is in `docs/RIG_CHECKLIST.md`.
 | Your report of 8 Nov (evening): the festoons flickered with the NDI input. To try on the rig: 30 packets a second to the Eurolite, and all 512 channels | **done**: steady on the rig (8 Nov, about 21:25; installed) |
 | Your report of 8 Nov (night): two taskbar buttons with the pin, and "Python" on the notification and in Task Manager. CentraLight.exe now runs Python inside itself | **done** (8 Nov, 21:58; all 1196 tests pass) |
 | — batch 4: the PC shutting down or going to sleep: two global automation conditions, so the lights can fade first; never held dark after | **done** (6 Nov, 22:10; 1158 tests pass) |
+| **M19: light types** (your request of 15 Nov): each channel's job and its Normally; the Open Fixture Library's 565 lights built in; your own types; the Light type and New light type windows | **done** (18 Nov; all 1240 tests pass, on `claude/light-types`) |
 
 Run all the tests (about five minutes, including the layout check at every scaling) from the CentraLight folder:
 
@@ -129,6 +130,35 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - **A dimmer patched as a colour light** works as one: its brightness follows Master and fades properly.
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
+
+## M19: light types, the library and your own (18 Nov)
+
+- **What for:** you asked for well-known lights built in, and a way to add your own in the app. Built as planned (the
+  plan and mock-ups of 15 Nov), in its own worktree on `claude/light-types`.
+- **A light type** is now a list of channels, each with a job (Dimmer, Red, Green, Blue, White, Amber, UV, Lime,
+  Strobe, Colour macro, Program, Program speed, Dimmer speed, Other), a name, and a **Normally** (what it's sent when
+  nothing sets it: a strobe channel some lights need at 255 to shine). `light_types.py`.
+  - The built-in SlimPAR, LPC018 and Dimmer are written that way and send exactly the bytes they did (a test compares
+    the new output with the old code's over 300 random looks and Console values on 16 lights).
+  - Any other type's id is made from what it is, so one id means the same channels in every show. A show carries the
+    types its lights use (`light_types` in show.json); a show with only built-in types is written as before.
+  - **White** LEDs take the white in the colour (the smallest of red, green and blue, taken out of them). **No Dimmer
+    channel:** brightness, fades and Master scale the colour. **No colour** (a white par, a UV bar): a level.
+- **The library:** the Open Fixture Library's download (`ofl_export_ofl.zip`, 18 Nov, 3.2 MB, MIT licence) made into
+  `centralight/data/light_library.json.gz` (93 KB) by `tools/build_light_library.py`: 565 lights from 121 makers, 2,679
+  modes. Left out: 48 smoke machines, hazers, fans and stands, and 140 modes with nothing that gives light (most are
+  1-channel "program only" modes). Each channel's job comes from what its values do (`ofl.py`); its Normally is the
+  file's own default, else where a strobe channel's shutter is open, else 0. CentraLight never goes online for it.
+- **Layout tab:** double-click a light's **Type**, or **Light type…**, for the Light type window (In this show, Yours,
+  Built in, Library, with a search). **New…** / **Edit a copy…** / **Edit…** open the New light type window: while it's
+  open the lights use what's typed, with **Red / Green / Blue / White / Off** to try it, no undo step until **Save**
+  (Cancel puts them back). Saved types go in `Documents\CentraLight Shows\_Light types`. **Add a light** adds another
+  of the chosen light's type, named after it ("LPC018 3"); with none chosen it asks which type.
+- **Console → Advanced** lists each channel the show's types have (Other channels under their own names); a strobe or
+  other channel goes back to its Normally on Release.
+- **Not included:** aiming moving heads (their pan and tilt are Console faders, at the library's default), and each
+  part of a pixel bar on its own (they all show the light's colour).
+- Not tried on the lights yet: rig checklist 20p.
 
 ## Master back to 100 % at a PC start and a show load (15 Nov)
 

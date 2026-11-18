@@ -6,6 +6,10 @@ room on 2 Nov 2026: every SlimPAR and the festoon answer as labelled, both key l
 are on channel 4, and nothing answers on channels 2 or 3 (MagicQ patches dimmers
 there), so those two are left out. A new show starts from this patch (new_show.py);
 a show's own lights are in its show.json (the Layout tab), so this is only the start.
+
+PROFILES is how the first scripts mapped these lights' channels. The app itself uses light
+types (light_types.py, 18 Nov); PROFILES and set_fixture stay as the yardstick its DMX
+output is tested against.
 """
 
 from __future__ import annotations

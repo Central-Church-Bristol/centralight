@@ -203,6 +203,7 @@ class LayoutPageTests(M1WindowTestCase):
 
     def test_add_and_remove_lights(self) -> None:
         window, _engine, page = self.open_layout()
+        page._items["slimpar-108"].setSelected(True)  # (Add a light: another like the chosen one)
         QTest.mouseClick(page.add_button, Qt.MouseButton.LeftButton)
         added = [fx for fx in window.document.show.colour_fixtures() if fx.name == "SlimPAR 109"]
         self.assertEqual(len(added), 1)

@@ -55,7 +55,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..fixtures import PROFILES
+from .. import light_types
+from ..light_types import LightType
+from ..own_types import save_own
 
 from ..commands import FlashLights, SetIdentify, SetTestColour
 from ..elements import media_path
@@ -87,14 +89,17 @@ from ..show_edit import (
     profile_label,
     remove_lights,
     rename_light,
+    replace_light_type,
     set_address,
     set_group,
     set_identify_seed,
+    set_light_type,
     set_profile,
 )
 from . import icons, theme
 from .dashboard import Swatch
 from .document import ShowDocument, folder_key
+from .light_type_dialog import LightTypeDialog, LightTypeEditor
 from .light_view import rgb_colour
 from .undo_bar import UndoBar
 from .widgets import ElidedLabel, Panel, ResettableSplitter, ToggleSwitch, fader_row, discard
@@ -287,21 +292,6 @@ class MapView(QGraphicsView):
 # ---------------------------------------------------------------- the lights table
 
 
-class ProfileDelegate(QStyledItemDelegate):
-    def createEditor(self, parent, _option, _index):  # noqa: N802
-        combo = QComboBox(parent)
-        for profile in PROFILES:
-            combo.addItem(profile_label(profile), profile)
-        return combo
-
-    def setEditorData(self, editor, index) -> None:  # noqa: N802
-        editor.setCurrentIndex(max(0, editor.findData(index.data(Qt.ItemDataRole.UserRole))))
-
-    def setModelData(self, editor, model, index) -> None:  # noqa: N802
-        model.setData(index, editor.currentData(), Qt.ItemDataRole.UserRole)
-        model.setData(index, editor.currentText(), Qt.ItemDataRole.DisplayRole)
-
-
 class AddressDelegate(QStyledItemDelegate):
     def createEditor(self, parent, _option, _index):  # noqa: N802
         spin = QSpinBox(parent)
@@ -316,9 +306,11 @@ class AddressDelegate(QStyledItemDelegate):
 
 
 class LightsTable(QTableWidget):
-    """A table of lights. edited(fixture id, column key, value) fires when a cell changes."""
+    """A table of lights. edited(fixture id, column key, value) fires when a cell changes; type_requested(fixture id)
+    when a light's Type is double-clicked (the Light type window changes it, 18 Nov)."""
 
     edited = Signal(str, str, object)
+    type_requested = Signal(str)
 
     def __init__(self, columns: list[tuple[str, str]], parent: QWidget | None = None) -> None:
         super().__init__(0, len(columns), parent)
@@ -343,16 +335,21 @@ class LightsTable(QTableWidget):
         self._building = False
         self.itemChanged.connect(self._changed)
         keys = [key for key, _label in columns]
-        if "profile" in keys:
-            self.setItemDelegateForColumn(keys.index("profile"), ProfileDelegate(self))
         if "address" in keys:
             self.setItemDelegateForColumn(keys.index("address"), AddressDelegate(self))
+        self._read_only = False
+        self.cellDoubleClicked.connect(self._double_clicked)
+
+    def _double_clicked(self, row: int, column: int) -> None:
+        if self.columns[column][0] == "profile" and not self._read_only:
+            self.type_requested.emit(self.row_id(row))
 
     def column(self, key: str) -> int:
         return [k for k, _label in self.columns].index(key)
 
     def fill(self, rows: list[dict], read_only: bool) -> None:
         self._building = True
+        self._read_only = read_only
         try:
             selected = self.selected_ids()
             self.setRowCount(len(rows))
@@ -377,7 +374,7 @@ class LightsTable(QTableWidget):
                     if tip:
                         item.setToolTip(tip)
                     elif key == "profile":
-                        item.setToolTip(profile_label(value))
+                        item.setToolTip(f"{profile_label(value)}\nDouble-click to change it")
                     elif isinstance(value, str) and value:
                         item.setToolTip(value)
                     if key in row.get("bad", ()):
@@ -428,13 +425,15 @@ class LightsTable(QTableWidget):
 
 class LayoutPage(QWidget):
     def __init__(self, document: ShowDocument, engine, parent: QWidget | None = None, notes_path: Path | None = None,
-                 shows_provider=None) -> None:
-        """shows_provider: the shows there are ([ShowInfo]), for "Import from another show…"."""
+                 shows_provider=None, light_types_dir=None) -> None:
+        """shows_provider: the shows there are ([ShowInfo]), for "Import from another show…". light_types_dir: where
+        your own light types are kept (a function giving the folder; none: the Light type window has no "Yours")."""
         super().__init__(parent)
         self.setObjectName("LayoutPage")
         self.document = document
         self.engine = engine
         self._shows = shows_provider or (lambda: [])
+        self._light_types_dir = light_types_dir or (lambda: None)
         self.snap = False
         self._notes_path = notes_path
         # by light id in memory, so a note follows its light through renames, undo and redo
@@ -483,17 +482,26 @@ class LayoutPage(QWidget):
         self.table = LightsTable([("name", "Light"), ("group", "Group"), ("profile", "Type"), ("address", "Address"), ("channels", "Channels"), ("where", "Where")])
         self.table.edited.connect(self._table_edited)
         self.table.itemSelectionChanged.connect(self._table_selection_changed)
+        self.table.type_requested.connect(lambda light: self._type_cell(self.table, light))
         self.house_table = LightsTable([("name", "House light"), ("profile", "Type"), ("address", "Address"), ("channels", "Channels")])
         self.house_table.edited.connect(self._table_edited)
+        self.house_table.type_requested.connect(lambda light: self._type_cell(self.house_table, light))
         buttons = QHBoxLayout()
         self.add_button = QPushButton("Add a light")
+        self.add_button.setToolTip("Another light like the chosen one, on the next free channels (none chosen: pick "
+                                   "its type first)")
         self.add_button.clicked.connect(self._add_light)
         self.remove_button = QPushButton("Remove")
         self.remove_button.clicked.connect(self._remove_lights)
+        self.type_button = QPushButton("Light type…")
+        self.type_button.setToolTip("What each of the chosen lights' channels does: pick a type from the list, or "
+                                    "make one from the light's manual")
+        self.type_button.clicked.connect(lambda: self.choose_light_type())
         self.notes_status = ElidedLabel("")
         self.notes_status.setObjectName("Hint")
         buttons.addWidget(self.add_button)
         buttons.addWidget(self.remove_button)
+        buttons.addWidget(self.type_button)
         buttons.addWidget(self.notes_status, 1)
         tables_panel.body.addWidget(self.table, 3)
         tables_panel.body.addLayout(buttons)
@@ -712,7 +720,7 @@ class LayoutPage(QWidget):
                 self._noted_names.setdefault(fx.id, fx.name)
         read_only = show.read_only
         self.read_only_hint.setVisible(read_only)
-        for widget in (self.add_button, self.remove_button, self.shuffle_button, self.align_button, self.photo_button, self.clear_photo_button):
+        for widget in (self.add_button, self.remove_button, self.type_button, self.shuffle_button, self.align_button, self.photo_button, self.clear_photo_button):
             widget.setEnabled(not read_only)
         self._sync_layout_button(show)
         lights = [fx for fx in show.colour_fixtures() if fx.map is not None]
@@ -753,7 +761,7 @@ class LayoutPage(QWidget):
             rows.append({
                 "id": fx.id, "name": fx.name, "group": fx.group, "profile": fx.profile, "address": fx.address,
                 "channels": fx.channel_range(), "where": self.notes.get(fx.id, ""), "bad": bad, "tips": tips,
-                "editable": ("name", "group", "profile", "address", "where"),
+                "editable": ("name", "group", "address", "where"),  # (the Type: double-click, the Light type window)
             })
         self.table.fill(rows, show.read_only)
         house_rows = []
@@ -762,7 +770,7 @@ class LayoutPage(QWidget):
             tips = {"address": "Overlaps " + ", ".join(conflicts[fx.id])} if fx.id in conflicts else {}
             house_rows.append({
                 "id": fx.id, "name": show.house_label(fx.id), "profile": fx.profile, "address": fx.address,
-                "channels": fx.channel_range(), "bad": bad, "tips": tips, "editable": ("name", "profile", "address"),
+                "channels": fx.channel_range(), "bad": bad, "tips": tips, "editable": ("name", "address"),
             })
         self.house_table.fill(house_rows, show.read_only)
 
@@ -1158,7 +1166,8 @@ class LayoutPage(QWidget):
             text = f"{fx.name}: address {fx.address} → {changed.address if changed else value}"
         elif key == "profile":
             new = set_profile(show, fixture_id, str(value))
-            text = f"{fx.name}: type {profile_label(fx.profile)} → {profile_label(str(value))}" if str(value) in PROFILES else ""
+            known = light_types.get(str(value)) is not None
+            text = f"{fx.name}: type {profile_label(fx.profile)} → {profile_label(str(value))}" if known else ""
         else:
             return
         if not self.document.apply(new, text):
@@ -1200,10 +1209,98 @@ class LayoutPage(QWidget):
             self.notes_status.setText("Couldn't save fixture_map.csv. Is it open in Excel?")
 
     def _add_light(self) -> None:
-        show, new_id = add_colour_light(self.show_data)
+        """Another light like the chosen one; with none chosen, the Light type window asks which type first."""
+        chosen = [fx for fx in (self.show_data.fixture(i) for i in (self.selected_ids() or self.table.selected_ids()))
+                  if fx is not None]
+        kind = light_types.get(chosen[0].profile) if chosen else None
+        if kind is None:
+            lights = self.show_data.colour_fixtures()
+            dialog = self._type_dialog([], current=lights[-1].profile if lights else "", adding=True)
+            if dialog.exec() != QDialog.DialogCode.Accepted or dialog.chosen is None:
+                return
+            kind = dialog.chosen
+        show, new_id = add_colour_light(self.show_data, kind=kind)
         if self.document.apply(show, f"Add {show.fixture(new_id).name}"):
             for fixture_id, item in self._items.items():
                 item.setSelected(fixture_id == new_id)
+
+    # ------------------------------------------------------------ light types (M19, 18 Nov)
+
+    def _type_dialog(self, ids: list[str], current: str = "", adding: bool = False) -> LightTypeDialog:
+        return LightTypeDialog(self, self.show_data, ids, own_dir=self._light_types_dir(), current=current,
+                               adding=adding, edit=lambda base, how: self._edit_light_type(base, how, ids))
+
+    def _type_cell(self, table: LightsTable, light: str) -> None:
+        """A Type double-clicked: the Light type window for that light (with the others chosen, if it's one of them)."""
+        chosen = table.selected_ids()
+        self.choose_light_type(chosen if light in chosen else [light])
+
+    def choose_light_type(self, ids: list[str] | None = None) -> None:
+        """The Light type window for these lights (the chosen ones if none are given; with none, it's for looking and
+        making types)."""
+        if ids is None:
+            ids = self.selected_ids() or self.table.selected_ids() or self.house_table.selected_ids()
+        ids = [i for i in ids if self.show_data.fixture(i) is not None]
+        current = self.show_data.fixture(ids[0]).profile if ids else ""
+        dialog = self._type_dialog(ids, current=current)
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.chosen is None or dialog.applied or not ids:
+            return
+        self.document.apply(set_light_type(self.show_data, ids, dialog.chosen),
+                            f"Light type: {self.lights_label(ids)} → {dialog.chosen.name}")
+
+    def _edit_light_type(self, base: LightType | None, how: str, ids: list[str]) -> tuple[LightType | None, bool]:
+        """The New light type window: "new" or "copy" (for the chosen lights), or "edit" in place (every light of that
+        type in this show follows it). While it's open, those lights use what's typed (no undo step until Save). The
+        type saved goes in your light types. Returns (the type saved or None, whether those lights now have it)."""
+        document = self.document
+        if how == "edit" and base is not None:
+            targets = [fx.id for fx in self.show_data.fixtures if fx.profile == base.id]
+            heading = "Edit light type"
+
+            def change(show: Show, kind: LightType) -> Show:
+                return replace_light_type(show, base.id, kind)
+        else:
+            targets = list(ids)
+            heading = "New light type" if how == "new" else "New light type from a copy"
+
+            def change(show: Show, kind: LightType) -> Show:
+                return set_light_type(show, targets, kind)
+        live = bool(targets) and not document.read_only
+        # (test colours light colour lights: a house light uses what's typed too, but can't be tried here)
+        tryable = [i for i in targets if (fx := self.show_data.fixture(i)) is not None and fx.role == ROLE_COLOUR]
+        if live:
+            document.begin_pick()
+
+        def preview(kind: LightType) -> None:
+            with document.pick_change():
+                document.apply(change(document.show, kind), "Light type")
+
+        def try_colour(colour) -> None:
+            self.engine.submit(SetTestColour(colour, tuple(tryable)))
+
+        editor = LightTypeEditor(self, base=base, heading=heading, lights=tryable if live else [],
+                                 preview=preview if live else None,
+                                 try_colour=try_colour if live and tryable else None)
+        try:
+            accepted = editor.exec() == QDialog.DialogCode.Accepted
+        finally:
+            if live:
+                self.engine.submit(SetTestColour(None))
+                document.end_pick()
+        kind = editor.result_type if accepted else None
+        if kind is None:
+            return None, False
+        own = self._light_types_dir()
+        if own is not None:
+            try:
+                save_own(own, kind, replaces=base.id if how == "edit" and base is not None else "")
+            except OSError as exc:
+                log_exception("saving a light type", exc)
+                self.notes_status.setText("Couldn't save it to your light types (the session log says why)")
+        if targets and not document.read_only:
+            document.apply(change(self.show_data, kind), f"Light type: {self.lights_label(targets)} → {kind.name}")
+            return kind, True
+        return kind, False
 
     def _remove_lights(self) -> None:
         ids = self.selected_ids() or self.table.selected_ids()

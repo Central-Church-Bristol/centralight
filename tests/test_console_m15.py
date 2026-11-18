@@ -439,8 +439,10 @@ class GrowthTests(unittest.TestCase):
     def test_many_changes_leave_nothing_behind(self) -> None:
         import random
 
-        from centralight.console import CHANNELS, TAPS_KEPT
+        from centralight.console import TAPS_KEPT
+        from centralight.light_types import SLIMPAR9
 
+        attributes = [attr for attr, _name in SLIMPAR9.attributes]
         lights = [f"slimpar-{n}" for n in range(101, 107)] + ["dimmer-1"]
         state = ConsoleState()
         state.set_lights({light: "slimpar9" for light in lights[:-1]} | {"dimmer-1": "dimmer"})
@@ -451,7 +453,7 @@ class GrowthTests(unittest.TestCase):
             pick = chance.random()
             some = chance.sample(lights, chance.randint(1, len(lights)))
             if pick < 0.3:
-                values = {light: {attr: chance.uniform(-20, 300) for attr in chance.sample(CHANNELS["slimpar9"], 3)}
+                values = {light: {attr: chance.uniform(-20, 300) for attr in chance.sample(attributes, 3)}
                           for light in some}
                 state.set(values | {"nobody": {"red": 9}}, chance.choice((0.0, 0.5, 2.0)), now)
             elif pick < 0.45:

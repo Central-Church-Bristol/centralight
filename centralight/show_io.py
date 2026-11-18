@@ -23,7 +23,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
-from .fixtures import PROFILES
+from . import light_types
+from .light_types import LightTypeError, type_from_dict, type_to_dict
 
 from .files import forget_written, json_text, loads_json_bytes, read_json, write_atomic, write_json_atomic
 from .layouts import ensure_layouts
@@ -664,7 +665,20 @@ def show_to_dict(show: Show) -> dict[str, Any]:
         data["saved_colours"] = list(show.saved_colours)
     if show.automation_order or show.automations:
         data["automation_order"] = [a.id for a in show.ordered_automations()] if show.automations else list(show.automation_order)
+    kinds = show_light_types(show)
+    if kinds:  # (18 Nov: the types its lights use, besides CentraLight's own; left out when there are none)
+        data["light_types"] = [type_to_dict(kind) for kind in kinds]
     return data
+
+
+def show_light_types(show: Show) -> list[light_types.LightType]:
+    """The light types a show's lights use that aren't built in, in the order its lights first use them."""
+    found: dict[str, light_types.LightType] = {}
+    for fx in show.fixtures:
+        kind = light_types.get(fx.profile)
+        if kind is not None and not light_types.is_built_in(kind.id):
+            found.setdefault(kind.id, kind)
+    return list(found.values())
 
 
 def _global_to_dict(g: GlobalVar) -> dict[str, Any]:
@@ -687,6 +701,7 @@ def show_from_dict(data: Any) -> tuple[Show, list[str]]:
     if data.get("format", FORMAT_SHOW) != FORMAT_SHOW:
         raise ShowError(f'show.json "format" must be "{FORMAT_SHOW}"')
     warnings: list[str] = []
+    types, broken = _light_types_from(data.get("light_types"), warnings)
 
     fixtures: list[Fixture] = []
     seen: set[str] = set()
@@ -695,7 +710,7 @@ def show_from_dict(data: Any) -> tuple[Show, list[str]]:
         raise ShowError('show.json "fixtures" must be a list of lights')
     for index, item in enumerate(fixture_data, start=1):
         try:
-            fx = _fixture_from_dict(item)
+            fx = _fixture_from_dict(item, types, broken)
         except (ShowError, InputFileError) as exc:
             raise ShowError(f"light {index} in show.json: {exc}") from exc
         if fx.id in seen:
@@ -787,21 +802,53 @@ def _saved_colours_from(data: Any, warnings: list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(colours))[:SAVED_COLOURS_MAX]
 
 
-def _fixture_from_dict(item: Any) -> Fixture:
+def _light_types_from(data: Any, warnings: list[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """show.json's "light_types" (18 Nov): each one is registered. Returns (the id each light's "profile" may name ->
+    its type's id, worked out again from what it is; the ids of types that couldn't be read -> why)."""
+    types: dict[str, str] = {}
+    broken: dict[str, str] = {}
+    if data is None:
+        return types, broken
+    if not isinstance(data, list):
+        warnings.append('show.json "light_types" isn\'t a list, so its light types were left out')
+        return types, broken
+    for item in data:
+        named = item.get("id") if isinstance(item, dict) and isinstance(item.get("id"), str) else ""
+        try:
+            kind = light_types.register(type_from_dict(item))
+        except LightTypeError as exc:
+            warnings.append(f"light type {named or item!r} left out: {exc}")
+            if named:
+                broken[named] = str(exc)
+            continue
+        types[kind.id] = kind.id
+        if named and not light_types.is_built_in(named):
+            types[named] = kind.id  # (a file whose type was changed by hand: its lights follow it)
+    return types, broken
+
+
+def _fixture_from_dict(item: Any, types: Mapping[str, str] | None = None,
+                       broken: Mapping[str, str] | None = None) -> Fixture:
     if not isinstance(item, dict):
         raise ShowError("must be an object")
     fixture_id = item.get("id")
     if not isinstance(fixture_id, str) or not ID_PATTERN.match(fixture_id):
         raise ShowError(f"bad id {fixture_id!r}")
     profile = item.get("profile")
-    if not isinstance(profile, str) or profile not in PROFILES:
-        raise ShowError(f"unknown profile {profile!r} (known: {', '.join(PROFILES)})")
+    if isinstance(profile, str) and types and profile in types and not light_types.is_built_in(profile):
+        profile = types[profile]
+    kind = light_types.get(profile) if isinstance(profile, str) else None
+    if isinstance(profile, str) and broken and profile in broken:
+        raise ShowError(f"its light type {profile!r} can't be used: {broken[profile]}")
+    if kind is None or (not light_types.is_built_in(profile) and profile not in (types or {})):
+        raise ShowError(f"unknown profile {profile!r} (a light type in show.json's \"light_types\", or one of "
+                        f"CentraLight's own: {', '.join(light_types.BUILT_IN)})")
     address = item.get("address")
     if isinstance(address, bool) or not isinstance(address, int) or not 1 <= address <= 512:
         raise ShowError(f"address must be 1-512, not {address!r}")
-    if address + PROFILES[profile]["channels"] - 1 > 512:
+    if address + kind.channel_count - 1 > 512:
         raise ShowError(f"address {address} runs past channel 512")
-    role = item.get("role", ROLE_COLOUR if "red" in PROFILES[profile] else ROLE_HOUSE)
+    role = item.get("role", ROLE_COLOUR if kind.has_colour else ROLE_HOUSE)
     if not isinstance(role, str) or role not in ROLES:
         raise ShowError(f"role must be one of {', '.join(ROLES)}")
     spot = None

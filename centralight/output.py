@@ -1,7 +1,7 @@
 """DMX output: light colours -> DMX bytes, and the thread that sends them.
 
-encode_dmx() builds the 512-channel universe with fixtures.PROFILES, exactly like
-fixtures.set_fixture (RGB, with a SlimPAR's own dimmer channel at full).
+encode_dmx() builds the 512-channel universe from each light's type (light_types): for the
+built-in ones exactly like fixtures.set_fixture (RGB, with a SlimPAR's own dimmer channel at full).
 
 DmxOutputThread sends it on its own thread ("dmx-out"):
 - only when something changed, plus once a second as a keepalive
@@ -27,9 +27,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Protocol
 
-from .fixtures import PROFILES
-
-from .console import channels_of
+from . import light_types
+from .light_types import to_byte
 from .log import log_exception, log_info
 from .model import ROLE_COLOUR, Fixture
 from .settings import OUTPUT_ARTNET, OUTPUT_SIMULATED, OUTPUT_USB, Settings
@@ -51,21 +50,13 @@ ERROR = "error"
 CLOSED = "closed"
 
 RGB = tuple[float, float, float]
+BLACK: RGB = (0.0, 0.0, 0.0)
 
 
 class Device(Protocol):
     def send(self, dmx: bytes) -> None: ...
 
     def close(self, blackout: bool = True) -> None: ...
-
-
-def to_byte(value: float) -> int:
-    """0-1 -> 0-255, rounded (so a 0-255 value survives the round trip exactly). NaN -> 0."""
-    if value >= 1.0:
-        return 255
-    if not value > 0.0:
-        return 0
-    return int(value * 255.0 + 0.5)
 
 
 def universe_size(fixtures: Iterable[Fixture]) -> int:
@@ -92,38 +83,21 @@ def encode_dmx(
     colours: fixture id -> (r, g, b) from 0 to 1, for colour lights
     levels: fixture id -> 0 to 1, for house lights (dimmers)
     extras: fixture id -> attribute -> 0-255, for a colour light's other channels (the Console, M15: its dimmer,
-    amber, colour macro, strobe, program and dimmer speed; the dimmer is otherwise full and the rest 0)
-    Lights not mentioned are sent as 0 (black / off).
+    amber, colour macro, strobe, program and so on; the dimmer is otherwise full and the rest at their "normally")
+    Lights not mentioned are sent black (with their other channels at their "normally"). A channel at 0 that
+    CentraLight doesn't fill in itself isn't written, so lights patched over each other mix as they always have.
     """
     dmx = bytearray(size)
     for fx in fixtures:
-        prof = PROFILES[fx.profile]
+        kind = light_types.get(fx.profile)
         base = fx.address - 1
-        if base + prof["channels"] > size:
+        if kind is None or base + kind.channel_count > size:
             continue
         if fx.role == ROLE_COLOUR:
-            r, g, b = colours.get(fx.id, (0.0, 0.0, 0.0))
-            if "red" in prof:
-                dmx[base + prof["red"]] = to_byte(r)
-                dmx[base + prof["green"]] = to_byte(g)
-                dmx[base + prof["blue"]] = to_byte(b)
-                dmx[base + prof["dimmer"]] = 255
-            else:  # a plain dimmer used as a colour light: brightest of the three (like set_fixture)
-                dmx[base + prof["dimmer"]] = to_byte(max(r, g, b))
-            more = extras.get(fx.id) if extras else None
-            if more:
-                offsets = {attr: index for index, (attr, _name) in enumerate(channels_of(fx.profile))}
-                for attr, value in more.items():
-                    if attr in offsets:
-                        dmx[base + offsets[attr]] = max(0, min(255, int(value)))
-        else:
+            kind.write(dmx, base, colours.get(fx.id, BLACK), extras.get(fx.id) if extras else None)
+        else:  # (an RGB light used as a house light: white at that level)
             level = levels.get(fx.id, 0.0)
-            if "red" in prof:  # an RGB light used as a house light: white at that level
-                for part in ("red", "green", "blue"):
-                    dmx[base + prof[part]] = to_byte(level)
-                dmx[base + prof["dimmer"]] = 255
-            else:
-                dmx[base + prof["dimmer"]] = to_byte(level)
+            kind.write(dmx, base, (level, level, level))
     return bytes(dmx)
 
 

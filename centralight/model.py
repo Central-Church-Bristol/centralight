@@ -5,6 +5,7 @@ engine can keep using one snapshot while the screen builds the next one.
 
 Words used throughout CentraLight:
 - fixture: one DMX light (or dimmer) from the patch
+- light type ("profile" in the files): what each of a fixture's channels does (light_types.py)
 - colour light: an RGB fixture on the 16:9 map (the SlimPARs)
 - house light: a dimmer that isn't on the map (the festoon, the key lights)
 - input: a look or sequence, built from elements on up to 4 tracks
@@ -19,7 +20,8 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from .fixtures import PROFILES
+from . import light_types
+from .light_types import LightType
 
 ROLE_COLOUR = "colour"
 ROLE_HOUSE = "house"
@@ -159,15 +161,19 @@ class MapSpot:
 class Fixture:
     id: str
     name: str
-    profile: str
+    profile: str  # its light type's id (light_types)
     address: int  # DMX start channel, 1-512
     group: str = ""
     role: str = ROLE_COLOUR
     map: MapSpot | None = None
 
     @property
+    def kind(self) -> LightType:
+        return light_types.require(self.profile)
+
+    @property
     def channels(self) -> int:
-        return int(PROFILES[self.profile]["channels"])
+        return self.kind.channel_count
 
     @property
     def last_channel(self) -> int:

@@ -635,6 +635,18 @@ four times:
 - [ ] Console → Advanced, with an LPC018 chosen: no Amber; **Program** above 50 runs its own colour jump / fade /
       pulse / sound, and **Program speed** changes how fast. Release: it's back to the input's colour.
 
+## 20p. Light types (18 Nov)
+
+- [ ] Every light looks exactly as before the update (the SlimPARs, the LPC018s, the festoon and key lights).
+- [ ] Layout: double-click an LPC018's **Type**: the Light type window opens with **Betopper LPC018 (7 channels)**
+      picked. Type `slimpar` in the search: the library's Chauvet DJ SlimPARs show.
+- [ ] Choose one light, **Light type…** → **New…**: type its maker, model and mode, and its channels from its manual.
+      Press **Red**, **Green**, **Blue**, **White**, **Off**: the light shows each (if Red shows green, swap those
+      two jobs). **Cancel**: it's as it was. Do it again and **Save**: Ctrl+Z puts it back in one step.
+- [ ] The new type is under **Yours** in the Light type window, in another show too.
+- [ ] With no light chosen, **Add a light** asks which type; with one chosen, it adds another like it.
+- [ ] Console → Advanced with the new light chosen: its own channels; Release puts them back.
+
 ## 21. Afterwards: updating the main folder
 
 Everything is committed on the branch `claude/centralight-gui` (nothing on `main`, nothing pushed). The work was

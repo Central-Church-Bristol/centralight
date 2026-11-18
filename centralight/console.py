@@ -2,8 +2,9 @@
 
 Like a lighting desk's programmer: what someone sets on the Console wins, per light and per attribute, until it's
 released (with a fade). Untouched attributes keep following CentraLight's inputs. Brightness is the light's own Dimmer
-channel, colour its Red, Green and Blue, and the Advanced switch reaches the rest as raw values (Amber, the colour
-macro, Strobe, the light's own programs and their speed, Dimmer speed).
+channel (or its colour, scaled, on a light without one), colour its Red, Green and Blue, and the Advanced switch
+reaches the rest of its type's channels as raw values (Amber, the colour macro, Strobe, the light's own programs and
+their speed, Dimmer speed, Other channels).
 
 Qt-free: the engine keeps a ConsoleState and the window shows a ConsoleView.
 """
@@ -19,40 +20,18 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any
 
+from . import light_types
+
 EMPTY: Mapping[str, Any] = MappingProxyType({})
 
-# Each light profile's channels, in DMX order (the offset is the place in the tuple): (attribute, the name people see)
-CHANNELS: dict[str, tuple[tuple[str, str], ...]] = {
-    "slimpar9": (
-        ("red", "Red"),
-        ("green", "Green"),
-        ("blue", "Blue"),
-        ("amber", "Amber"),
-        ("macro", "Colour macro"),
-        ("strobe", "Strobe"),
-        ("program", "Program"),
-        ("dimmer", "Dimmer"),
-        ("dimmer_speed", "Dimmer speed"),
-    ),
-    # (its manual calls the light's own programs "Macro": colour jump, fade, pulse, sound)
-    "lpc018": (
-        ("dimmer", "Dimmer"),
-        ("red", "Red"),
-        ("green", "Green"),
-        ("blue", "Blue"),
-        ("strobe", "Strobe"),
-        ("program", "Program"),
-        ("program_speed", "Program speed"),
-    ),
-    "dimmer": (("dimmer", "Dimmer"),),
-}
+# A light's attributes come from its type (light_types: each channel's job), e.g. a SlimPAR's are red, green, blue,
+# amber, macro, strobe, program, dimmer and dimmer_speed. Colour and brightness fade; the rest (strobe, the colour
+# macro, programs, speeds, Other channels) are set and released at once. Everything but the colour is sent as it is
+# (Master scales the colour).
 COLOUR = ("red", "green", "blue")  # set together by the colour picker
 BRIGHTNESS = "dimmer"
-# set and released at once, never faded
-SNAP_BACK = frozenset({"macro", "strobe", "program", "dimmer_speed", "program_speed"})
-# sent as they are (Master scales the colour)
-RAW = ("dimmer", "amber", "macro", "strobe", "program", "dimmer_speed", "program_speed")
-DEFAULT_VALUES = {"dimmer": 255.0}  # what CentraLight sends on an attribute nobody holds (the rest: 0)
+FADED = frozenset({*COLOUR, "dimmer", "amber", "uv", "lime"})
+DEFAULT_VALUES = {"dimmer": 255.0}  # what CentraLight sends on an attribute nobody holds, for a light of no known type
 CHASED = ("red", "green", "blue", "dimmer")  # what a chase sets: colour and brightness
 RELEASE_FADE = 2.0  # seconds: Release and Release all hand lights back over this long (Settings changes it)
 STROBE_NOTE = ("Strobe flashes the lights quickly. Flashing light can trigger seizures in people with photosensitive "
@@ -69,7 +48,7 @@ TAP_BOUNCE = 0.06  # seconds: a tap this soon after the last is the same tap (a 
 BEAT_RISE = 0.6
 BEAT_JUMP = 0.2
 _SEQ = itertools.count(1)  # when each change was made: between a Live change and a chase, the later one wins
-TINTED = ("red", "green", "blue", "amber")  # what the light's dimmer scales on the light itself
+TINTED = ("red", "green", "blue", "amber", "uv", "lime")  # what the light's dimmer scales on the light itself
 _EPS = 1e-6  # a step's millionth: a position worked out as 2.9999999999 is step 3 (clocks are big numbers)
 
 
@@ -89,23 +68,35 @@ def whole_steps(position: float) -> int:
     return int(position + _EPS)
 
 
+def snaps_back(attr: str) -> bool:
+    """Set and released at once, never faded (strobe, the colour macro, programs, speeds, Other channels)."""
+    return attr not in FADED
+
+
 def channels_of(profile: str) -> tuple[tuple[str, str], ...]:
-    return CHANNELS.get(profile, ())
+    """What the Console can set on a light of this type: (attribute, the name people see), in DMX order."""
+    kind = light_types.get(profile)
+    return kind.attributes if kind is not None else ()
 
 
-def all_channels() -> tuple[tuple[str, str], ...]:
-    """Every attribute any light type has, once each: the SlimPAR's in its order, another type's after the one before
-    it there (Program speed after Program)."""
-    order: list[str] = []
-    names: dict[str, str] = {}
-    for channels in CHANNELS.values():
-        before = None
-        for attr, name in channels:
-            if attr not in names:
-                names[attr] = name
-                order.insert(order.index(before) + 1 if before in order else len(order), attr)
-            before = attr
-    return tuple((attr, names[attr]) for attr in order)
+def channel_rows(profiles: Iterable[str]) -> tuple[tuple[str, str], ...]:
+    """Every attribute these light types have, once each, for the Console's Advanced faders: the jobs in a fixed order
+    (a SlimPAR's: red, green, blue, amber, colour macro, strobe, program, dimmer, dimmer speed), then Other channels
+    in the order they come."""
+    found: dict[str, str] = {}
+    for profile in dict.fromkeys(profiles):
+        for attr, name in channels_of(profile):
+            found.setdefault(attr, name)
+    order = {role: index for index, role in enumerate(light_types.ROLES)}
+
+    def place(item: tuple[int, tuple[str, str]]) -> tuple[int, int, int]:
+        index, (attr, _name) = item
+        base, _sep, number = attr.rpartition("_") if attr[-1:].isdigit() else (attr, "", "1")
+        if base not in order:  # (an Other channel: where it comes)
+            return (len(order), 0, index)
+        return (order[base], int(number) if number.isdigit() else 1, index)
+
+    return tuple(pair for _index, pair in sorted(enumerate(found.items()), key=place))
 
 
 @dataclass(frozen=True)
@@ -401,7 +392,8 @@ class ConsoleState:
         self.held: dict[str, dict[str, _Held]] = {}
         self.releasing: dict[str, dict[str, _Releasing]] = {}
         self.chase: ChaseRun | None = None
-        self.profiles: dict[str, str] = {}  # light id -> its profile (which channels it has)
+        self.profiles: dict[str, str] = {}  # light id -> its type's id (which channels it has)
+        self._kinds: dict[str, light_types.LightType] = {}  # light id -> its type
         self._last: dict[str, dict[str, float]] = {}  # each light's channels as last worked out (before Master)
         self._taps: list[float] = []
         self._inputs: tuple[Any, Any] | None = None  # (light ids, their colours from the inputs this tick)
@@ -413,8 +405,10 @@ class ConsoleState:
         return bool(self.held or self.releasing or self.chase is not None)
 
     def set_lights(self, profiles: Mapping[str, str]) -> None:
-        """The show's colour lights (light id -> profile). Held lights that aren't there any more are let go."""
+        """The show's colour lights (light id -> its type's id). Held lights that aren't there any more are let go."""
         self.profiles = dict(profiles)
+        self._kinds = {light: kind for light, profile in self.profiles.items()
+                       if (kind := light_types.get(profile)) is not None}
         self._kept = None  # (the colour picker's Cancel: not into another show)
         for table in (self.held, self.releasing, self._last):
             for light in [light for light in table if light not in self.profiles]:
@@ -431,7 +425,13 @@ class ConsoleState:
                 self.chase = None
 
     def attributes(self, light: str) -> tuple[str, ...]:
-        return tuple(attr for attr, _name in channels_of(self.profiles.get(light, "")))
+        kind = self._kinds.get(light)
+        return tuple(attr for attr, _name in kind.attributes) if kind is not None else ()
+
+    def default(self, light: str, attr: str) -> float:
+        """What CentraLight sends on an attribute nobody holds: full brightness, else its channel's "normally"."""
+        kind = self._kinds.get(light)
+        return kind.default_of(attr) if kind is not None else DEFAULT_VALUES.get(attr, 0.0)
 
     def note_inputs(self, ids: Any, colours: Any) -> None:
         """The inputs' colours this tick (the engine's ids and its (n, 3) array, before Master): what a light nobody
@@ -450,7 +450,7 @@ class ConsoleState:
                 return colour[COLOUR.index(attr)] * 255.0
             if "red" not in self.attributes(light):  # (a dimmer used as a colour light: the brightest of its colour)
                 return max(colour) * 255.0
-        return DEFAULT_VALUES.get(attr, 0.0)
+        return self.default(light, attr)
 
     def _input_colour(self, light: str) -> tuple[float, float, float] | None:
         """The inputs' colour for the light this tick (0-1), if it's known."""
@@ -500,7 +500,7 @@ class ConsoleState:
                 if attr not in known:
                     continue
                 value = max(0.0, min(255.0, float(value)))
-                fade_in = 0.0 if attr in SNAP_BACK else max(0.0, float(fade))
+                fade_in = 0.0 if snaps_back(attr) else max(0.0, float(fade))
                 held[attr] = _Held(value, origins[attr], now, fade_in, seq)
                 self.releasing.get(light, {}).pop(attr, None)
             if not held:
@@ -535,7 +535,7 @@ class ConsoleState:
             done.append(light)
             fading = self.releasing.setdefault(light, {})
             for attr in attrs:
-                if attr in SNAP_BACK or fade <= 0.0:
+                if snaps_back(attr) or fade <= 0.0:
                     fading.pop(attr, None)
                 else:
                     fading[attr] = _Releasing(self.shown(light, attr), now, float(fade))
@@ -585,7 +585,7 @@ class ConsoleState:
         for attr, old in list((fading or {}).items()):
             if wanted is not None and attr not in wanted:
                 continue
-            if fade <= 0.0 or attr in SNAP_BACK:
+            if fade <= 0.0 or snaps_back(attr):
                 del fading[attr]
                 changed = True
             elif old.start + old.fade - now > fade:
@@ -693,7 +693,10 @@ class ConsoleState:
         spans: dict[str, tuple[float, float, float, float]] = {}  # attr -> (from, to, start, seconds) while it fades
         chased: set[str] = set()  # what the chase gives the light now
         for attr in attrs:
-            usual = max(base.values()) if level_only else base.get(attr, DEFAULT_VALUES.get(attr, 0.0))
+            if level_only and attr == BRIGHTNESS:
+                usual = max(base.values())
+            else:
+                usual = base.get(attr, self.default(light, attr))
             value = usual
             hold = held.get(attr) if held else None
             from_chase = None
@@ -729,11 +732,13 @@ class ConsoleState:
             self._last[light] = values
         else:
             self._last.pop(light, None)  # (nobody holds it: a later change fades from what the inputs show then)
+        # (everything but the colour as it is: only what isn't at its usual value)
+        raw = {attr: max(0, min(255, round(value))) for attr, value in values.items()
+               if attr not in COLOUR and round(value) != round(self.default(light, attr))}
         if level_only:
             level = max(0.0, min(255.0, values.get(BRIGHTNESS, 0.0))) / 255.0
-            return (level, level, level), {}  # (the encoder gives a dimmer the brightest of its colour, Master too)
-        raw = {attr: max(0, min(255, round(values[attr]))) for attr in RAW
-               if attr in values and round(values[attr]) != round(DEFAULT_VALUES.get(attr, 0.0))}
+            raw.pop(BRIGHTNESS, None)  # (the encoder gives it the brightest of its colour, Master too)
+            return (level, level, level), raw
         return (values["red"] / 255.0, values["green"] / 255.0, values["blue"] / 255.0), raw
 
     @staticmethod
@@ -907,11 +912,12 @@ def step_from(lights: list[str], values: Mapping[str, tuple[int, ...]], profiles
     scale = 1.0 / master if master > 0.01 else 1.0
     for light in lights:
         channels = values.get(light)
-        names = [attr for attr, _name in channels_of(profiles.get(light, ""))]
-        if not channels or not all(attr in names for attr in (*COLOUR, BRIGHTNESS)):
+        kind = light_types.get(profiles.get(light, ""))
+        sent = kind.read_back(channels) if channels and kind is not None and kind.has_colour else {}
+        if not sent:
             continue
-        r, g, b = (min(1.0, channels[names.index(attr)] / 255.0 * scale) for attr in COLOUR)
-        dimmer = channels[names.index(BRIGHTNESS)] / 255.0
+        r, g, b = (min(1.0, sent[attr] / 255.0 * scale) for attr in COLOUR)
+        dimmer = sent[BRIGHTNESS] / 255.0
         looks[light] = (round(r, 4), round(g, 4), round(b, 4), round(dimmer, 4))
     return ChaseStep(MappingProxyType(looks))
 

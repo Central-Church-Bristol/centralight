@@ -60,7 +60,7 @@ from ..commands import (
     SetOverlayOpacity,
     SetVariable,
 )
-from .. import startup
+from .. import own_types, startup
 from ..automations import update_automation, upcoming
 from ..links import original_problem
 from ..files import read_json
@@ -282,7 +282,8 @@ class MainWindow(QWidget):
         # the colour picker's Preview tick box (M14): kept with the PC's start time, so a restart ticks it again
         preview_choice.load = lambda: settings.ui.get("colour_preview")
         preview_choice.store = lambda data: settings.ui.__setitem__("colour_preview", data)
-        self.layout_page = LayoutPage(self.document, engine, notes_path=notes_path, shows_provider=self.list_shows)
+        self.layout_page = LayoutPage(self.document, engine, notes_path=notes_path, shows_provider=self.list_shows,
+                                      light_types_dir=lambda: own_types.folder(self.shows_root()))
         self.editor_page = EditorPage(self.document, engine, settings, sources=sources)
         self.editor_page.done.connect(lambda: self.show_page("dashboard"))
         self.editor_page.new_input_requested.connect(self.new_input)

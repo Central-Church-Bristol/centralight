@@ -121,8 +121,29 @@ universe 1, checked in the room on 2 Nov 2026); each show keeps its own lights i
 Nothing answers on channels 2 and 3. A SlimPAR's nine channels are red, green, blue, amber, colour macro, strobe,
 program, dimmer and dimmer speed: inputs set the colour with the dimmer at full; the Console can set them all.
 
-The Layout tab's **Type** also has the **Betopper LPC018** in its 7-channel mode (dimmer, red, green, blue, strobe,
-macro, macro speed). On the light's own menu, set `7CH` and its start channel (`A077`, say).
+### Light types
+
+Each light has a **type**: what each of its DMX channels does. On the Layout tab, double-click a light's **Type** (or
+choose lights and press **Light type…**) to pick one:
+
+- **In this show**, **Yours**, **Built in** (SlimPAR Q12, Betopper LPC018, Dimmer), and the **Library**: about 560
+  lights from 120 makers, from the [Open Fixture Library](https://open-fixture-library.org) (MIT licence,
+  `centralight\data\OPEN_FIXTURE_LIBRARY.txt`). Pick the maker, the model, then the mode the light is set to on its
+  own menu.
+- **New…** makes a type from the light's manual: maker, model, mode, and a row per channel with its job (Dimmer, Red,
+  Green, Blue, White, Amber, UV, Lime, Strobe, Colour macro, Program, Program speed, Dimmer speed or Other) and
+  **Normally**, what it's sent when nothing sets it. While the window is open the chosen lights use what's typed, so
+  **Red**, **Green**, **Blue**, **White** and **Off** show at once whether the channels are right.
+- Types you make are kept for every show in `Documents\CentraLight Shows\_Light types`, and each show carries the
+  types its lights use (`light_types` in `show.json`), so a `.clshow` brings them too.
+- **Add a light** adds another of the chosen light's type on the next free channels; with none chosen it asks which.
+
+Colour comes out on red, green and blue; a White channel takes the white in the colour (whites use the white LEDs); a
+light without a Dimmer channel has its colour scaled for brightness; a light without colour (a white par, a dimmer)
+shows a level. Amber, UV, strobe, programs and the rest stay at their Normally unless the Console sets them.
+
+To refresh the library from a newer download: `.venv\Scripts\python.exe tools\build_light_library.py
+ofl_export_ofl.zip` (from <https://open-fixture-library.org/download.ofl>).
 
 ## Fonts
 

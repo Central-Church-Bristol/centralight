@@ -10,7 +10,8 @@ import re
 from dataclasses import replace
 from typing import Any
 
-from .fixtures import PROFILES
+from . import light_types
+from .light_types import LightType
 
 from .layouts import forget_lights, sync_active_layout
 from .model import (
@@ -27,16 +28,12 @@ from .model import (
     slugify,
 )
 
-DEFAULT_COLOUR_PROFILE = "slimpar9"
-PROFILE_LABELS = {
-    "slimpar9": "SlimPAR Q12 (9 channels)",
-    "lpc018": "Betopper LPC018 (7 channels)",
-    "dimmer": "Dimmer (1 channel)",
-}
+DEFAULT_COLOUR_PROFILE = light_types.DEFAULT_COLOUR_TYPE
 
 
 def profile_label(profile: str) -> str:
-    return PROFILE_LABELS.get(profile, f"{profile} ({PROFILES[profile]['channels']} ch)")
+    """A light type's name ("SlimPAR Q12 (9 channels)")."""
+    return light_types.label(profile)
 
 
 def _replace_fixture(show: Show, fixture_id: str, **changes: Any) -> Show:
@@ -83,11 +80,27 @@ def set_address(show: Show, fixture_id: str, address: int) -> Show:
 
 
 def set_profile(show: Show, fixture_id: str, profile: str) -> Show:
-    fx = show.fixture(fixture_id)
-    if fx is None or profile not in PROFILES:
+    """One light becomes another (known) type, by its id."""
+    kind = light_types.get(profile)
+    if kind is None:
         return show
-    highest = 512 - PROFILES[profile]["channels"] + 1
-    return _replace_fixture(show, fixture_id, profile=profile, address=min(fx.address, highest))
+    return set_light_type(show, [fixture_id], kind)
+
+
+def set_light_type(show: Show, fixture_ids, kind: LightType) -> Show:
+    """These lights become this type (18 Nov), which the show then carries. Each keeps its address, unless the type's
+    channels would run past 512: then it starts where they just fit."""
+    light_types.register(kind)
+    wanted = set(fixture_ids)
+    highest = 512 - kind.channel_count + 1
+    fixtures = tuple(replace(fx, profile=kind.id, address=min(fx.address, highest)) if fx.id in wanted else fx
+                     for fx in show.fixtures)
+    return replace(show, fixtures=fixtures)
+
+
+def replace_light_type(show: Show, old: str, kind: LightType) -> Show:
+    """Every light of one type becomes another (an edited type: the show's lights of that type follow it)."""
+    return set_light_type(show, [fx.id for fx in show.fixtures if fx.profile == old], kind)
 
 
 def next_free_address(show: Show, channels: int) -> int:
@@ -116,16 +129,20 @@ def unique_id(show: Show, base: str) -> str:
     return candidate
 
 
-def add_colour_light(show: Show, x: float = 0.5, y: float = 0.5) -> tuple[Show, str]:
-    """A new SlimPAR after the last used channel, in the middle of the map. Returns (show, its id)."""
-    numbers = [int(m.group(1)) for fx in show.fixtures if (m := re.match(r"SlimPAR (\d+)$", fx.name))]
-    name = f"SlimPAR {max(numbers, default=100) + 1}"
-    channels = PROFILES[DEFAULT_COLOUR_PROFILE]["channels"]
+def add_colour_light(show: Show, x: float = 0.5, y: float = 0.5, kind: LightType | None = None) -> tuple[Show, str]:
+    """A new colour light of this type (a SlimPAR if none) after the last used channel, in the middle of the map,
+    named after its type with the next number: "SlimPAR 109", "LPC018 3". Returns (show, its id)."""
+    kind = light_types.register(kind) if kind is not None else light_types.require(DEFAULT_COLOUR_PROFILE)
+    short = kind.short or kind.model or "Light"
+    pattern = re.compile(rf"{re.escape(short)} (\d+)$")
+    numbers = [int(m.group(1)) for fx in show.fixtures if (m := pattern.match(fx.name))]
+    first = 100 if kind.id == DEFAULT_COLOUR_PROFILE else 0  # (the church's SlimPARs are 101 to 108)
+    name = f"{short} {max(numbers, default=first) + 1}"
     fixture = Fixture(
         id=unique_id(show, name),
         name=name,
-        profile=DEFAULT_COLOUR_PROFILE,
-        address=next_free_address(show, channels),
+        profile=kind.id,
+        address=next_free_address(show, kind.channel_count),
         role=ROLE_COLOUR,
         map=MapSpot(x, y),
     )

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .fixtures import PATCH, PROFILES
+from . import light_types
+from .fixtures import PATCH
 
 from .layouts import ensure_layouts
 from .model import ROLE_COLOUR, ROLE_HOUSE, Fixture, HouseLight, Input, MapSpot, Show, slugify
@@ -59,10 +60,10 @@ def show_from_patch(patch: list[dict] | None = None, name: str = "Central Church
     used: dict[str, int] = {}
     spare = 0
     for item in patch:
-        profile = PROFILES[item["profile"]]
+        kind = light_types.require(item["profile"])
         group = item.get("group", "")
         fid = fixture_id(item["name"])
-        if "red" in profile:
+        if kind.has_colour:
             spots = GROUP_SPOTS.get(group, [])
             index = used.get(group, 0)
             used[group] = index + 1
