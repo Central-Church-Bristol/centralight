@@ -186,7 +186,8 @@ test('the variables', () => {
 		'master',
 		'next',
 		'show',
-	])
+		...Array.from({ length: lib.NUMBERED }, (_, i) => `input_${i + 1}`), // (23 Nov: so a numbered key goes blank too)
+	].sort())
 })
 
 test('the presets', () => {
@@ -241,4 +242,101 @@ test('toggle follows the live state, not the state the actions were made with (1
 	state = { ...state, overlay: { on: true, copies: [{ copy: 1, id: 'warm-white', name: 'Warm white' }] } }
 	actions.overlay_toggle.callback({ options: { input: 'warm-white' } })
 	assert.deepEqual(sent.pop(), ['input/warm-white/overlay/clear', {}])
+})
+
+// (23 Nov) Numbered keys, for any show: Input 1 is the first tile on the Dashboard of the show loaded now.
+test('a numbered key sends the input with that number in the show loaded now', () => {
+	const sent = []
+	let state = sampleState()
+	const actions = lib.actionDefinitions(state, (path, params) => sent.push([path, params]), () => state, new Map())
+	const press = (options) => {
+		actions.numbered_base.callback({ options, controlId: 'bank:1' })
+		return sent.splice(0)
+	}
+	assert.deepEqual(press({ number: 1, how: 'own', duration: 1 }), [['input/warm-white', {}]])
+	assert.deepEqual(press({ number: 2, how: 'cut', duration: 1 }), [['input/worship-blue/cut', {}]])
+	assert.deepEqual(press({ number: 2, how: 'wipe', duration: 2.5 }), [['input/worship-blue', { transition: 'wipe', duration: '2.5' }]])
+	assert.deepEqual(press({ number: 3, how: 'own', duration: 1 }), []) // (no third input in this show: nothing)
+	assert.deepEqual(press({ number: 0, how: 'own', duration: 1 }), [])
+	state = { ...sampleState(), show: 'Evening', inputs: [{ id: 'candles', name: 'Candles', overlay: 'stays' }] }
+	assert.deepEqual(press({ number: 1, how: 'own', duration: 1 }), [['input/candles', {}]]) // (another show: its first)
+})
+
+test('a numbered Overlay key: on / off for an input whose copies stay, while held for one "Only while held"', () => {
+	const sent = []
+	let state = sampleState() // (Warm white's copies stay; Worship blue's go when let go, and it's on the Overlay now)
+	const held = new Map()
+	const actions = lib.actionDefinitions(state, (path, params) => sent.push([path, params]), () => state, held)
+	const key = (number, controlId) => {
+		actions.numbered_overlay.callback({ options: { number }, controlId })
+		const down = sent.splice(0)
+		actions.numbered_overlay_release.callback({ options: { number }, controlId })
+		return [down, sent.splice(0)]
+	}
+	assert.deepEqual(key(1, 'bank:1'), [[['input/warm-white/overlay', {}]], []]) // (on; its release does nothing)
+	state = { ...state, overlay: { on: true, copies: [{ copy: 1, id: 'warm-white', name: 'Warm white' }] } }
+	assert.deepEqual(key(1, 'bank:1'), [[['input/warm-white/overlay/clear', {}]], []]) // (and off again)
+	assert.deepEqual(key(2, 'bank:2'), [[['input/worship-blue/overlay', {}]], [['input/worship-blue/overlay/release', {}]]])
+	assert.deepEqual(key(5, 'bank:5'), [[], []]) // (no fifth input: nothing either way)
+	assert.equal(held.size, 0) // (each key forgotten once let go)
+})
+
+test('a numbered key held down lets go of what it sent, even if the tiles were moved meanwhile', () => {
+	const sent = []
+	let state = sampleState()
+	const actions = lib.actionDefinitions(state, (path, params) => sent.push([path, params]), () => state, new Map())
+	actions.numbered_overlay.callback({ options: { number: 2 }, controlId: 'bank:7' })
+	assert.deepEqual(sent.pop(), ['input/worship-blue/overlay', {}])
+	state = { ...state, inputs: [...state.inputs].reverse() } // (Worship blue dragged to the front while held)
+	actions.numbered_overlay_release.callback({ options: { number: 2 }, controlId: 'bank:7' })
+	assert.deepEqual(sent.pop(), ['input/worship-blue/overlay/release', {}]) // (not Warm white's, second now)
+	actions.numbered_overlay_release.callback({ options: { number: 1 } }) // (no key to go by: the one with that number now)
+	assert.deepEqual(sent.pop(), ['input/worship-blue/overlay/release', {}])
+})
+
+test("the numbered keys' lights and names follow the show loaded", () => {
+	let state = sampleState()
+	const feedbacks = lib.feedbackDefinitions(() => state, combine)
+	const on = (id, number) => feedbacks[id].callback({ options: { number } })
+	assert.equal(on('numbered_on_base', 1), true) // (Warm white is on Base)
+	assert.equal(on('numbered_on_base', 2), false)
+	assert.equal(on('numbered_on_overlay', 2), true) // (Worship blue is on the Overlay)
+	assert.equal(on('numbered_on_overlay', 1), false)
+	assert.equal(on('numbered_on_base', 3), false) // (no third input)
+	assert.equal(on('numbered_on_overlay', 3), false)
+	state = { ...state, overlay: { ...state.overlay, on: false } }
+	assert.equal(on('numbered_on_overlay', 2), false) // (the Overlay switched off: hidden)
+	state = { ...sampleState(), inputs: [...sampleState().inputs].reverse() }
+	assert.equal(on('numbered_on_base', 2), true) // (Warm white moved to second: Input 2 lights now)
+	const values = lib.variableValues(sampleState())
+	assert.equal(values.input_1, 'Warm white')
+	assert.equal(values.input_2, 'Worship blue')
+	assert.equal(values.input_3, '') // (blank: no third input)
+	assert.equal(values[`input_${lib.NUMBERED}`], '')
+	const ids = lib.variableDefinitions(sampleState()).map((v) => v.variableId)
+	assert.ok(ids.includes('input_1') && ids.includes(`input_${lib.NUMBERED}`))
+	const big = { inputs: Array.from({ length: 40 }, (_, i) => ({ id: `i${i + 1}`, name: `Look ${i + 1}`, overlay: 'stays' })) }
+	assert.ok(lib.variableDefinitions(big).some((v) => v.variableId === 'input_40')) // (a show with more: all named)
+	assert.equal(lib.variableValues(big).input_40, 'Look 40')
+})
+
+test('the numbered presets: one to Base and one to the Overlay for each number', () => {
+	const presets = lib.presetDefinitions(sampleState(), combine, 'CentraLight PC')
+	assert.equal(Object.keys(presets).filter((id) => id.startsWith('numbered_base_')).length, lib.NUMBERED)
+	assert.equal(Object.keys(presets).filter((id) => id.startsWith('numbered_overlay_')).length, lib.NUMBERED)
+	const one = presets.numbered_base_1
+	assert.equal(one.category, 'Numbered inputs to Base (any show)')
+	assert.equal(one.name, 'Input 1 to Base')
+	assert.equal(one.style.text, '$(CentraLight PC:input_1)') // (its input's name, whichever show is loaded)
+	assert.deepEqual(one.steps[0].down, [{ actionId: 'numbered_base', options: { number: 1, how: 'own', duration: 1 } }])
+	assert.equal(one.feedbacks[0].feedbackId, 'numbered_on_base')
+	const four = presets.numbered_overlay_4
+	assert.equal(four.category, 'Numbered inputs to the Overlay (any show)')
+	assert.equal(four.style.text, '$(CentraLight PC:input_4)')
+	assert.deepEqual(four.steps[0].down, [{ actionId: 'numbered_overlay', options: { number: 4 } }])
+	assert.deepEqual(four.steps[0].up, [{ actionId: 'numbered_overlay_release', options: { number: 4 } }])
+	assert.deepEqual(four.feedbacks[0], { feedbackId: 'numbered_on_overlay', options: { number: 4 },
+		style: { color: combine(0, 0, 0), bgcolor: combine(214, 255, 121) } })
+	// (not connected yet: they're there all the same, blank until a show's inputs come)
+	assert.equal(Object.keys(lib.presetDefinitions({}, combine)).filter((id) => id.startsWith('numbered_')).length, 2 * lib.NUMBERED)
 })

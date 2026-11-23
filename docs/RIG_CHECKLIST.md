@@ -647,6 +647,17 @@ four times:
 - [ ] With no light chosen, **Add a light** asks which type; with one chosen, it adds another like it.
 - [ ] Console → Advanced with the new light chosen: its own channels; Release puts them back.
 
+## 20q. Numbered keys in Companion (23 Nov)
+
+- [ ] Companion: **Modules** → **Import module package** → `companion\centralight-1.2.0.tgz`, and make sure the
+      CentraLight connection uses 1.2.0. It goes green.
+- [ ] **Presets** → **Numbered inputs to Base (any show)**: drag Input 1 to 4 onto keys. They show the names of the
+      first four tiles on the Dashboard. Press one: the input goes to Base and its key turns coral.
+- [ ] Drag another tile to the front of the Dashboard: Input 1's key takes its name, and the others move along.
+- [ ] Load another show: the keys show its inputs. A key with no input in that show is blank and does nothing.
+- [ ] **Numbered inputs to the Overlay**: a key whose input is set to "Only while held" (Warm flash) shows it while
+      held; one whose copies stay (Wash strobe) turns on with one press and off with the next. Lime while on.
+
 ## 21. Afterwards: updating the main folder
 
 Everything is committed on the branch `claude/centralight-gui` (nothing on `main`, nothing pushed). The work was

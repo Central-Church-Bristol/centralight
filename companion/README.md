@@ -8,13 +8,28 @@ holding lights. Pressing a button does what CentraLight's Stream Deck URLs do (s
 ## Putting it in Companion (once)
 
 1. Open Companion's admin page (the Companion window's **Launch GUI** button).
-2. Go to **Modules** and click **Import module package**. Pick `centralight-1.1.0.tgz` from this `companion` folder.
+2. Go to **Modules** and click **Import module package**. Pick `centralight-1.2.0.tgz` from this `companion` folder.
 3. Go to **Connections**, add **CentraLight**, and save it as it is: **CentraLight PC** `127.0.0.1` and **Port**
    `8746` (the port in CentraLight's Settings → Remote, if it was changed).
-4. The connection turns green once CentraLight is running. Then the **Presets** tab has a button for each input and
-   show, the four Cut / Fade to black buttons, and the Console's Release all and Tap: drag them onto the Stream Deck.
+4. The connection turns green once CentraLight is running. Then the **Presets** tab has numbered keys for any show
+   (below), a button for each input and show, the four Cut / Fade to black buttons, and the Console's Release all and
+   Tap: drag them onto the Stream Deck.
 
 A newer version: import its `.tgz` the same way.
+
+## Keys for any show (1.2.0)
+
+The **Numbered inputs** presets work in every show. **Input 1** is the first tile on the Dashboard of the show that's
+loaded, **Input 2** the second, and so on, up to 32. Each key shows its input's name, which changes when another show
+loads, and it's blank where the show has no input with that number.
+
+- **Numbered inputs to Base**: sends the input to Base with its own transition. Coral while it's on Base.
+- **Numbered inputs to the Overlay**: an input set to **Only while held** is on the Overlay while the key is held
+  down; any other turns on with one press and off with the next. Lime while it's on.
+
+To move an input to another key, drag its tile on the Dashboard. To have an input on the same key in every show, put
+it in the same place on each show's Dashboard. The keys made for one input (the other presets) only work in shows
+that have that input.
 
 An input set to **Only while held** (its Send to Overlay, in CentraLight's Editor) shows on the Overlay only while its
 key is held down. Its key needs **Release (held inputs)** on its release step: the Overlay presets have it, so a key

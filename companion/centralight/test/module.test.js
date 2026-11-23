@@ -108,6 +108,25 @@ test('when CentraLight goes, the keys go dark (nothing left looking live)', asyn
 	assert.equal(instance.variables['copies_worship-blue'], '') // (every variable, not just the fixed ones)
 	assert.equal(instance.variables.house_festoon, '')
 	assert.equal(instance.variables.console_held, '')
+	assert.equal(instance.variables.input_1, '') // (23 Nov: the numbered keys go blank too)
+})
+
+test('a numbered key follows the show loaded: its name, and what its press and release send (23 Nov)', async (t) => {
+	const { fake, instance } = await connected(t)
+	assert.equal(instance.variables.input_1, 'Warm white')
+	assert.equal(instance.variables.input_2, 'Worship blue')
+	fake.push({ ...sampleState(), show: 'Evening', inputs: [{ id: 'candles', name: 'Candles', overlay: 'held' }] })
+	await waitFor(() => instance.variables.input_1 === 'Candles', 'the other show')
+	assert.equal(instance.variables.input_2, '') // (one input in this show: Input 2's key is blank)
+	const step = instance.presets.numbered_overlay_1.steps[0] // (as a key made from the preset does it)
+	for (const action of [...step.down, ...step.up]) {
+		instance.actions[action.actionId].callback({ options: action.options, controlId: 'bank:1' })
+	}
+	await waitFor(() => fake.commands.length === 2, 'both commands')
+	assert.deepEqual(fake.commands, [
+		{ path: 'input/candles/overlay', params: {} },
+		{ path: 'input/candles/overlay/release', params: {} },
+	])
 })
 
 test('a refusal at the cap says so, and an old CentraLight says it needs updating', async (t) => {

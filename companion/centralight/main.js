@@ -23,6 +23,7 @@ class CentraLightInstance extends InstanceBase {
 		this.retryTimer = null
 		this.nextId = 1
 		this.lastProblem = null
+		this.held = new Map() // (what each numbered Overlay key's press sent, for its release: lib.actionDefinitions)
 		this.define()
 		this.connect()
 	}
@@ -226,7 +227,7 @@ class CentraLightInstance extends InstanceBase {
 
 	define() {
 		const getState = () => this.state
-		this.setActionDefinitions(lib.actionDefinitions(this.state, (path, params) => this.send(path, params), getState))
+		this.setActionDefinitions(lib.actionDefinitions(this.state, (path, params) => this.send(path, params), getState, this.held))
 		this.setFeedbackDefinitions(lib.feedbackDefinitions(getState, combineRgb, () => this.connected))
 		this.setVariableDefinitions(lib.variableDefinitions(this.state))
 		this.setVariableValues(lib.variableValues(this.state))

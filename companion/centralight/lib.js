@@ -15,6 +15,10 @@ const BLACK = [0, 0, 0]
 
 const DEFAULT_PORT = 8746
 
+// Numbered keys (23 Nov): Input 1 is the first tile on the Dashboard of the show loaded now, Input 2 the second, and so
+// on, so the same keys work in every show. Presets and name variables for this many (a Stream Deck XL's 32 keys).
+const NUMBERED = 32
+
 const TRANSITIONS = [
 	{ id: 'fade', label: 'Fade' },
 	{ id: 'dip', label: 'Dip (to black, then up)' },
@@ -93,9 +97,26 @@ function dropdown(id, label, list, extra = {}) {
 	return { type: 'dropdown', id, label, choices: list, default: firstId(list), ...extra }
 }
 
+// The input at a place on the Dashboard (1 = the first tile) in the show loaded now, or undefined where there's none.
+function inputAt(state, number) {
+	const place = Math.round(Number(number))
+	return place >= 1 ? ((state && state.inputs) || [])[place - 1] : undefined
+}
+
+function numberOption() {
+	return { type: 'number', id: 'number', label: 'Number: its place on the Dashboard (1 = the first)', default: 1, min: 1, max: 999 }
+}
+
+// How many inputs have a number variable: every input in the show, and at least as many as there are numbered presets.
+function numberedCount(state) {
+	return Math.max(NUMBERED, ((state && state.inputs) || []).length)
+}
+
 // ---------------------------------------------------------------- actions
 
-function actionDefinitions(state, send, getState = () => state) {
+// held: what each numbered Overlay key's press sent (its control id -> the input's id, or '' for nothing to let go), so
+// its release lets go of that input even if the tiles were moved or another show loaded while the key was down.
+function actionDefinitions(state, send, getState = () => state, held = new Map()) {
 	const s = state || {}
 	const inputs = choices(s.inputs)
 	const shows = choices(s.shows)
@@ -108,21 +129,59 @@ function actionDefinitions(state, send, getState = () => state) {
 	]
 	const run = (where, params) => send(where, params || {})
 	const seconds = (id, label, value) => ({ type: 'number', id, label, default: value, min: 0, max: 60, step: 0.1 })
+	const how = () => [
+		dropdown('how', 'Transition', [{ id: 'own', label: 'Its own' }, { id: 'cut', label: 'Cut' }, ...TRANSITIONS], {
+			default: 'own',
+		}),
+		seconds('duration', 'Seconds (for a transition chosen here)', 1),
+	]
+	const toBase = (input, o) => {
+		if (o.how === 'cut') return run(path('input', input, 'cut'))
+		if (o.how === 'own') return run(path('input', input))
+		return run(path('input', input), { transition: o.how, duration: String(o.duration) })
+	}
 	return {
 		base: {
 			name: 'Send an input to Base',
-			options: [
-				dropdown('input', 'Input', inputs),
-				dropdown('how', 'Transition', [{ id: 'own', label: 'Its own' }, { id: 'cut', label: 'Cut' }, ...TRANSITIONS], {
-					default: 'own',
-				}),
-				seconds('duration', 'Seconds (for a transition chosen here)', 1),
-			],
+			options: [dropdown('input', 'Input', inputs), ...how()],
+			callback: (action) => toBase(action.options.input, action.options),
+		},
+		// (23 Nov: numbered keys, for any show: Input 1 is the first tile on the Dashboard of the show loaded now)
+		numbered_base: {
+			name: 'Numbered input: send to Base (Input 1 is the first on the Dashboard, in any show)',
+			options: [numberOption(), ...how()],
 			callback: (action) => {
-				const o = action.options
-				if (o.how === 'cut') return run(path('input', o.input, 'cut'))
-				if (o.how === 'own') return run(path('input', o.input))
-				return run(path('input', o.input), { transition: o.how, duration: String(o.duration) })
+				const input = inputAt(getState(), action.options.number)
+				if (input) return toBase(input.id, action.options)
+			},
+		},
+		numbered_overlay: {
+			name: 'Numbered input: to the Overlay (an input set to "Only while held" while held; any other on / off)',
+			description: 'Put "Numbered input: let go" on the key\'s release (the presets do)',
+			options: [numberOption()],
+			callback: (action) => {
+				const now = getState()
+				const input = inputAt(now, action.options.number)
+				const holding = Boolean(input) && input.overlay === 'held'
+				if (action.controlId) held.set(action.controlId, holding ? input.id : '')
+				if (!input) return
+				if (holding) return run(path('input', input.id, 'overlay')) // (its release lets it go)
+				return run(copiesOf(now, input.id) > 0 ? path('input', input.id, 'overlay', 'clear') : path('input', input.id, 'overlay'))
+			},
+		},
+		numbered_overlay_release: {
+			name: 'Numbered input: let go (an input set to "Only while held" goes)',
+			description: "Put it on the release of the key with the numbered Overlay action. Other inputs don't mind it.",
+			options: [numberOption()],
+			callback: (action) => {
+				let id
+				if (action.controlId && held.has(action.controlId)) {
+					id = held.get(action.controlId) // (what this key's press sent)
+					held.delete(action.controlId)
+				} else {
+					id = (inputAt(getState(), action.options.number) || {}).id
+				}
+				if (id) return run(path('input', id, 'overlay', 'release'))
 			},
 		},
 		overlay: {
@@ -351,6 +410,27 @@ function feedbackDefinitions(getState, combine, isConnected = () => Object.keys(
 			options: [dropdown('input', 'Input', inputs)],
 			callback: (feedback) => copiesOf(now(), feedback.options.input) > 0 && (now().overlay || {}).on !== false,
 		},
+		// (23 Nov: the numbered keys' own; nothing lights where the show has no input with that number)
+		numbered_on_base: {
+			type: 'boolean',
+			name: 'A numbered input is on Base (Input 1 is the first on the Dashboard)',
+			defaultStyle: style(BLACK, CORAL),
+			options: [numberOption()],
+			callback: (feedback) => {
+				const input = inputAt(now(), feedback.options.number)
+				return Boolean(input) && (now().base || {}).id === input.id
+			},
+		},
+		numbered_on_overlay: {
+			type: 'boolean',
+			name: 'A numbered input is on the Overlay (Input 1 is the first on the Dashboard)',
+			defaultStyle: style(BLACK, LIME),
+			options: [numberOption()],
+			callback: (feedback) => {
+				const input = inputAt(now(), feedback.options.number)
+				return Boolean(input) && copiesOf(now(), input.id) > 0 && (now().overlay || {}).on !== false
+			},
+		},
 		show_loaded: {
 			type: 'boolean',
 			name: 'A show is loaded',
@@ -440,6 +520,9 @@ function variableDefinitions(state) {
 	]
 	for (const h of s.house || []) list.push({ variableId: `house_${h.slug || h.id}`, name: `${h.name} %` })
 	for (const i of s.inputs || []) list.push({ variableId: `copies_${i.id}`, name: `${i.name}: copies on the Overlay` })
+	for (let n = 1; n <= numberedCount(s); n++) {
+		list.push({ variableId: `input_${n}`, name: `Input ${n}'s name (place ${n} on the Dashboard; empty with none)` })
+	}
 	return list
 }
 
@@ -459,6 +542,7 @@ function variableValues(state) {
 		values[`house_${h.slug || h.id}`] = level ? (level.on ? Math.round(level.level * 100) : 0) : ''
 	}
 	for (const i of s.inputs || []) values[`copies_${i.id}`] = copiesOf(s, i.id)
+	for (let n = 1; n <= numberedCount(s); n++) values[`input_${n}`] = (inputAt(s, n) || {}).name || ''
 	return values
 }
 
@@ -470,6 +554,32 @@ function presetDefinitions(state, combine, label = 'centralight') {
 	const style = (text, fg, bg) => ({ text, size: 'auto', color: rgb(fg, combine), bgcolor: rgb(bg, combine) })
 	const lit = (feedbackId, options, fg, bg) => [{ feedbackId, options, style: { color: rgb(fg, combine), bgcolor: rgb(bg, combine) } }]
 	const press = (actionId, options) => [{ down: [{ actionId, options }], up: [] }]
+	// (23 Nov) Keys for whichever show is loaded: Input 1 is the first tile on its Dashboard, Input 2 the second, and so
+	// on. Each shows its input's name, and is blank where the show has no input with that number.
+	for (let n = 1; n <= NUMBERED; n++) {
+		const name = `$(${label}:input_${n})`
+		presets[`numbered_base_${n}`] = {
+			type: 'button',
+			category: 'Numbered inputs to Base (any show)',
+			name: `Input ${n} to Base`,
+			style: style(name, WHITE, BLACK),
+			steps: press('numbered_base', { number: n, how: 'own', duration: 1 }),
+			feedbacks: lit('numbered_on_base', { number: n }, BLACK, CORAL),
+		}
+		presets[`numbered_overlay_${n}`] = {
+			type: 'button',
+			category: 'Numbered inputs to the Overlay (any show)',
+			name: `Input ${n} on the Overlay`,
+			style: style(name, WHITE, BLACK),
+			steps: [
+				{
+					down: [{ actionId: 'numbered_overlay', options: { number: n } }],
+					up: [{ actionId: 'numbered_overlay_release', options: { number: n } }],
+				},
+			],
+			feedbacks: lit('numbered_on_overlay', { number: n }, BLACK, LIME),
+		}
+	}
 	for (const i of s.inputs || []) {
 		presets[`base_${i.id}`] = {
 			type: 'button',
@@ -566,6 +676,8 @@ function presetDefinitions(state, combine, label = 'centralight') {
 
 module.exports = {
 	DEFAULT_PORT,
+	NUMBERED,
+	inputAt,
 	address,
 	connectionUrl,
 	askUrl,

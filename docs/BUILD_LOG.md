@@ -131,6 +131,21 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
 
+## Numbered keys in Companion: module 1.2.0 (23 Nov)
+
+- **What for:** a key made for one input only works in shows that have that input, so a Stream Deck page couldn't
+  serve every show.
+- **Now:** the **Numbered inputs** presets: **Input 1** is the first tile on the Dashboard of the show loaded, **Input
+  2** the second, and so on (32 of each). A key shows its input's name (the variables `input_1`, `input_2`…), changes
+  with the show, and is blank where the show has no input with that number. **To Base** sends it with its own
+  transition (coral while on Base). **To the Overlay** does what the input says: "Only while held" shows while the key
+  is held, any other turns on and off with each press (lime while on).
+- **Arranging the keys:** drag the tiles on the Dashboard. A new input goes at the end, so it moves no other key.
+- **A held key lets go of what it sent,** even if the tiles were moved or another show loaded while it was down.
+- **CentraLight itself is unchanged:** it already sends Companion the inputs in Dashboard order, with each one's
+  Send to Overlay setting. The keys made for one input still work as before.
+- Not tried in Companion on the PC yet (rig checklist 20q).
+
 ## M19: light types, the library and your own (18 Nov)
 
 - **What for:** you asked for well-known lights built in, and a way to add your own in the app. Built as planned (the
