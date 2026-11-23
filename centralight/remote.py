@@ -434,7 +434,8 @@ def state_of(engine: Any, shows: list[ShowInfo] | None = None) -> dict[str, Any]
         "no_show": show.no_show,
         "notes": show.notes,
         "shows": shows_of(shows or [], show.folder),
-        "inputs": [{"id": inp.id, "name": inp.name, "overlay": inp.overlay} for inp in show.ordered_inputs()],
+        "inputs": [{"id": inp.id, "name": inp.name, "overlay": inp.overlay, "stream_deck": inp.stream_deck}
+                   for inp in show.ordered_inputs()],
         "globals": [{"name": g.name, "type": g.type, "min": g.min, "max": g.max, "dashboard": g.dashboard} for g in show.globals],
         "house": [{"id": h.fixture, "name": h.label, "slug": slugify(h.label)} for h in show.house],
     }

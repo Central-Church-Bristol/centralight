@@ -658,6 +658,17 @@ four times:
 - [ ] **Numbered inputs to the Overlay**: a key whose input is set to "Only while held" (Warm flash) shows it while
       held; one whose copies stay (Wash strobe) turns on with one press and off with the next. Lime while on.
 
+## 20r. Numbered keys as each input says (23 Nov, later)
+
+- [ ] Companion: import `companion\centralight-1.3.0.tgz`, and make sure the connection uses 1.3.0.
+- [ ] **Presets** → **Numbered inputs (as each input says)**: drag Input 1 to 8 onto keys. In the overflow show, the
+      flashes and strobes (Warm flash, Warm blink, Wash strobe, Wash sweep, All strobe) have lime names; the rest white.
+- [ ] Press a white key: its input goes to Base (coral). Hold Warm flash's key: it's on the Overlay while held (lime).
+      Press Wash strobe's: on; again: off.
+- [ ] Editor → an input's Input tab → **Stream Deck** → **Numbered key**: change it. Its key's name changes colour
+      straight away, and the key goes the new way. Ctrl+Z puts it back.
+- [ ] Load Evening: the keys show its inputs, Warm flash and Warm blink in lime.
+
 ## 21. Afterwards: updating the main folder
 
 Everything is committed on the branch `claude/centralight-gui` (nothing on `main`, nothing pushed). The work was

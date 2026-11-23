@@ -68,8 +68,8 @@ from ..input_edit import (
     split_changes,
     update_input,
 )
-from ..model import (END_BEHAVIOURS, END_HOLD, END_LOOP, END_STOP, OVERLAY_HELD, OVERLAY_MODES, OVERLAY_STAYS, Input, Show,
-                     element_span)
+from ..model import (DECK_BASE, DECK_OVERLAY, DECK_TARGETS, END_BEHAVIOURS, END_HOLD, END_LOOP, END_STOP, OVERLAY_HELD,
+                     OVERLAY_MODES, OVERLAY_STAYS, Input, Show, element_span)
 from ..params import base_value, expression_of, is_keyframed, key_at, neighbour_key, with_base_value, with_expression
 from ..elements import mask_shapes
 from ..schema import MASK_SHAPE, SHAPE, TRANSITION, Spec, element_specs, get_path, has_background, visible
@@ -95,6 +95,7 @@ KIND_TITLES = {"colour": "Colour", "paint": "Paint", "image": "Image", "video": 
 MIN_WIDTH = 340
 END_CHOICES = ((END_HOLD, "Hold the last moment"), (END_LOOP, "Loop"), (END_STOP, "Stop"))
 OVERLAY_CHOICES = ((OVERLAY_STAYS, "Stays until cleared"), (OVERLAY_HELD, "Only while held"))  # (M18)
+DECK_CHOICES = ((DECK_BASE, "Sends it to Base"), (DECK_OVERLAY, "Sends it to the Overlay"))  # (23 Nov)
 _FILLED_KEY = None
 
 
@@ -455,6 +456,22 @@ class DetailsPanel(QScrollArea):
         oform.addRow(label, choice)
         page.addWidget(overlay)
 
+        # (23 Nov: what its key does among Companion's numbered keys for any show; the explanation in its tooltip)
+        deck = Panel("Stream Deck")
+        dform = self._form(deck)
+        deck_choice = ChoiceField(DECK_CHOICES)
+        deck_tip = ("What this input's numbered key on the Stream Deck does (Companion's “Numbered inputs (as each input "
+                    "says)” keys, which work in any show: Input 1 is the first tile on the Dashboard).\nSends it to Base: "
+                    "with its own transition.\nSends it to the Overlay: as its Overlay button says (on and off with each "
+                    "press, or only while the key is held down).")
+        deck_choice.setToolTip(deck_tip)
+        deck_choice.edited.connect(lambda value, _final: self._set_stream_deck(value))
+        self._fields["input:stream_deck"] = deck_choice
+        deck_label = QLabel("Numbered key")
+        deck_label.setToolTip(deck_tip)
+        dform.addRow(deck_label, deck_choice)
+        page.addWidget(deck)
+
         house = Panel("House lights")
         house.setToolTip("While this input is on Base it sets these house lights. Moving a fader in the header wins until "
                          "the next input.")  # (8 Nov: a tooltip, not a line)
@@ -749,6 +766,8 @@ class DetailsPanel(QScrollArea):
                     self._fields["input:end"].set_value(inp.end)
                 if "input:overlay" in self._fields:
                     self._fields["input:overlay"].set_value(inp.overlay)
+                if "input:stream_deck" in self._fields:
+                    self._fields["input:stream_deck"].set_value(inp.stream_deck)
                 if self.hotkey is not None and not self.hotkey.hasFocus():
                     self.hotkey.setKeySequence(QKeySequence(inp.hotkey))
                 for spec in TRANSITION:
@@ -1091,6 +1110,12 @@ class DetailsPanel(QScrollArea):
         if inp is not None and value in OVERLAY_MODES and value != inp.overlay:
             label = dict(OVERLAY_CHOICES).get(value, value)
             self._apply(update_input(self.show_data, self.input_id, overlay=value), f"{inp.name}: Send to Overlay, {label.lower()}")
+
+    def _set_stream_deck(self, value: Any) -> None:
+        inp = self.current_input()
+        if inp is not None and value in DECK_TARGETS and value != inp.stream_deck:
+            where = "the Overlay" if value == DECK_OVERLAY else "Base"
+            self._apply(update_input(self.show_data, self.input_id, stream_deck=value), f"{inp.name}: numbered key to {where}")
 
     def _set_transition(self, spec: Spec, value: Any) -> None:
         inp = self.current_input()

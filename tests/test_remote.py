@@ -196,7 +196,8 @@ class RouteTests(RemoteTestCase):
             {"copy": 7, "id": "pillars-purple", "name": "Pillars purple", "progress": None},
             {"copy": 9, "id": "christmas", "name": "Candlelight", "progress": 0.25}]})
         self.assertEqual(state["variables"], {"speed": 0.5, "accent": "#FF0000", "party": 0.0})
-        self.assertIn({"id": "warm-white", "name": "Warm white", "overlay": "stays"}, state["inputs"])  # (M18: its setting)
+        self.assertIn({"id": "warm-white", "name": "Warm white", "overlay": "stays", "stream_deck": "base"},
+                      state["inputs"])  # (M18: its setting; 23 Nov: where its numbered key sends it)
 
     def test_help_page(self) -> None:
         status, page = self.request("/")

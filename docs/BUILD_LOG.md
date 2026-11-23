@@ -131,6 +131,21 @@ A reviewer read the Console's engine side and tried it: 14 findings, all fixed, 
 - Two small ones: random chases work out each pass once (they took five times longer a tick), and a cache can't mix up
   two lights' colours.
 
+## Numbered keys as each input says: an input's Stream Deck setting, and module 1.3.0 (23 Nov, later)
+
+- **What for:** a numbered key always sent its input the same way (to Base, or to the Overlay), but Warm flash wants
+  the Overlay while the same place in another show may hold a look for Base.
+- **Now, in CentraLight:** each input has a **Numbered key** setting (Editor → Input tab → **Stream Deck**): **Sends
+  it to Base** (the default, also for every input from before) or **Sends it to the Overlay** (as its Overlay button
+  says). It's saved in the input (`"stream_deck": "overlay"`, left out at the default), so each show's copy of an
+  input has its own. It's undoable, in the AI guide and the schema, and sent to Companion with the inputs.
+- **In Companion (1.3.0):** the **Numbered inputs (as each input says)** presets, first in the list: Input 1 to 32,
+  each going where its input says, its name lime when that's the Overlay. The 1.2.0 groups (always to Base, always
+  to the Overlay) stay.
+- **Your inputs:** set to the Overlay at the update: Warm flash, Warm blink, Wash strobe, Wash sweep and All strobe
+  in Incoming Ministries Overflow, and Warm flash and Warm blink in Evening. Everything else goes to Base.
+- Not tried in Companion on the PC yet (rig checklist 20r).
+
 ## Numbered keys in Companion: module 1.2.0 (23 Nov)
 
 - **What for:** a key made for one input only works in shows that have that input, so a Stream Deck page couldn't

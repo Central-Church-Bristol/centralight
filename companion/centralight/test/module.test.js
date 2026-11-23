@@ -129,6 +129,29 @@ test('a numbered key follows the show loaded: its name, and what its press and r
 	])
 })
 
+test('a numbered key "as each input says": the same key goes to Base in one show, the Overlay in another', async (t) => {
+	const { fake, instance } = await connected(t)
+	const press = (n) => {
+		const step = instance.presets[`numbered_${n}`].steps[0]
+		for (const action of [...step.down, ...step.up]) {
+			instance.actions[action.actionId].callback({ options: action.options, controlId: `bank:${n}` })
+		}
+	}
+	press(1) // (Warm white: to Base)
+	await waitFor(() => fake.commands.length === 1, 'the first')
+	assert.deepEqual(fake.commands[0], { path: 'input/warm-white', params: {} })
+	const flash = { id: 'warm-white', name: 'Warm white', overlay: 'held', stream_deck: 'overlay' } // (in another show)
+	fake.push({ ...sampleState(), show: 'Evening', inputs: [flash] })
+	await waitFor(() => instance.state.show === 'Evening', 'the other show')
+	assert.equal(instance.feedbacks.numbered_is_overlay.callback({ options: { number: 1 } }), true)
+	press(1)
+	await waitFor(() => fake.commands.length === 3, 'the press and its release')
+	assert.deepEqual(fake.commands.slice(1), [
+		{ path: 'input/warm-white/overlay', params: {} },
+		{ path: 'input/warm-white/overlay/release', params: {} },
+	])
+})
+
 test('a refusal at the cap says so, and an old CentraLight says it needs updating', async (t) => {
 	for (const [refuse, status, words] of [
 		[503, 'connection_failure', /too many/],

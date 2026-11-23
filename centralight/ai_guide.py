@@ -29,7 +29,7 @@ from .expressions import AUDIO_NAMES, FUNCTIONS, ExpressionError, compile_expres
 from .files import json_text, write_atomic
 from .log import log_info
 from .links import original_problem
-from .model import OVERLAY_MODES, ROLE_COLOUR, TRACK_COUNT, TRANSITION_KINDS, Input, Show, is_device_name, slugify
+from .model import DECK_TARGETS, OVERLAY_MODES, ROLE_COLOUR, TRACK_COUNT, TRANSITION_KINDS, Input, Show, is_device_name, slugify
 from .schema import (
     BLEND_MODES,
     COLOUR_TYPES,
@@ -245,6 +245,8 @@ def input_schema(show: Show) -> dict[str, Any]:
             "overlay": {"enum": list(OVERLAY_MODES), "description": "What its Send to Overlay button does: \"stays\" (the "
                         "default, also when it's left out: each press adds a copy that stays until it's cleared) or "
                         "\"held\" (the copy shows only while the button is held down)"},
+            "stream_deck": {"enum": list(DECK_TARGETS), "description": "Where its numbered Stream Deck key sends it: "
+                            "\"base\" (the default, also when it's left out) or \"overlay\" (as `overlay` says)"},
             "hotkey": {"type": "string", "description": "A key that sends it to Base, e.g. F5"},
             "ai": {"type": "boolean", "description": "Made by AI (CentraLight sets this)"},
             "house": {"type": "object", "description": "House-light levels (0-1) while it's on Base",
@@ -362,6 +364,10 @@ def guide_text(show: Show, full: bool = True) -> str:
         "- Optional: `overlay`, what its Send to Overlay button does: `\"stays\"` (the default, also when it's left "
         "out: each press adds a copy on top that stays until it's cleared) or `\"held\"` (the copy shows only while "
         "the button is held down, like a flash button). Automations always add a copy that stays.\n"
+        "- Optional: `stream_deck`, where its numbered Stream Deck key sends it (Companion's keys for any show: Input 1 "
+        "is the first tile on the Dashboard): `\"base\"` (the default, also when it's left out) or `\"overlay\"` (as "
+        "`overlay` says: on and off with each press, or only while held). Use `\"overlay\"` for flashes and strobes "
+        "meant to go on top.\n"
         "- **Infinite or timed.** Inputs are infinite unless they say otherwise: each track holds one element, which "
         "plays until the input is replaced. A timed input has `\"infinite\": false`, a `length` in seconds and an "
         "`end`: \"hold\" (stay on the last moment; the default), \"loop\" or \"stop\" (leave Base) - on the Overlay a timed "
@@ -929,6 +935,9 @@ def describe_changes(old: Input, new: Input) -> list[str]:
     if old.overlay != new.overlay:  # (M18)
         words = {"stays": "stays until cleared", "held": "only while held"}
         changes.append(f"Send to Overlay: {words.get(old.overlay, old.overlay)} → {words.get(new.overlay, new.overlay)}")
+    if old.stream_deck != new.stream_deck:  # (23 Nov)
+        words = {"base": "Base", "overlay": "the Overlay"}
+        changes.append(f"Numbered key: {words.get(old.stream_deck, old.stream_deck)} → {words.get(new.stream_deck, new.stream_deck)}")
     if dict(old.house) != dict(new.house):
         changes.append("House-light levels changed")
     if [dict(i) for i in old.locals] != [dict(i) for i in new.locals]:

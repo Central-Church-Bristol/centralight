@@ -140,13 +140,38 @@ function actionDefinitions(state, send, getState = () => state, held = new Map()
 		if (o.how === 'own') return run(path('input', input))
 		return run(path('input', input), { transition: o.how, duration: String(o.duration) })
 	}
+	// A numbered key's press to the Overlay, as the input says: one set to "Only while held" shows until the key's
+	// release lets it go; any other turns on, or off. What's sent is noted for the release.
+	const overlayPress = (action) => {
+		const now = getState()
+		const input = inputAt(now, action.options.number)
+		const holding = Boolean(input) && input.overlay === 'held'
+		if (action.controlId) held.set(action.controlId, holding ? input.id : '')
+		if (!input) return
+		if (holding) return run(path('input', input.id, 'overlay')) // (its release lets it go)
+		return run(copiesOf(now, input.id) > 0 ? path('input', input.id, 'overlay', 'clear') : path('input', input.id, 'overlay'))
+	}
 	return {
 		base: {
 			name: 'Send an input to Base',
 			options: [dropdown('input', 'Input', inputs), ...how()],
 			callback: (action) => toBase(action.options.input, action.options),
 		},
-		// (23 Nov: numbered keys, for any show: Input 1 is the first tile on the Dashboard of the show loaded now)
+		// (23 Nov: numbered keys, for any show: Input 1 is the first tile on the Dashboard of the show loaded now. This one
+		// goes where the input says: its Stream Deck setting, in CentraLight's Editor)
+		numbered_key: {
+			name: 'Numbered input: as the input says (to Base, or to the Overlay: its Stream Deck setting in CentraLight)',
+			description:
+				'Put "Numbered input: let go" on the key\'s release (the presets do), for inputs that are on the Overlay only ' +
+				'while held',
+			options: [numberOption()],
+			callback: (action) => {
+				const input = inputAt(getState(), action.options.number)
+				if (input && input.stream_deck === 'overlay') return overlayPress(action)
+				if (action.controlId) held.set(action.controlId, '') // (to Base: nothing for its release to let go)
+				if (input) return run(path('input', input.id))
+			},
+		},
 		numbered_base: {
 			name: 'Numbered input: send to Base (Input 1 is the first on the Dashboard, in any show)',
 			options: [numberOption(), ...how()],
@@ -159,15 +184,7 @@ function actionDefinitions(state, send, getState = () => state, held = new Map()
 			name: 'Numbered input: to the Overlay (an input set to "Only while held" while held; any other on / off)',
 			description: 'Put "Numbered input: let go" on the key\'s release (the presets do)',
 			options: [numberOption()],
-			callback: (action) => {
-				const now = getState()
-				const input = inputAt(now, action.options.number)
-				const holding = Boolean(input) && input.overlay === 'held'
-				if (action.controlId) held.set(action.controlId, holding ? input.id : '')
-				if (!input) return
-				if (holding) return run(path('input', input.id, 'overlay')) // (its release lets it go)
-				return run(copiesOf(now, input.id) > 0 ? path('input', input.id, 'overlay', 'clear') : path('input', input.id, 'overlay'))
-			},
+			callback: (action) => overlayPress(action),
 		},
 		numbered_overlay_release: {
 			name: 'Numbered input: let go (an input set to "Only while held" goes)',
@@ -431,6 +448,14 @@ function feedbackDefinitions(getState, combine, isConnected = () => Object.keys(
 				return Boolean(input) && copiesOf(now(), input.id) > 0 && (now().overlay || {}).on !== false
 			},
 		},
+		// (its name in lime: the key sends it to the Overlay, so you can tell before pressing it)
+		numbered_is_overlay: {
+			type: 'boolean',
+			name: "A numbered input's key sends it to the Overlay (its Stream Deck setting in CentraLight)",
+			defaultStyle: { color: rgb(LIME, combine) },
+			options: [numberOption()],
+			callback: (feedback) => (inputAt(now(), feedback.options.number) || {}).stream_deck === 'overlay',
+		},
 		show_loaded: {
 			type: 'boolean',
 			name: 'A show is loaded',
@@ -555,9 +580,27 @@ function presetDefinitions(state, combine, label = 'centralight') {
 	const lit = (feedbackId, options, fg, bg) => [{ feedbackId, options, style: { color: rgb(fg, combine), bgcolor: rgb(bg, combine) } }]
 	const press = (actionId, options) => [{ down: [{ actionId, options }], up: [] }]
 	// (23 Nov) Keys for whichever show is loaded: Input 1 is the first tile on its Dashboard, Input 2 the second, and so
-	// on. Each shows its input's name, and is blank where the show has no input with that number.
+	// on. Each shows its input's name, and is blank where the show has no input with that number. The first kind goes
+	// where its input says (its name in lime when that's the Overlay); the others always go to Base, or the Overlay.
 	for (let n = 1; n <= NUMBERED; n++) {
 		const name = `$(${label}:input_${n})`
+		presets[`numbered_${n}`] = {
+			type: 'button',
+			category: 'Numbered inputs (as each input says)',
+			name: `Input ${n}`,
+			style: style(name, WHITE, BLACK),
+			steps: [
+				{
+					down: [{ actionId: 'numbered_key', options: { number: n } }],
+					up: [{ actionId: 'numbered_overlay_release', options: { number: n } }],
+				},
+			],
+			feedbacks: [
+				{ feedbackId: 'numbered_is_overlay', options: { number: n }, style: { color: rgb(LIME, combine) } },
+				...lit('numbered_on_base', { number: n }, BLACK, CORAL),
+				...lit('numbered_on_overlay', { number: n }, BLACK, LIME),
+			],
+		}
 		presets[`numbered_base_${n}`] = {
 			type: 'button',
 			category: 'Numbered inputs to Base (any show)',

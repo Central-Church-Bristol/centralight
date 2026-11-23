@@ -37,6 +37,11 @@ END_BEHAVIOURS = (END_HOLD, END_LOOP, END_STOP)
 OVERLAY_STAYS = "stays"
 OVERLAY_HELD = "held"
 OVERLAY_MODES = (OVERLAY_STAYS, OVERLAY_HELD)
+# where its numbered Stream Deck key sends it (23 Nov: Companion's "as each input says" keys, Input 1 being the first
+# tile on the Dashboard): to Base, or to the Overlay (as its Send to Overlay setting says)
+DECK_BASE = "base"
+DECK_OVERLAY = "overlay"
+DECK_TARGETS = (DECK_BASE, DECK_OVERLAY)
 TRANSITION_KINDS = ("cut", "fade", "dip", "wipe", "iris", "random")
 GLOBAL_TYPES = ("number", "colour", "switch")
 
@@ -237,6 +242,7 @@ class Input:
     end: str = END_HOLD
     transition: Transition = Transition()
     overlay: str = OVERLAY_STAYS  # its Send to Overlay button (M18): "stays" (until cleared) or "held" (while held)
+    stream_deck: str = DECK_BASE  # where its numbered Stream Deck key sends it (23 Nov): "base" or "overlay"
     hotkey: str = ""
     ai: bool = False
     house: Mapping[str, Any] = EMPTY  # fixture id -> level Param

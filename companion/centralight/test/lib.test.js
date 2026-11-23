@@ -338,5 +338,54 @@ test('the numbered presets: one to Base and one to the Overlay for each number',
 	assert.deepEqual(four.feedbacks[0], { feedbackId: 'numbered_on_overlay', options: { number: 4 },
 		style: { color: combine(0, 0, 0), bgcolor: combine(214, 255, 121) } })
 	// (not connected yet: they're there all the same, blank until a show's inputs come)
-	assert.equal(Object.keys(lib.presetDefinitions({}, combine)).filter((id) => id.startsWith('numbered_')).length, 2 * lib.NUMBERED)
+	assert.equal(Object.keys(lib.presetDefinitions({}, combine)).filter((id) => id.startsWith('numbered_')).length, 3 * lib.NUMBERED)
+})
+
+// (23 Nov, later) One numbered key for any input, going where the input says (its Stream Deck setting in CentraLight).
+test('a numbered key "as each input says": to Base, or to the Overlay as the input says', () => {
+	const sent = []
+	let state = sampleState() // (Warm white goes to Base; Worship blue to the Overlay, only while held)
+	const held = new Map()
+	const actions = lib.actionDefinitions(state, (path, params) => sent.push([path, params]), () => state, held)
+	const key = (number, controlId) => {
+		actions.numbered_key.callback({ options: { number }, controlId })
+		const down = sent.splice(0)
+		actions.numbered_overlay_release.callback({ options: { number }, controlId })
+		return [down, sent.splice(0)]
+	}
+	assert.deepEqual(key(1, 'bank:1'), [[['input/warm-white', {}]], []]) // (to Base, with its own transition)
+	assert.deepEqual(key(2, 'bank:2'), [[['input/worship-blue/overlay', {}]], [['input/worship-blue/overlay/release', {}]]])
+	// Worship blue's copies stay now: on with one press, off with the next
+	const stays = { id: 'worship-blue', name: 'Worship blue', overlay: 'stays', stream_deck: 'overlay' }
+	state = { ...sampleState(), inputs: [sampleState().inputs[0], stays], overlay: { on: true, copies: [] } }
+	assert.deepEqual(key(2, 'bank:2'), [[['input/worship-blue/overlay', {}]], []])
+	state = { ...state, overlay: { on: true, copies: [{ copy: 1, id: 'worship-blue', name: 'Worship blue' }] } }
+	assert.deepEqual(key(2, 'bank:2'), [[['input/worship-blue/overlay/clear', {}]], []])
+	// (a CentraLight from before 23 Nov doesn't say: to Base)
+	state = { ...sampleState(), inputs: [{ id: 'candles', name: 'Candles', overlay: 'held' }] }
+	assert.deepEqual(key(1, 'bank:1'), [[['input/candles', {}]], []])
+	assert.deepEqual(key(4, 'bank:4'), [[], []]) // (no fourth input: nothing)
+	assert.equal(held.size, 0)
+})
+
+test('its name is lime when its key sends it to the Overlay, and it lights coral or lime as it goes', () => {
+	let state = sampleState()
+	const feedbacks = lib.feedbackDefinitions(() => state, combine)
+	const on = (id, number) => feedbacks[id].callback({ options: { number } })
+	assert.equal(on('numbered_is_overlay', 1), false) // (Warm white: to Base)
+	assert.equal(on('numbered_is_overlay', 2), true) // (Worship blue: to the Overlay)
+	assert.equal(on('numbered_is_overlay', 3), false) // (none)
+	assert.deepEqual(feedbacks.numbered_is_overlay.defaultStyle, { color: combine(214, 255, 121) })
+	state = { ...state, inputs: [{ id: 'old', name: 'Old', overlay: 'held' }] } // (an older CentraLight: no setting)
+	assert.equal(on('numbered_is_overlay', 1), false)
+	const preset = lib.presetDefinitions(sampleState(), combine, 'CentraLight PC').numbered_2
+	assert.equal(preset.category, 'Numbered inputs (as each input says)')
+	assert.equal(preset.name, 'Input 2')
+	assert.equal(preset.style.text, '$(CentraLight PC:input_2)')
+	assert.deepEqual(preset.steps[0].down, [{ actionId: 'numbered_key', options: { number: 2 } }])
+	assert.deepEqual(preset.steps[0].up, [{ actionId: 'numbered_overlay_release', options: { number: 2 } }])
+	// (in this order, so a lit key's colours win over the lime name)
+	assert.deepEqual(preset.feedbacks.map((f) => f.feedbackId), ['numbered_is_overlay', 'numbered_on_base', 'numbered_on_overlay'])
+	const presets = Object.keys(lib.presetDefinitions(sampleState(), combine))
+	assert.equal(presets.indexOf('numbered_1'), 0) // (the first group in Companion's list)
 })

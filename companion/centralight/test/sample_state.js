@@ -12,8 +12,9 @@ module.exports = function sampleState() {
 			{ id: 'evening', name: 'Evening', loaded: false, notes: '' },
 		],
 		inputs: [
-			{ id: 'warm-white', name: 'Warm white', overlay: 'stays' },
-			{ id: 'worship-blue', name: 'Worship blue', overlay: 'held' }, // (M18: its Send to Overlay setting)
+			{ id: 'warm-white', name: 'Warm white', overlay: 'stays', stream_deck: 'base' },
+			// (M18: its Send to Overlay setting; 23 Nov: where its numbered key sends it)
+			{ id: 'worship-blue', name: 'Worship blue', overlay: 'held', stream_deck: 'overlay' },
 		],
 		globals: [
 			{ name: 'Pulse speed', type: 'number', min: 0, max: 2, dashboard: true },

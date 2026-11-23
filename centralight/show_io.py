@@ -30,6 +30,8 @@ from .files import forget_written, json_text, loads_json_bytes, read_json, write
 from .layouts import ensure_layouts
 from .model import (
     COLOUR_PATTERN,
+    DECK_BASE,
+    DECK_TARGETS,
     END_BEHAVIOURS,
     END_HOLD,
     OVERLAY_MODES,
@@ -166,6 +168,8 @@ def input_to_dict(inp: Input) -> dict[str, Any]:
         data["transition"] = transition_to_dict(inp.transition)
     if inp.overlay != OVERLAY_STAYS:
         data["overlay"] = inp.overlay
+    if inp.stream_deck != DECK_BASE:
+        data["stream_deck"] = inp.stream_deck
     if inp.hotkey:
         data["hotkey"] = inp.hotkey
     if inp.ai:
@@ -223,6 +227,9 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
     overlay = data.get("overlay", OVERLAY_STAYS)  # (M18: an input from before it, without one, stays until cleared)
     if overlay not in OVERLAY_MODES:
         raise InputFileError(f'"overlay" must be one of {", ".join(OVERLAY_MODES)}, not {overlay!r}')
+    stream_deck = data.get("stream_deck", DECK_BASE)  # (23 Nov: an input from before it, without one, goes to Base)
+    if stream_deck not in DECK_TARGETS:
+        raise InputFileError(f'"stream_deck" must be one of {", ".join(DECK_TARGETS)}, not {stream_deck!r}')
 
     hotkey = data.get("hotkey", "")
     if not isinstance(hotkey, str):
@@ -255,7 +262,7 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
 
     known = {
         "format", "version", "id", "name", "colour", "infinite", "length", "end", "transition", "overlay",
-        "hotkey", "ai", "house", "locals", "tracks",
+        "stream_deck", "hotkey", "ai", "house", "locals", "tracks",
     }
     for key in data:
         if key not in known:
@@ -270,6 +277,7 @@ def input_from_dict(data: Any, expected_id: str | None = None) -> tuple[Input, l
         end=end,
         transition=transition,
         overlay=overlay,
+        stream_deck=stream_deck,
         hotkey=hotkey,
         ai=ai,
         house=freeze(house),
